@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use crate::array::PhpArray;
 use crate::diag;
+use crate::object::{self, Object};
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -20,6 +21,8 @@ pub enum Value {
     Str(Rc<Vec<u8>>),
     /// Arrays are values in PHP; Rc::make_mut gives copy-on-write
     Array(Rc<PhpArray>),
+    /// Objects are handles: copies share the same instance
+    Object(Rc<Object>),
     /// A PHP reference (`&$x`). Only ever stored in variable slots and array
     /// elements, never produced as the result of an expression, and never nested
     Ref(Rc<RefCell<Value>>),
@@ -66,6 +69,7 @@ impl PartialEq for Value {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Object(a), Value::Object(b)) => Rc::ptr_eq(a, b),
             (Value::Array(a), Value::Array(b)) => {
                 Rc::ptr_eq(a, b)
                     || a.len() == b.len()
@@ -285,6 +289,8 @@ impl Value {
             Value::Float(_) => "float",
             Value::Str(_) => "string",
             Value::Array(_) => "array",
+            // PHP names the class in type errors ("..., Exception given")
+            Value::Object(o) => o.class.name,
             Value::Ref(r) => with_deref(r, Value::type_name),
         }
     }
@@ -313,6 +319,7 @@ impl Value {
             Value::Float(f) => *f != 0.0,
             Value::Str(s) => !(s.is_empty() || s.as_slice() == b"0"),
             Value::Array(a) => !a.is_empty(),
+            Value::Object(_) => true,
             Value::Ref(r) => with_deref(r, Value::to_bool),
         }
     }
@@ -325,6 +332,8 @@ impl Value {
             Value::Float(f) => format_float(*f).into_bytes(),
             Value::Str(s) => s.to_vec(),
             Value::Array(_) => b"Array".to_vec(),
+            // Only Throwables are stringable so far; callers check that via interp::to_str
+            Value::Object(o) => object::to_string(o).unwrap_or_default(),
             Value::Ref(r) => with_deref(r, Value::to_bytes),
         }
     }
@@ -338,6 +347,7 @@ impl Value {
             Value::Float(f) => Num::Float(*f),
             Value::Str(s) => parse_numeric(s).0,
             Value::Array(a) => Num::Int(!a.is_empty() as i64),
+            Value::Object(_) => Num::Int(1),
             Value::Ref(r) => with_deref(r, Value::to_num),
         }
     }
@@ -412,6 +422,9 @@ pub fn loose_cmp(a: &Value, b: &Value) -> Option<Ordering> {
         }
         (Str(_), Int(_) | Float(_)) => loose_cmp(b, a).map(Ordering::reverse),
         (Array(x), Array(y)) => nested(|| cmp_arrays(x, y)).flatten(),
+        (Object(x), Object(y)) if Rc::ptr_eq(x, y) => Some(Ordering::Equal),
+        // Comparing distinct objects needs property comparison, which arrives with classes
+        (Object(_), _) | (_, Object(_)) => None,
         (Array(_), _) => Some(Ordering::Greater),
         (_, Array(_)) => Some(Ordering::Less),
         _ => cmp_num(a.to_num(), b.to_num()),
@@ -446,7 +459,7 @@ pub enum ArithError {
 fn operand(v: &Value) -> Option<Num> {
     match v {
         Value::Ref(r) => with_deref(r, operand),
-        Value::Array(_) => None,
+        Value::Array(_) | Value::Object(_) => None,
         Value::Str(s) => match parse_numeric(s) {
             (n, Numeric::Full) => Some(n),
             (n, Numeric::Leading) => {

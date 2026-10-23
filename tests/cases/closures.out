@@ -1,0 +1,101 @@
+int(1)
+int(2)
+int(3)
+int(15)
+int(2)
+int(2)
+int(1)
+int(6)
+int(103)
+int(610)
+array(3) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(4)
+  [2]=>
+  int(6)
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  ["c"]=>
+  int(3)
+}
+array(2) {
+  [2]=>
+  int(3)
+  [3]=>
+  int(4)
+}
+Al,Bob,Cy
+int(6)
+string(3) "x-y"
+int(5)
+string(4) "iife"
+bool(true)
+bool(false)
+int(15)
+string(4) "n=42"
+{closure:closures.php:52}(): Argument #1 ($n) must be of type int, string given, called in closures.php on line 54
+string(3) "hi!"
+int(4)
+TypeError
+object(Closure)#1 (4) {
+  ["name"]=>
+  string(67) "{closure:closures.php:4}"
+  ["file"]=>
+  string(55) "closures.php"
+  ["line"]=>
+  int(4)
+  ["static"]=>
+  array(1) {
+    ["x"]=>
+    int(1)
+  }
+}
+object(Closure)#6 (5) {
+  ["name"]=>
+  string(68) "{closure:closures.php:25}"
+  ["file"]=>
+  string(55) "closures.php"
+  ["line"]=>
+  int(25)
+  ["static"]=>
+  array(1) {
+    ["factor"]=>
+    int(3)
+  }
+  ["parameter"]=>
+  array(1) {
+    ["$n"]=>
+    string(10) "<required>"
+  }
+}
+Closure Object
+(
+    [name] => {closure:closures.php:61}
+    [file] => closures.php
+    [line] => 61
+    [parameter] => Array
+        (
+            [$a] => <required>
+            [&$b] => <required>
+            [$c] => <optional>
+        )
+
+)
+
+Object of class Closure could not be converted to string
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+NULL
+NULL
+
+Fatal error: Uncaught DivisionByZeroError: Modulo by zero in closures.php:71
+Stack trace:
+#0 closures.php(72): {closure:closures.php:71}()
+#1 {main}
+  thrown in closures.php on line 71

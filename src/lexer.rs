@@ -38,7 +38,7 @@ pub struct LexError {
 
 // Ordered longest first for maximal munch
 const OPS: &[&str] = &[
-    "<=>", "**=", "===", "!==", "<<=", ">>=", "??=", "...",
+    "<=>", "**=", "===", "!==", "<<=", ">>=", "??=", "?->", "...",
     "==", "!=", "<>", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", ".=", "%=",
     "&=", "|=", "^=", "<<", ">>", "**", "??", "->", "=>", "::",
     "+", "-", "*", "/", "%", ".", "=", "<", ">", "!", "?", ":", "(", ")", "{", "}", "[", "]",
@@ -173,8 +173,8 @@ impl<'a> Lexer<'a> {
         let tok = if c == b'$' && self.peek_at(1).is_some_and(is_ident_start) {
             self.pos += 1;
             Tok::Variable(self.ident())
-        } else if is_ident_start(c) {
-            Tok::Ident(self.ident())
+        } else if is_ident_start(c) || c == b'\\' && self.peek_at(1).is_some_and(is_ident_start) {
+            Tok::Ident(self.qualified_ident())
         } else if c.is_ascii_digit() || (c == b'.' && self.peek_at(1).is_some_and(|d| d.is_ascii_digit())) {
             self.number()?
         } else if c == b'\'' {
@@ -226,6 +226,24 @@ impl<'a> Lexer<'a> {
             }
             self.pos += 1;
         }
+    }
+
+    /// A name that may contain namespace separators: `Foo`, `\\Foo\\Bar`
+    fn qualified_ident(&mut self) -> String {
+        let start = self.pos;
+        loop {
+            if self.peek() == Some(b'\\') && self.peek_at(1).is_some_and(is_ident_start) {
+                self.pos += 1;
+            }
+            if !self.peek().is_some_and(is_ident_start) {
+                break;
+            }
+            self.ident();
+            if self.peek() != Some(b'\\') {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&self.src[start..self.pos]).into_owned()
     }
 
     fn ident(&mut self) -> String {

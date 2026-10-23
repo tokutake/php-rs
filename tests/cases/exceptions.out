@@ -1,0 +1,104 @@
+before
+caught InvalidArgumentException code=7
+finally
+first: inner
+rethrown and caught without a variable
+f1 finally
+string(3) "try"
+string(7) "finally"
+string(16) "finally swallows"
+body 1
+finally 1
+finally 2
+finally 3
+#0 exceptions.php(54): level3('arg!')
+#1 exceptions.php(55): level2('arg')
+#2 {main}
+Array
+(
+    [0] => Array
+        (
+            [file] => exceptions.php
+            [line] => 54
+            [function] => level3
+            [args] => Array
+                (
+                    [0] => arg!
+                )
+
+        )
+
+    [1] => Array
+        (
+            [file] => exceptions.php
+            [line] => 55
+            [function] => level2
+            [args] => Array
+                (
+                    [0] => arg
+                )
+
+        )
+
+)
+DivisionByZeroError: Modulo by zero (line 61)
+ArithmeticError: Division of PHP_INT_MIN by -1 is not an integer (line 62)
+TypeError: Unsupported operand types: array + int (line 63)
+TypeError: Unsupported operand types: string * int (line 64)
+Error: Call to undefined function undefined_function() (line 65)
+ArgumentCountError: strlen() expects exactly 1 argument, 0 given (line 66)
+TypeError: strlen(): Argument #1 ($string) must be of type string, array given (line 67)
+TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given (line 68)
+ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0 (line 69)
+Error: Instantiation of class Closure is not allowed (line 70)
+Error: Cannot instantiate interface Throwable (line 71)
+Error: Class "NoSuchClass" not found (line 72)
+Exception:  (line 73)
+Error: Can only throw objects (line 74)
+Error: Call to a member function method() on null (line 75)
+Error: Cannot access protected property Exception::$message (line 76)
+Error: Call to undefined method Exception::nope() (line 77)
+bool(true)
+string(5) "first"
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+LogicException: first in exceptions.php:80
+Stack trace:
+#0 {main}
+
+Next RuntimeException: second in exceptions.php:81
+Stack trace:
+#0 {main}
+object(Exception)#1 (7) {
+  ["message":protected]=>
+  string(1) "m"
+  ["string":"Exception":private]=>
+  string(0) ""
+  ["code":protected]=>
+  int(3)
+  ["file":protected]=>
+  string(57) "exceptions.php"
+  ["line":protected]=>
+  int(84)
+  ["trace":"Exception":private]=>
+  array(0) {
+  }
+  ["previous":"Exception":private]=>
+  NULL
+}
+TypeError is Error
+no value
+LengthException
+
+Fatal error: Uncaught LogicException: cause in exceptions.php:95
+Stack trace:
+#0 exceptions.php(96): fail()
+#1 {main}
+
+Next RuntimeException: outer in exceptions.php:95
+Stack trace:
+#0 exceptions.php(96): fail()
+#1 {main}
+  thrown in exceptions.php on line 95

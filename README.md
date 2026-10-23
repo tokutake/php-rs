@@ -20,10 +20,15 @@ Early stage. Implemented so far:
 - Control flow: `if`, `while`, `do`, `for`, `foreach` (incl. by reference), `break`/`continue N`
 - User functions: type declarations, defaults, variadics, by-reference parameters,
   `static`, `global`, references
+- Exceptions: `try`/`catch`/`finally`, `throw` (also as an expression), the
+  built-in Throwable hierarchy, chained previous exceptions
+- Closures and arrow functions (`use`, by-reference captures, auto-capture),
+  callables, `?->`, `instanceof`
 - Warnings, deprecations and uncaught errors in PHP's format, with line numbers and stack traces
 - A small set of built-in functions (`count`, `implode`, `explode`, `usort`, `array_map`, ...)
 
-Not yet: exceptions (`try`/`catch`), closures, classes, most of the standard library.
+Not yet: user-defined classes, interfaces and traits, namespaces, generators,
+`match`, most of the standard library.
 
 ## Usage
 

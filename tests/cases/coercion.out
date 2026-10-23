@@ -1,0 +1,77 @@
+TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given
+int(5)
+int(5)
+
+Deprecated: Implicit conversion from float 5.5 to int loses precision in coercion.php on line 7
+int(5)
+
+Deprecated: intdiv(): Passing null to parameter #1 ($num1) of type int is deprecated in coercion.php on line 8
+int(0)
+int(1)
+TypeError: intdiv(): Argument #1 ($num1) must be of type int, float given
+TypeError: intdiv(): Argument #1 ($num1) must be of type int, array given
+int(1)
+int(3)
+int(1)
+
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in coercion.php on line 16
+int(0)
+TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+int(316)
+TypeError: strlen(): Argument #1 ($string) must be of type string, Closure given
+TypeError: in_array(): Argument #2 ($haystack) must be of type array, string given
+
+Deprecated: explode(): Passing null to parameter #2 ($string) of type string is deprecated in coercion.php on line 21
+array(1) {
+  [0]=>
+  string(0) ""
+}
+
+Warning: Array to string conversion in coercion.php on line 22
+string(7) "1,Array"
+TypeError: Unsupported operand types: string + int
+TypeError: Unsupported operand types: string * int
+TypeError: Unsupported operand types: string * int
+TypeError: Unsupported operand types: string % int
+TypeError: Unsupported operand types: string | int
+TypeError: Unsupported operand types: string << int
+TypeError: Unsupported operand types: string ** int
+TypeError: Unsupported operand types: int / string
+
+Warning: A non-numeric value encountered in coercion.php on line 32
+int(6)
+TypeError: Unsupported operand types: Closure + int
+
+Warning: array_sum(): Addition is not supported on type string in coercion.php on line 34
+
+Warning: array_sum(): Addition is not supported on type array in coercion.php on line 34
+float(4.5)
+int(12)
+int(1)
+
+Deprecated: Implicit conversion from float-string "1.5" to int loses precision in coercion.php on line 36
+int(1)
+
+Deprecated: Implicit conversion from float 1.9 to int loses precision in coercion.php on line 36
+int(1)
+TypeError: i(): Argument #1 ($v) must be of type int, null given, called in coercion.php on line 48
+int(1)
+float(3)
+float(7)
+string(2) "12"
+string(3) "1.5"
+string(0) ""
+string(327) "LogicException: as string in coercion.php:55
+Stack trace:
+#0 coercion.php(2): {closure:coercion.php:55}()
+#1 coercion.php(55): t(Object(Closure))
+#2 {main}"
+bool(false)
+TypeError: b(): Argument #1 ($v) must be of type bool, array given, called in coercion.php on line 57
+NULL
+float(1.5)
+int(2)
+string(9) "Exception"
+TypeError: o(): Argument #1 ($v) must be of type object, string given, called in coercion.php on line 62
+string(3) "sub"
+TypeError: e(): Argument #1 ($v) must be of type Exception, TypeError given, called in coercion.php on line 64

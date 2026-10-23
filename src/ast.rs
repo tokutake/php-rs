@@ -32,6 +32,15 @@ pub enum ExprKind {
     Binary(&'static str, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Option<Box<Expr>>, Box<Expr>),
     Call(String, Vec<Arg>),
+    /// Calling the value of an expression: `$f(1)`, `(function () {})()`
+    CallValue(Box<Expr>, Vec<Arg>),
+    /// `function () use ($x) {}` and `fn () => ...`
+    Closure(Rc<FuncDecl>),
+    New(String, Vec<Arg>),
+    MethodCall { object: Box<Expr>, name: String, args: Vec<Arg>, nullsafe: bool },
+    Prop { object: Box<Expr>, name: String, nullsafe: bool },
+    InstanceOf(Box<Expr>, String),
+    Throw(Box<Expr>),
     Isset(Vec<Expr>),
     Empty(Box<Expr>),
 }
@@ -87,11 +96,33 @@ pub enum Stmt {
     Global(Vec<String>),
     /// `static $a = 1, $b;`
     StaticVar(Vec<(String, Option<Expr>)>),
+    Try { body: Vec<Stmt>, catches: Vec<Catch>, finally: Option<Vec<Stmt>> },
+}
+
+#[derive(Debug, Clone)]
+pub struct Catch {
+    /// Class names; any of them matches
+    pub types: Vec<String>,
+    /// PHP 8 allows catching without a variable
+    pub var: Option<String>,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FuncKind {
+    Named,
+    Closure,
+    /// `fn () => expr`: captures used variables by value automatically
+    Arrow,
 }
 
 #[derive(Debug)]
 pub struct FuncDecl {
+    pub kind: FuncKind,
     pub name: String,
+    /// Captured variables (`use ($a, &$b)`), with whether they are by reference.
+    /// For arrow functions these are computed from the body
+    pub uses: Vec<(String, bool)>,
     pub params: Vec<Param>,
     pub ret: Option<TypeHint>,
     pub body: Vec<Stmt>,

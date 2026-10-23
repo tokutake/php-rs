@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::ast::{Arg, ArrayItem, Expr, ExprKind, FuncDecl, Param, Stmt, TypeHint};
+use crate::ast::{Arg, ArrayItem, Catch, Expr, ExprKind, FuncDecl, FuncKind, Param, Stmt, TypeHint};
 use crate::lexer::{StrPart, Tok, Token};
 
 #[derive(Debug)]
@@ -37,8 +37,9 @@ const P_SHIFT: u8 = 15;
 const P_ADD: u8 = 16;
 const P_MUL: u8 = 17;
 const P_NOT: u8 = 18;
-const P_UNARY: u8 = 19;
-const P_POW: u8 = 20;
+const P_INSTANCEOF: u8 = 19;
+const P_UNARY: u8 = 20;
+const P_POW: u8 = 21;
 
 enum Assoc {
     Left,
@@ -268,6 +269,7 @@ impl Parser {
                 }
                 "for" => self.for_statement(),
                 "foreach" => self.foreach_statement(),
+                "try" => self.try_statement(),
                 "function" if matches!(self.peek_at(1), Tok::Ident(_)) || matches!(self.peek_at(1), Tok::Op("&")) => {
                     self.function_decl()
                 }
@@ -450,6 +452,78 @@ impl Parser {
             self.pos -= 1;
             return self.unexpected();
         };
+        let params = self.params()?;
+        let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
+        let body = self.brace_body()?;
+        Ok(Stmt::Function(Rc::new(FuncDecl { kind: FuncKind::Named, name, uses: Vec::new(), params, ret, body, line })))
+    }
+
+    /// `function (...) use (...) { ... }`, after the `function` keyword
+    fn closure(&mut self, line: u32) -> PResult<ExprKind> {
+        self.eat(&Tok::Op("&"));
+        let params = self.params()?;
+        let mut uses = Vec::new();
+        if self.eat_kw("use") {
+            self.expect(Tok::Op("("))?;
+            while !self.eat(&Tok::Op(")")) {
+                let by_ref = self.eat(&Tok::Op("&"));
+                let Tok::Variable(name) = self.next() else {
+                    self.pos -= 1;
+                    return self.unexpected();
+                };
+                if params.iter().any(|p| p.name == name) {
+                    return Err(ParseError {
+                        msg: format!("Cannot use lexical variable ${name} as a parameter name"),
+                        line: self.line(),
+                    });
+                }
+                uses.push((name, by_ref));
+                if !self.eat(&Tok::Op(",")) {
+                    self.expect(Tok::Op(")"))?;
+                    break;
+                }
+            }
+        }
+        let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
+        let body = self.brace_body()?;
+        let name = "{closure}".to_string();
+        Ok(ExprKind::Closure(Rc::new(FuncDecl { kind: FuncKind::Closure, name, uses, params, ret, body, line })))
+    }
+
+    /// `fn (...) => expr`, after the `fn` keyword
+    fn arrow_fn(&mut self, line: u32) -> PResult<ExprKind> {
+        self.eat(&Tok::Op("&"));
+        let params = self.params()?;
+        let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
+        self.expect(Tok::Op("=>"))?;
+        let body = self.expr_bp(P_ASSIGN)?;
+        // Every variable the body mentions is captured by value, except the parameters
+        let mut used = Vec::new();
+        free_vars(&body, &mut used);
+        let uses = used
+            .into_iter()
+            .filter(|v| !params.iter().any(|p| &p.name == v) && v != "this")
+            .map(|v| (v, false))
+            .collect();
+        let name = "{closure}".to_string();
+        let body = vec![Stmt::Return(Some(body))];
+        Ok(ExprKind::Closure(Rc::new(FuncDecl { kind: FuncKind::Arrow, name, uses, params, ret, body, line })))
+    }
+
+    fn brace_body(&mut self) -> PResult<Vec<Stmt>> {
+        self.expect(Tok::Op("{"))?;
+        let mut body = Vec::new();
+        while !self.eat(&Tok::Op("}")) {
+            if self.at(&Tok::Eof) {
+                return self.unexpected();
+            }
+            body.push(self.statement()?);
+        }
+        Ok(body)
+    }
+
+    /// A parameter list including its parentheses
+    fn params(&mut self) -> PResult<Vec<Param>> {
         self.expect(Tok::Op("("))?;
         let mut params: Vec<Param> = Vec::new();
         while !self.eat(&Tok::Op(")")) {
@@ -476,16 +550,41 @@ impl Parser {
                 break;
             }
         }
-        let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
-        self.expect(Tok::Op("{"))?;
-        let mut body = Vec::new();
-        while !self.eat(&Tok::Op("}")) {
-            if self.at(&Tok::Eof) {
-                return self.unexpected();
+        Ok(params)
+    }
+
+    fn try_statement(&mut self) -> PResult<Stmt> {
+        self.next();
+        let body = self.brace_body()?;
+        let mut catches = Vec::new();
+        while self.eat_kw("catch") {
+            self.expect(Tok::Op("("))?;
+            let mut types = Vec::new();
+            loop {
+                let Tok::Ident(name) = self.next() else {
+                    self.pos -= 1;
+                    return self.unexpected();
+                };
+                types.push(name.trim_start_matches('\\').to_string());
+                if !self.eat(&Tok::Op("|")) {
+                    break;
+                }
             }
-            body.push(self.statement()?);
+            let var = match self.peek().clone() {
+                Tok::Variable(v) => {
+                    self.next();
+                    Some(v)
+                }
+                _ => None,
+            };
+            self.expect(Tok::Op(")"))?;
+            catches.push(Catch { types, var, body: self.brace_body()? });
         }
-        Ok(Stmt::Function(Rc::new(FuncDecl { name, params, ret, body, line })))
+        let finally = if self.eat_kw("finally") { Some(self.brace_body()?) } else { None };
+        if catches.is_empty() && finally.is_none() {
+            return Err(ParseError { msg: "Cannot use try without catch or finally".into(), line: self.line() });
+        }
+        Ok(Stmt::Try { body, catches, finally })
     }
 
     /// `int`, `?string`, `int|float|null`
@@ -635,6 +734,20 @@ impl Parser {
                 continue;
             }
 
+            if matches!(self.peek(), Tok::Ident(kw) if kw.eq_ignore_ascii_case("instanceof")) {
+                if P_INSTANCEOF < min_prec {
+                    break;
+                }
+                self.next();
+                let Tok::Ident(class) = self.next() else {
+                    self.pos -= 1;
+                    return Err(ParseError { msg: "instanceof needs a class name".into(), line: self.line() });
+                };
+                let line = lhs.line;
+                lhs = Expr::new(ExprKind::InstanceOf(Box::new(lhs), class.trim_start_matches('\\').to_string()), line);
+                continue;
+            }
+
             let Some((op, prec, assoc)) = binary_op(self.peek()) else { break };
             if prec < min_prec {
                 break;
@@ -654,13 +767,37 @@ impl Parser {
     /// A primary expression followed by any `[...]` offsets
     fn postfix_expr(&mut self) -> PResult<Expr> {
         let mut e = self.primary()?;
-        while self.eat(&Tok::Op("[")) {
-            let index = if self.at(&Tok::Op("]")) { None } else { Some(Box::new(self.expr()?)) };
-            self.expect(Tok::Op("]"))?;
+        loop {
             let line = e.line;
-            e = Expr::new(ExprKind::Index(Box::new(e), index), line);
+            let kind = match self.peek() {
+                Tok::Op("[") => {
+                    self.next();
+                    let index = if self.at(&Tok::Op("]")) { None } else { Some(Box::new(self.expr()?)) };
+                    self.expect(Tok::Op("]"))?;
+                    ExprKind::Index(Box::new(e), index)
+                }
+                Tok::Op(op @ ("->" | "?->")) => {
+                    let nullsafe = *op == "?->";
+                    self.next();
+                    let Tok::Ident(name) = self.next() else {
+                        self.pos -= 1;
+                        return self.unexpected();
+                    };
+                    if self.eat(&Tok::Op("(")) {
+                        let args = self.call_args()?;
+                        ExprKind::MethodCall { object: Box::new(e), name, args, nullsafe }
+                    } else {
+                        ExprKind::Prop { object: Box::new(e), name, nullsafe }
+                    }
+                }
+                Tok::Op("(") => {
+                    self.next();
+                    ExprKind::CallValue(Box::new(e), self.call_args()?)
+                }
+                _ => return Ok(e),
+            };
+            e = Expr::new(kind, line);
         }
-        Ok(e)
     }
 
     fn prefix(&mut self) -> PResult<Expr> {
@@ -693,6 +830,18 @@ impl Parser {
                     return self.unexpected();
                 }
                 ExprKind::IncDec { target: Box::new(target), inc: op == "++", prefix: true }
+            }
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("throw") => {
+                self.next();
+                ExprKind::Throw(Box::new(self.expr_bp(0)?))
+            }
+            // `static function` / `static fn`: there is no $this to leave unbound yet
+            Tok::Ident(kw)
+                if kw.eq_ignore_ascii_case("static")
+                    && matches!(self.peek_at(1), Tok::Ident(f) if f.eq_ignore_ascii_case("function") || f.eq_ignore_ascii_case("fn")) =>
+            {
+                self.next();
+                return self.prefix();
             }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("print") => {
                 self.next();
@@ -727,6 +876,16 @@ impl Parser {
                 let e = self.expr()?;
                 self.expect(Tok::Op(")"))?;
                 return Ok(e);
+            }
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("function") => self.closure(line)?,
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("fn") => self.arrow_fn(line)?,
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("new") => {
+                let Tok::Ident(class) = self.next() else {
+                    self.pos -= 1;
+                    return self.unexpected();
+                };
+                let args = if self.eat(&Tok::Op("(")) { self.call_args()? } else { Vec::new() };
+                ExprKind::New(class.trim_start_matches('\\').to_string(), args)
             }
             Tok::Ident(name) => {
                 let lname = name.to_ascii_lowercase();
@@ -770,5 +929,60 @@ impl Parser {
             }
         };
         Ok(Expr::new(kind, line))
+    }
+}
+
+/// Variable names an arrow function body refers to, in first-use order
+fn free_vars(e: &Expr, out: &mut Vec<String>) {
+    let add = |name: &str, out: &mut Vec<String>| {
+        if !out.iter().any(|v| v == name) {
+            out.push(name.to_string());
+        }
+    };
+    let args = |args: &[Arg], out: &mut Vec<String>| args.iter().for_each(|a| free_vars(&a.value, out));
+    match &e.kind {
+        ExprKind::Null | ExprKind::Bool(_) | ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Const(_) => {}
+        ExprKind::Var(name) => add(name, out),
+        ExprKind::Interp(parts) => parts.iter().for_each(|p| free_vars(p, out)),
+        ExprKind::Array(items) => {
+            for item in items {
+                if let Some(k) = &item.key {
+                    free_vars(k, out);
+                }
+                free_vars(&item.value, out);
+            }
+        }
+        ExprKind::Index(base, index) => {
+            free_vars(base, out);
+            if let Some(i) = index {
+                free_vars(i, out);
+            }
+        }
+        ExprKind::Assign(a, b) | ExprKind::AssignRef(a, b) | ExprKind::CompoundAssign(_, a, b) | ExprKind::Binary(_, a, b) => {
+            free_vars(a, out);
+            free_vars(b, out);
+        }
+        ExprKind::IncDec { target, .. } => free_vars(target, out),
+        ExprKind::Unary(_, x) | ExprKind::Empty(x) | ExprKind::Throw(x) | ExprKind::InstanceOf(x, _) => free_vars(x, out),
+        ExprKind::Prop { object, .. } => free_vars(object, out),
+        ExprKind::Ternary(c, t, f) => {
+            free_vars(c, out);
+            if let Some(t) = t {
+                free_vars(t, out);
+            }
+            free_vars(f, out);
+        }
+        ExprKind::Call(_, a) | ExprKind::New(_, a) => args(a, out),
+        ExprKind::CallValue(f, a) => {
+            free_vars(f, out);
+            args(a, out);
+        }
+        ExprKind::MethodCall { object, args: a, .. } => {
+            free_vars(object, out);
+            args(a, out);
+        }
+        ExprKind::Isset(list) => list.iter().for_each(|x| free_vars(x, out)),
+        // A nested closure only needs what it captures itself
+        ExprKind::Closure(f) => f.uses.iter().for_each(|(name, _)| add(name, out)),
     }
 }

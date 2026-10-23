@@ -1,9 +1,12 @@
+#![forbid(unsafe_code)]
+
 mod array;
 mod ast;
 mod builtins;
 mod diag;
 mod interp;
 mod lexer;
+mod object;
 mod parser;
 mod value;
 

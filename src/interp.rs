@@ -7,9 +7,10 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::array::{Key, PhpArray};
-use crate::ast::{Arg, Expr, ExprKind, FuncDecl, Stmt, TypeHint};
+use crate::ast::{Arg, Expr, ExprKind, FuncDecl, FuncKind, Stmt, TypeHint};
 use crate::builtins;
 use crate::diag;
+use crate::object::{self, ClassEntry, Closure, Object, ObjectKind, ThrowableData, TraceFrame};
 use crate::value::{self, float_fits_int, float_to_int_implicit, loose_cmp, parse_numeric, ArithError, Num, Numeric, Value};
 
 /// PHP code recursing deeper than this gets an Error instead of overflowing the
@@ -23,12 +24,18 @@ pub struct Fatal {
     pub msg: String,
     /// Where it was thrown and the stack trace, filled in as it leaves the innermost call
     pub line: Option<u32>,
-    pub trace: Option<String>,
+    pub trace: Option<Vec<TraceFrame>>,
+    /// A user-thrown exception object, which carries its own message, line and trace
+    pub object: Option<Rc<Object>>,
 }
 
 impl Fatal {
     pub fn new(class: &'static str, msg: impl Into<String>) -> Self {
-        Fatal { class, msg: msg.into(), line: None, trace: None }
+        Fatal { class, msg: msg.into(), line: None, trace: None, object: None }
+    }
+
+    fn thrown(object: Rc<Object>) -> Self {
+        Fatal { class: object.class.name, msg: String::new(), line: None, trace: None, object: Some(object) }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
@@ -78,6 +85,8 @@ struct Frame {
     vars: HashMap<String, Value>,
     /// None for the main script
     func: Option<Rc<FuncDecl>>,
+    /// The function as named in traces and errors (`{closure:FILE:LINE}` for closures)
+    name: String,
     call_line: u32,
     /// Arguments as passed, for func_get_args() and stack traces
     args: Vec<Value>,
@@ -91,6 +100,7 @@ pub struct Interp<W: Write> {
     functions: HashMap<String, Rc<FuncDecl>>,
     /// `static` variables, keyed by the declaring function (null for the main script)
     statics: HashMap<*const FuncDecl, HashMap<String, RefCellValue>>,
+    classes: HashMap<String, Rc<ClassEntry>>,
 }
 
 fn recursive_reference() -> Fatal {
@@ -99,8 +109,15 @@ fn recursive_reference() -> Fatal {
 
 impl<W: Write> Interp<W> {
     pub fn new(out: W, file: String) -> Self {
-        let main = Frame { vars: HashMap::new(), func: None, call_line: 0, args: Vec::new() };
-        Interp { out, file, frames: vec![main], functions: HashMap::new(), statics: HashMap::new() }
+        let main = Frame { vars: HashMap::new(), func: None, name: String::new(), call_line: 0, args: Vec::new() };
+        Interp {
+            out,
+            file,
+            frames: vec![main],
+            functions: HashMap::new(),
+            statics: HashMap::new(),
+            classes: object::builtin_classes(),
+        }
     }
 
     pub fn into_output(self) -> W {
@@ -115,18 +132,10 @@ impl<W: Write> Interp<W> {
         match result {
             Ok(_) => true,
             Err(e) => {
-                let file = &self.file;
-                let line = e.line.unwrap_or_else(diag::line);
-                let trace = e.trace.unwrap_or_else(|| "#0 {main}".to_string());
-                let mut text = e.msg;
-                // Exception::__toString points at the declaration for argument errors
-                if matches!(e.class, "TypeError" | "ArgumentCountError") && text.contains(", called in ") {
-                    text.push_str(" and defined");
-                }
-                let msg = format!(
-                    "\nFatal error: Uncaught {}: {text} in {file}:{line}\nStack trace:\n{trace}\n  thrown in {file} on line {line}\n",
-                    e.class
-                );
+                let ex = self.exception_object(e);
+                let text = String::from_utf8_lossy(&object::to_string(&ex).unwrap_or_default()).into_owned();
+                let (file, line) = ex.throwable().map(|t| (t.file.clone(), t.line)).unwrap_or_default();
+                let msg = format!("\nFatal error: Uncaught {text}\n  thrown in {file} on line {line}\n");
                 let _ = self.out.write_all(msg.as_bytes());
                 false
             }
@@ -194,7 +203,7 @@ impl<W: Write> Interp<W> {
             Stmt::Echo(exprs) => {
                 for e in exprs {
                     let v = self.expr(e)?;
-                    let bytes = to_str(&v);
+                    let bytes = to_str(&v)?;
                     self.write(&bytes)?;
                 }
             }
@@ -316,6 +325,39 @@ impl<W: Write> Interp<W> {
                 }
             }
             Stmt::Function(f) => self.declare(f)?,
+            Stmt::Try { body, catches, finally } => {
+                let mut result = self.block(body);
+                if let Err(e) = result {
+                    let ex = self.exception_object(e);
+                    result = Err(Fatal::thrown(ex.clone()));
+                    if let Some(c) = catches.iter().find(|c| c.types.iter().any(|t| ex.class.is_subclass_of(t))) {
+                        result = match &c.var {
+                            Some(var) => self.with_place(&(var.as_str(), Vec::new()), false, true, |slot| {
+                                *slot = Value::Object(ex.clone());
+                                Ok(())
+                            }),
+                            None => Ok(()),
+                        }
+                        .and_then(|_| self.block(&c.body));
+                    }
+                }
+                if let Some(fin) = finally {
+                    // A return, break or new exception in finally replaces the pending outcome
+                    match self.block(fin) {
+                        Ok(Flow::Normal) => {}
+                        Ok(flow) => return Ok(flow),
+                        Err(new) => {
+                            let Err(pending) = result else { return Err(new) };
+                            // The exception being replaced is kept as the new one's previous
+                            let new = self.exception_object(new);
+                            let pending = self.exception_object(pending);
+                            object::chain_previous(&new, pending);
+                            return Err(Fatal::thrown(new));
+                        }
+                    }
+                }
+                return result;
+            }
             Stmt::Return(value) => {
                 let v = match value {
                     Some(e) => self.expr(e)?,
@@ -377,7 +419,7 @@ impl<W: Write> Interp<W> {
                 let mut s = Vec::new();
                 for part in parts {
                     let v = self.expr(part)?;
-                    s.extend_from_slice(&to_str(&v));
+                    s.extend_from_slice(&to_str(&v)?);
                 }
                 Value::str(s)
             }
@@ -434,7 +476,7 @@ impl<W: Write> Interp<W> {
                 self.with_place(&path, true, true, |place| {
                     if let (".", Value::Str(s)) = (*op, &mut *place) {
                         // Append in place so `$s .= ...` in a loop stays linear
-                        Rc::make_mut(s).extend_from_slice(&to_str(&r));
+                        Rc::make_mut(s).extend_from_slice(&to_str(&r)?);
                     } else {
                         *place = binary(op, place, &r)?;
                     }
@@ -463,7 +505,7 @@ impl<W: Write> Interp<W> {
                     },
                     "(int)" => Value::Int(v.cast_int()),
                     "(float)" => Value::Float(v.to_float()),
-                    "(string)" => Value::str(to_str(&v)),
+                    "(string)" => Value::str(to_str(&v)?),
                     "(bool)" => Value::Bool(v.to_bool()),
                     _ => unreachable!("unknown unary operator {op}"),
                 }
@@ -500,10 +542,42 @@ impl<W: Write> Interp<W> {
             }
             ExprKind::Empty(target) => Value::Bool(!self.quiet(target)?.is_some_and(|v| v.to_bool())),
             ExprKind::Call(name, args) => {
-                let v = self.call(name, args, e.line)?;
+                let v = self.call(name.trim_start_matches('\\'), args, e.line)?;
                 // Whatever the call did, diagnostics from here on belong to the call site
                 diag::set_line(e.line);
                 v
+            }
+            ExprKind::CallValue(callee, args) => {
+                let f = self.expr(callee)?;
+                let v = self.call_value_expr(f, args, e.line)?;
+                diag::set_line(e.line);
+                v
+            }
+            ExprKind::Closure(f) => self.make_closure(f)?,
+            ExprKind::New(class, args) => self.instantiate(class, args, e.line)?,
+            ExprKind::MethodCall { object, name, args, nullsafe } => {
+                let o = self.expr(object)?;
+                if *nullsafe && o.is_null() {
+                    // `?->` short-circuits: the arguments are not evaluated
+                    return Ok(Value::Null);
+                }
+                let v = self.method_call(o, name, args, e.line)?;
+                diag::set_line(e.line);
+                v
+            }
+            ExprKind::Prop { object, name, nullsafe } => {
+                let o = self.expr(object)?;
+                read_prop(&o, name, *nullsafe)?
+            }
+            ExprKind::InstanceOf(x, class) => {
+                let v = self.expr(x)?;
+                Value::Bool(matches!(&v, Value::Object(o) if o.class.is_subclass_of(class)))
+            }
+            ExprKind::Throw(x) => {
+                return match self.expr(x)? {
+                    Value::Object(o) if o.throwable().is_some() => Err(Fatal::thrown(o)),
+                    _ => Err(Fatal::error("Can only throw objects")),
+                };
             }
         })
     }
@@ -658,7 +732,7 @@ impl<W: Write> Interp<W> {
     fn call_builtin(&mut self, name: &str, lname: &str, vals: Vec<Value>, line: u32) -> EResult<Value> {
         match lname {
             "print" => {
-                self.write(&to_str(&vals[0]))?;
+                self.write(&to_str(&vals[0])?)?;
                 Ok(Value::Int(1))
             }
             "var_dump" => {
@@ -756,6 +830,23 @@ impl<W: Write> Interp<W> {
     }
 
     fn invoke(&mut self, f: &Rc<FuncDecl>, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
+        self.invoke_with(f, f.name.clone(), Vec::new(), args, call_line)
+    }
+
+    fn invoke_closure(&mut self, closure: &Closure, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
+        // Each call gets its own copy of by-value captures; by-reference ones stay shared
+        let bound = closure.bound.clone();
+        self.invoke_with(&closure.func, closure.name.clone(), bound, args, call_line)
+    }
+
+    fn invoke_with(
+        &mut self,
+        f: &Rc<FuncDecl>,
+        name: String,
+        bound: Vec<(String, Value)>,
+        args: Vec<ArgVal>,
+        call_line: u32,
+    ) -> EResult<Value> {
         if self.frames.len() > MAX_CALL_DEPTH {
             return Err(Fatal::error("Maximum call stack size reached. Infinite recursion?"));
         }
@@ -766,11 +857,12 @@ impl<W: Write> Interp<W> {
                 ArgVal::Ref(r) => value::with_deref(r, Value::clone),
             })
             .collect();
-        self.frames.push(Frame { vars: HashMap::new(), func: Some(f.clone()), call_line, args: shown });
-        let result = self.invoke_inner(f, args, call_line);
+        let vars = bound.into_iter().collect();
+        self.frames.push(Frame { vars, func: Some(f.clone()), name: name.clone(), call_line, args: shown });
+        let result = self.invoke_inner(f, &name, args, call_line);
         // The trace is captured while the failing frames are still on the stack
         let result = result.map_err(|mut e| {
-            if e.trace.is_none() {
+            if e.object.is_none() && e.trace.is_none() {
                 e.line = Some(e.line.unwrap_or_else(diag::line));
                 e.trace = Some(self.trace());
             }
@@ -780,7 +872,7 @@ impl<W: Write> Interp<W> {
         result
     }
 
-    fn invoke_inner(&mut self, f: &FuncDecl, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
+    fn invoke_inner(&mut self, f: &FuncDecl, fname: &str, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
         diag::set_line(f.line);
         let required = f.required();
         if args.len() < required {
@@ -789,7 +881,7 @@ impl<W: Write> Interp<W> {
                 "ArgumentCountError",
                 format!(
                     "Too few arguments to function {}(), {} passed in {} on line {call_line} and {} {required} expected",
-                    f.name,
+                    fname,
                     args.len(),
                     self.file,
                     if exact { "exactly" } else { "at least" }
@@ -800,10 +892,10 @@ impl<W: Write> Interp<W> {
         for (i, p) in f.params.iter().enumerate() {
             let check = |v: Value| -> EResult<Value> {
                 match &p.ty {
-                    Some(ty) => coerce(v, ty).map_err(|v| {
+                    Some(ty) => coerce(v, ty, &|v| names_callable(&self.functions, v)).map_err(|v| {
                         Fatal::type_error(format!(
                             "{}(): Argument #{} (${}) must be of type {}, {} given, called in {} on line {call_line}",
-                            f.name,
+                            fname,
                             i + 1,
                             p.name,
                             ty.display,
@@ -840,7 +932,7 @@ impl<W: Write> Interp<W> {
                     if p.by_ref {
                         diag::warning(format!(
                             "{}(): Argument #{} (${}) must be passed by reference, value given",
-                            f.name,
+                            fname,
                             i + 1,
                             p.name
                         ));
@@ -869,14 +961,14 @@ impl<W: Write> Interp<W> {
             None => {
                 return Err(Fatal::type_error(format!(
                     "{}(): Return value must be of type {}, none returned",
-                    f.name, ty.display
+                    fname, ty.display
                 )))
             }
         };
-        coerce(given, ty).map_err(|v| {
+        coerce(given, ty, &|v| names_callable(&self.functions, v)).map_err(|v| {
             Fatal::type_error(format!(
                 "{}(): Return value must be of type {}, {} returned",
-                f.name,
+                fname,
                 ty.display,
                 v.type_name()
             ))
@@ -884,21 +976,168 @@ impl<W: Write> Interp<W> {
     }
 
     /// The stack trace of the current call frames, innermost first
-    fn trace(&self) -> String {
-        let mut out = String::new();
-        for (i, frame) in self.frames.iter().skip(1).rev().enumerate() {
-            let name = frame.func.as_ref().map_or("", |f| f.name.as_str());
-            let args: Vec<String> = frame.args.iter().map(trace_arg).collect();
-            out.push_str(&format!("#{i} {}({}): {name}({})\n", self.file, frame.call_line, args.join(", ")));
+    fn trace(&self) -> Vec<TraceFrame> {
+        self.frames
+            .iter()
+            .skip(1)
+            .rev()
+            .map(|f| TraceFrame { file: self.file.clone(), line: f.call_line, function: f.name.clone(), args: f.args.clone() })
+            .collect()
+    }
+
+    fn make_closure(&mut self, f: &Rc<FuncDecl>) -> EResult<Value> {
+        let mut bound = Vec::with_capacity(f.uses.len());
+        for (name, by_ref) in &f.uses {
+            if *by_ref {
+                let r = self.make_ref(&(name.as_str(), Vec::new()))?;
+                bound.push((name.clone(), Value::Ref(r)));
+            } else if f.kind == FuncKind::Arrow {
+                // Arrow functions capture only what exists; using anything else warns when called
+                if let Some(v) = self.frame().vars.get(name) {
+                    bound.push((name.clone(), v.copy_out()));
+                }
+            } else {
+                bound.push((name.clone(), self.lookup(name)));
+            }
         }
-        out.push_str(&format!("#{} {{main}}", self.frames.len() - 1));
-        out
+        let name = format!("{{closure:{}:{}}}", self.file, f.line);
+        let closure = Closure { func: f.clone(), bound, name, file: self.file.clone() };
+        Ok(Value::Object(Object::new(self.classes["closure"].clone(), ObjectKind::Closure(closure))))
+    }
+
+    /// `$f(...)`: closures, and strings naming a function
+    fn call_value_expr(&mut self, f: Value, args: &[Arg], line: u32) -> EResult<Value> {
+        match &f {
+            Value::Object(o) => match &o.kind {
+                ObjectKind::Closure(c) => {
+                    let bound = self.bind_args(&c.func, args)?;
+                    self.invoke_closure(c, bound, line)
+                }
+                _ => Err(Fatal::error(format!("Object of type {} is not callable", o.class.name))),
+            },
+            Value::Str(name) => {
+                let name = String::from_utf8_lossy(name).into_owned();
+                self.call(name.trim_start_matches('\\'), args, line)
+            }
+            _ => Err(Fatal::error("Value not callable")),
+        }
+    }
+
+    fn instantiate(&mut self, class: &str, args: &[Arg], line: u32) -> EResult<Value> {
+        let Some(ce) = self.classes.get(&class.to_ascii_lowercase()).cloned() else {
+            return Err(Fatal::error(format!("Class \"{class}\" not found")));
+        };
+        if ce.is_interface {
+            return Err(Fatal::error(format!("Cannot instantiate interface {}", ce.name)));
+        }
+        if !ce.instantiable {
+            return Err(Fatal::error(format!("Instantiation of class {} is not allowed", ce.name)));
+        }
+        // Every instantiable built-in class is a Throwable so far
+        let ctor = format!("{}::__construct", ce.throwable_base());
+        let vals = self.eval_args(args)?;
+        if vals.len() > 3 {
+            return Err(Fatal::new(
+                "ArgumentCountError",
+                format!("{ctor}() expects at most 3 arguments, {} given", vals.len()),
+            ));
+        }
+        let mut vals = vals.into_iter();
+        let message = match vals.next() {
+            Some(v) => builtins::arg_str(&ctor, 1, "message", &v)?,
+            None => Vec::new(),
+        };
+        let code = match vals.next() {
+            Some(v) => builtins::arg_int(&ctor, 2, "code", &v)?,
+            None => 0,
+        };
+        let previous = match vals.next() {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(o)) if o.throwable().is_some() => Some(o),
+            Some(other) => {
+                return Err(Fatal::type_error(format!(
+                    "{ctor}(): Argument #3 ($previous) must be of type ?Throwable, {} given",
+                    other.type_name()
+                )))
+            }
+        };
+        // Like php-src, the object remembers where `new` ran, not where it is thrown
+        let data = ThrowableData { message, code, file: self.file.clone(), line, trace: self.trace(), previous };
+        Ok(Value::Object(Object::new(ce, ObjectKind::Throwable(RefCell::new(data)))))
+    }
+
+    fn method_call(&mut self, o: Value, name: &str, args: &[Arg], line: u32) -> EResult<Value> {
+        let Value::Object(obj) = &o else {
+            return Err(Fatal::error(format!("Call to a member function {name}() on {}", o.type_name())));
+        };
+        let lname = name.to_ascii_lowercase();
+        let undefined = || Fatal::error(format!("Call to undefined method {}::{name}()", obj.class.name));
+        match &obj.kind {
+            ObjectKind::Closure(c) => match lname.as_str() {
+                "__invoke" => {
+                    let bound = self.bind_args(&c.func, args)?;
+                    self.invoke_closure(c, bound, line)
+                }
+                _ => Err(undefined()),
+            },
+            ObjectKind::Throwable(t) => {
+                let given = self.eval_args(args)?.len();
+                let base = obj.class.throwable_base();
+                let known = [
+                    "getmessage", "getcode", "getprevious", "getfile", "getline", "gettrace", "gettraceasstring",
+                    "__tostring",
+                ];
+                if !known.contains(&lname.as_str()) {
+                    return Err(undefined());
+                }
+                if given > 0 {
+                    return Err(Fatal::new(
+                        "ArgumentCountError",
+                        format!("{base}::{name}() expects exactly 0 arguments, {given} given"),
+                    ));
+                }
+                if lname == "__tostring" {
+                    return Ok(Value::str(object::to_string(obj).unwrap_or_default()));
+                }
+                let t = t.try_borrow().map_err(|_| recursive_reference())?;
+                Ok(match lname.as_str() {
+                    "getmessage" => Value::str(t.message.clone()),
+                    "getcode" => Value::Int(t.code),
+                    "getprevious" => t.previous.clone().map_or(Value::Null, Value::Object),
+                    "getfile" => Value::str(t.file.clone()),
+                    "getline" => Value::Int(t.line as i64),
+                    "gettrace" => trace_array(&t.trace),
+                    _ => Value::str(object::trace_string(&t.trace)),
+                })
+            }
+        }
+    }
+
+    /// The object for a caught or uncaught error: thrown objects as they are,
+    /// internal errors materialized with the place they happened
+    fn exception_object(&mut self, e: Fatal) -> Rc<Object> {
+        if let Some(obj) = e.object {
+            return obj;
+        }
+        let class = self.classes.get(&e.class.to_ascii_lowercase()).cloned().unwrap_or_else(|| self.classes["error"].clone());
+        let data = ThrowableData {
+            message: e.msg.into_bytes(),
+            code: 0,
+            file: self.file.clone(),
+            line: e.line.unwrap_or_else(diag::line),
+            trace: e.trace.unwrap_or_else(|| self.trace()),
+            previous: None,
+        };
+        Object::new(class, ObjectKind::Throwable(RefCell::new(data)))
     }
 
     /// The function a callable value names, if any
     fn callable_name(&self, v: &Value) -> Option<Callable> {
+        if let Value::Object(o) = v {
+            return matches!(o.kind, ObjectKind::Closure(_)).then(|| Callable::Closure(o.clone()));
+        }
         let Value::Str(s) = v else { return None };
-        let name = String::from_utf8_lossy(s).to_ascii_lowercase();
+        let name = String::from_utf8_lossy(s).trim_start_matches('\\').to_ascii_lowercase();
         if let Some(f) = self.functions.get(&name) {
             return Some(Callable::User(f.clone()));
         }
@@ -918,6 +1157,10 @@ impl<W: Write> Interp<W> {
     fn call_value(&mut self, f: &Callable, args: Vec<Value>, line: u32) -> EResult<Value> {
         let v = match f {
             Callable::User(f) => self.invoke(f, args.into_iter().map(ArgVal::Val).collect(), line)?,
+            Callable::Closure(o) => {
+                let ObjectKind::Closure(c) = &o.kind else { unreachable!("checked in callable_name") };
+                self.invoke_closure(c, args.into_iter().map(ArgVal::Val).collect(), line)?
+            }
             Callable::Builtin(name) if builtins::BY_REF.contains(&name.as_str()) => {
                 // A callback cannot pass a variable by reference, so this works on a copy
                 let mut args = args.into_iter();
@@ -1051,6 +1294,7 @@ impl<W: Write> Interp<W> {
 
 enum Callable {
     User(Rc<FuncDecl>),
+    Closure(Rc<Object>),
     Builtin(String),
 }
 
@@ -1073,19 +1317,50 @@ fn list(values: Vec<Value>) -> Value {
     Value::Array(Rc::new(PhpArray::from_values(values)))
 }
 
-/// An argument as shown in a stack trace
-fn trace_arg(v: &Value) -> String {
-    match v {
-        Value::Null => "NULL".into(),
-        Value::Bool(b) => if *b { "true" } else { "false" }.into(),
-        Value::Int(i) => i.to_string(),
-        Value::Float(f) => value::format_float_repr(*f),
-        Value::Str(s) => {
-            let shown = String::from_utf8_lossy(&s[..s.len().min(15)]).into_owned();
-            format!("'{shown}{}'", if s.len() > 15 { "..." } else { "" })
+/// getTrace(): one array per frame
+pub fn trace_array(frames: &[TraceFrame]) -> Value {
+    list(
+        frames
+            .iter()
+            .map(|f| {
+                let mut a = PhpArray::new();
+                a.insert(Key::from_bytes(b"file"), Value::str(f.file.clone()));
+                a.insert(Key::from_bytes(b"line"), Value::Int(f.line as i64));
+                a.insert(Key::from_bytes(b"function"), Value::str(f.function.clone()));
+                a.insert(Key::from_bytes(b"args"), list(f.args.clone()));
+                Value::Array(Rc::new(a))
+            })
+            .collect(),
+    )
+}
+
+/// `$obj->name` for reading. Only built-in objects exist so far, whose
+/// properties are all protected or private
+fn read_prop(o: &Value, name: &str, nullsafe: bool) -> EResult<Value> {
+    match o {
+        Value::Object(obj) => match &obj.kind {
+            ObjectKind::Closure(_) => Err(Fatal::error("Closure object cannot have properties")),
+            ObjectKind::Throwable(_) => {
+                let class = obj.class.name;
+                match name {
+                    "message" | "code" | "file" | "line" => {
+                        Err(Fatal::error(format!("Cannot access protected property {class}::${name}")))
+                    }
+                    "string" | "trace" | "previous" => {
+                        Err(Fatal::error(format!("Cannot access private property {class}::${name}")))
+                    }
+                    _ => {
+                        diag::warning(format!("Undefined property: {class}::${name}"));
+                        Ok(Value::Null)
+                    }
+                }
+            }
+        },
+        Value::Null if nullsafe => Ok(Value::Null),
+        other => {
+            diag::warning(format!("Attempt to read property \"{name}\" on {}", other.type_name()));
+            Ok(Value::Null)
         }
-        Value::Array(_) => "Array".into(),
-        Value::Ref(r) => value::with_deref(r, trace_arg),
     }
 }
 
@@ -1175,7 +1450,33 @@ fn unset_in(slot: &mut Value, dims: &[Option<Value>], last: Option<Value>) -> ER
 
 /// Non-strict-mode coercion of a value to a declared parameter or return type.
 /// Err hands the value back for the error message
-fn coerce(v: Value, ty: &TypeHint) -> Result<Value, Value> {
+/// Whether a string names a user or built-in function (closures are checked by kind)
+fn names_callable(functions: &HashMap<String, Rc<FuncDecl>>, v: &Value) -> bool {
+    match v {
+        Value::Str(s) => {
+            let name = String::from_utf8_lossy(s).trim_start_matches('\\').to_ascii_lowercase();
+            functions.contains_key(&name) || builtins::exists(&name)
+        }
+        Value::Object(o) => matches!(o.kind, ObjectKind::Closure(_)),
+        _ => false,
+    }
+}
+
+fn coerce(v: Value, ty: &TypeHint, is_callable: &dyn Fn(&Value) -> bool) -> Result<Value, Value> {
+    if let Value::Object(o) = &v {
+        let ok = ty.allows("object")
+            || ty.types.iter().any(|t| o.class.is_subclass_of(t))
+            || ty.allows("callable") && is_callable(&v);
+        if ok {
+            return Ok(v);
+        }
+        // Stringable objects pass for string in non-strict mode
+        if ty.allows("string")
+            && let Some(s) = object::to_string(o) {
+                return Ok(Value::str(s));
+            }
+        return Err(v);
+    }
     let actual = match &v {
         Value::Null => "null",
         Value::Bool(true) => "true",
@@ -1184,12 +1485,12 @@ fn coerce(v: Value, ty: &TypeHint) -> Result<Value, Value> {
         Value::Float(_) => "float",
         Value::Str(_) => "string",
         Value::Array(_) => "array",
-        Value::Ref(_) => unreachable!("references are dereferenced before type checks"),
+        Value::Object(_) | Value::Ref(_) => unreachable!("handled above or dereferenced before type checks"),
     };
     let exact = ty.allows(actual)
         || matches!(v, Value::Bool(_)) && ty.allows("bool")
         || matches!(v, Value::Array(_)) && ty.allows("iterable")
-        || matches!(v, Value::Str(_) | Value::Array(_)) && ty.allows("callable");
+        || ty.allows("callable") && is_callable(&v);
     if exact {
         return Ok(v);
     }
@@ -1237,12 +1538,18 @@ fn coerce(v: Value, ty: &TypeHint) -> Result<Value, Value> {
     Err(v)
 }
 
-/// String conversion as done by echo, `.` and interpolation: arrays warn
-pub fn to_str(v: &Value) -> Vec<u8> {
-    if let Value::Array(_) = v {
-        diag::warning("Array to string conversion");
+/// String conversion as done by echo, `.` and interpolation: arrays warn, and
+/// objects without a string form are an Error
+pub fn to_str(v: &Value) -> EResult<Vec<u8>> {
+    match v {
+        Value::Array(_) => diag::warning("Array to string conversion"),
+        Value::Object(o) if o.throwable().is_none() => {
+            return Err(Fatal::error(format!("Object of class {} could not be converted to string", o.class.name)));
+        }
+        Value::Ref(r) => return value::with_deref(r, to_str),
+        _ => {}
     }
-    v.to_bytes()
+    Ok(v.to_bytes())
 }
 
 fn next_element_occupied() -> Fatal {
@@ -1260,8 +1567,8 @@ pub fn to_key(v: &Value, container: &str) -> EResult<Key> {
             diag::deprecated("Using null as an array offset is deprecated, use an empty string instead");
             Key::Str(Rc::from(&b""[..]))
         }
-        Value::Array(_) => {
-            return Err(Fatal::type_error(format!("Cannot access offset of type array on {container}")));
+        Value::Array(_) | Value::Object(_) => {
+            return Err(Fatal::type_error(format!("Cannot access offset of type {} on {container}", v.type_name())));
         }
         Value::Ref(r) => return value::with_deref(r, |v| to_key(v, container)),
     })
@@ -1297,6 +1604,7 @@ fn read_dim(base: &Value, index: &Value) -> EResult<Value> {
                 }
             })
         }
+        Value::Object(o) => Err(Fatal::error(format!("Cannot use object of type {} as array", o.class.name))),
         other => {
             diag::warning(format!("Trying to access array offset on {}", other.type_name()));
             Ok(Value::Null)
@@ -1347,7 +1655,7 @@ fn assign_string_offset(s: &mut Vec<u8>, index: &Value, v: &Value) -> EResult<()
     } else {
         off as usize
     };
-    let bytes = to_str(v);
+    let bytes = to_str(v)?;
     let Some(&b) = bytes.first() else {
         return Err(Fatal::error("Cannot assign an empty string to a string offset"));
     };
@@ -1391,6 +1699,7 @@ fn write_dim<'a>(cur: &'a mut Value, dim: Option<&Value>, read: bool) -> EResult
         }
         Value::Str(_) if dim.is_none() => Err(Fatal::error("[] operator not supported for strings")),
         Value::Str(_) => Err(Fatal::error("Cannot use string offset as an array")),
+        Value::Object(o) => Err(Fatal::error(format!("Cannot use object of type {} as array", o.class.name))),
         _ => Err(Fatal::error("Cannot use a scalar value as an array")),
     }
 }
@@ -1416,8 +1725,8 @@ fn binary(op: &str, l: &Value, r: &Value) -> EResult<Value> {
         "%" => value::modulo(l, r)?,
         "**" => value::pow(l, r)?,
         "." => {
-            let mut s = to_str(l);
-            s.extend_from_slice(&to_str(r));
+            let mut s = to_str(l)?;
+            s.extend_from_slice(&to_str(r)?);
             Value::str(s)
         }
         "<<" => value::shift(l, r, true)?,
@@ -1459,7 +1768,7 @@ fn increment(v: &Value) -> EResult<Value> {
                 if s.is_empty() { Value::str(b"1".to_vec()) } else { Value::str(str_increment(s)) }
             }
         },
-        Value::Array(_) => return Err(Fatal::type_error("Cannot increment array")),
+        Value::Array(_) | Value::Object(_) => return Err(Fatal::type_error(format!("Cannot increment {}", v.type_name()))),
         Value::Ref(r) => return value::with_deref(r, increment),
     })
 }
@@ -1487,7 +1796,7 @@ fn decrement(v: &Value) -> EResult<Value> {
                 v.clone()
             }
         },
-        Value::Array(_) => return Err(Fatal::type_error("Cannot decrement array")),
+        Value::Array(_) | Value::Object(_) => return Err(Fatal::type_error(format!("Cannot decrement {}", v.type_name()))),
         Value::Ref(r) => return value::with_deref(r, decrement),
     })
 }

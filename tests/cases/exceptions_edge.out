@@ -1,0 +1,45 @@
+object(Closure)#1 (4) {
+  ["name"]=>
+  string(74) "{closure:exceptions_edge.php:2}"
+  ["file"]=>
+  string(62) "exceptions_edge.php"
+  ["line"]=>
+  int(2)
+  ["static"]=>
+  array(1) {
+    ["f"]=>
+    *RECURSION*
+  }
+}
+Closure Object
+(
+    [name] => {closure:exceptions_edge.php:2}
+    [file] => exceptions_edge.php
+    [line] => 2
+    [static] => Array
+        (
+            [f] => Closure Object
+ *RECURSION*
+        )
+
+)
+
+object(Exception)#3 (7) {
+  ["message":protected]=>
+  string(8) "id reuse"
+  ["string":"Exception":private]=>
+  string(0) ""
+  ["code":protected]=>
+  int(0)
+  ["file":protected]=>
+  string(62) "exceptions_edge.php"
+  ["line":protected]=>
+  int(7)
+  ["trace":"Exception":private]=>
+  array(0) {
+  }
+  ["previous":"Exception":private]=>
+  NULL
+}
+string(1) "a"
+LogicException: from finally prev=try

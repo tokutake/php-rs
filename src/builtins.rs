@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use crate::array::{Key, PhpArray};
 use crate::diag;
+use crate::object::{self, Visibility};
 use crate::interp::{to_key, to_str, EResult, Fatal};
 use crate::value::{
     float_fits_int, float_to_int_implicit, format_float_repr, loose_cmp, parse_numeric, with_deref, Num, Numeric, Value,
@@ -23,7 +24,7 @@ const NAMES: &[&str] = &[
     "array_key_exists", "key_exists", "range", "sort", "rsort", "array_push", "array_pop",
     "usort", "uasort", "uksort", "print", "var_dump", "print_r", "func_get_args", "func_num_args",
     "function_exists", "is_callable", "call_user_func", "call_user_func_array", "array_map",
-    "array_filter",
+    "array_filter", "get_class", "is_object", "gettype",
 ];
 
 pub fn exists(lname: &str) -> bool {
@@ -78,7 +79,7 @@ fn null_param(fname: &str, n: usize, param: &str, ty: &str) {
 }
 
 /// Coerces an argument to an `int` parameter (non-strict mode rules)
-fn arg_int(fname: &str, n: usize, param: &str, v: &Value) -> EResult<i64> {
+pub fn arg_int(fname: &str, n: usize, param: &str, v: &Value) -> EResult<i64> {
     let float = |f: f64| {
         if f.is_finite() && float_fits_int(f) {
             Ok(float_to_int_implicit(f, v))
@@ -100,19 +101,22 @@ fn arg_int(fname: &str, n: usize, param: &str, v: &Value) -> EResult<i64> {
             (Num::Float(f), Numeric::Full) => float(f),
             _ => Err(param_type_error(fname, n, param, "int", v)),
         },
-        Value::Array(_) => Err(param_type_error(fname, n, param, "int", v)),
+        Value::Array(_) | Value::Object(_) => Err(param_type_error(fname, n, param, "int", v)),
         Value::Ref(r) => with_deref(r, |inner| arg_int(fname, n, param, inner)),
     }
 }
 
 /// Coerces an argument to a `string` parameter
-fn arg_str(fname: &str, n: usize, param: &str, v: &Value) -> EResult<Vec<u8>> {
+pub fn arg_str(fname: &str, n: usize, param: &str, v: &Value) -> EResult<Vec<u8>> {
     match v {
         Value::Null => {
             null_param(fname, n, param, "string");
             Ok(Vec::new())
         }
+        // Stringable objects convert; others are a type error
+        Value::Object(o) => object::to_string(o).ok_or_else(|| param_type_error(fname, n, param, "string", v)),
         Value::Array(_) => Err(param_type_error(fname, n, param, "string", v)),
+        Value::Ref(r) => with_deref(r, |inner| arg_str(fname, n, param, inner)),
         _ => Ok(v.to_bytes()),
     }
 }
@@ -124,7 +128,7 @@ fn arg_bool(fname: &str, n: usize, param: &str, v: &Value) -> EResult<bool> {
             null_param(fname, n, param, "bool");
             Ok(false)
         }
-        Value::Array(_) => Err(param_type_error(fname, n, param, "bool", v)),
+        Value::Array(_) | Value::Object(_) => Err(param_type_error(fname, n, param, "bool", v)),
         _ => Ok(v.to_bool()),
     }
 }
@@ -174,6 +178,33 @@ pub fn call(name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
                 ))),
             }
         }
+        "get_class" => {
+            let [v] = args::<1, 1>(name, vals)?;
+            match v.unwrap() {
+                Value::Object(o) => Ok(Value::str(o.class.name)),
+                other => Err(Fatal::type_error(format!(
+                    "get_class(): Argument #1 ($object) must be of type object, {} given",
+                    other.type_name()
+                ))),
+            }
+        }
+        "is_object" => {
+            let [v] = args::<1, 1>(name, vals)?;
+            Ok(Value::Bool(matches!(v.unwrap(), Value::Object(_))))
+        }
+        "gettype" => {
+            let [v] = args::<1, 1>(name, vals)?;
+            Ok(Value::str(match v.unwrap() {
+                Value::Null => "NULL",
+                Value::Bool(_) => "boolean",
+                Value::Int(_) => "integer",
+                Value::Float(_) => "double",
+                Value::Str(_) => "string",
+                Value::Array(_) => "array",
+                Value::Object(_) => "object",
+                Value::Ref(_) => unreachable!("arguments are dereferenced"),
+            }))
+        }
         "is_array" => {
             let [v] = args::<1, 1>(name, vals)?;
             Ok(Value::Bool(matches!(v.unwrap(), Value::Array(_))))
@@ -201,7 +232,7 @@ pub fn call(name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
                 if i > 0 {
                     out.extend_from_slice(&sep);
                 }
-                out.extend_from_slice(&to_str(v));
+                out.extend_from_slice(&to_str(v)?);
             }
             Ok(Value::str(out))
         }
@@ -460,23 +491,45 @@ pub fn var_dump(out: &mut Vec<u8>, v: &Value, level: usize) {
     var_dump_at(out, v, level, &mut Vec::new());
 }
 
-/// `visiting` holds the arrays being printed, to cut cycles made through references
-fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<*const PhpArray>) {
+/// Address of the array or object behind a value, to detect cycles
+fn container_addr(v: &Value) -> Option<usize> {
+    match v {
+        Value::Array(a) => Some(Rc::as_ptr(a) as usize),
+        Value::Object(o) => Some(Rc::as_ptr(o) as usize),
+        _ => None,
+    }
+}
+
+fn dump_key(out: &mut Vec<u8>, pad: &str, key: &[u8], vis: Option<&Visibility>) {
+    out.extend_from_slice(pad.as_bytes());
+    out.extend_from_slice(b"[\"");
+    out.extend_from_slice(key);
+    out.push(b'"');
+    match vis {
+        Some(Visibility::Protected) => out.extend_from_slice(b":protected"),
+        Some(Visibility::Private(class)) => out.extend_from_slice(format!(":\"{class}\":private").as_bytes()),
+        _ => {}
+    }
+    out.extend_from_slice(b"]=>\n");
+}
+
+/// `visiting` holds the containers being printed, to cut cycles made through
+/// references and objects
+fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<usize>) {
     let pad = " ".repeat(level - 1);
     if let Value::Ref(r) = v {
         return with_deref(r, |inner| {
-            if let Value::Array(arr) = inner
-                && visiting.contains(&Rc::as_ptr(arr)) {
-                    out.extend_from_slice(format!("{pad}*RECURSION*\n").as_bytes());
-                    return;
-                }
+            if container_addr(inner).is_some_and(|a| visiting.contains(&a)) {
+                out.extend_from_slice(format!("{pad}*RECURSION*\n").as_bytes());
+                return;
+            }
             // A reference only shows as such while something else shares it
             if Rc::strong_count(r) > 1 {
                 out.extend_from_slice(pad.as_bytes());
                 out.push(b'&');
                 var_dump_at(out, inner, 1, visiting);
                 // The nested lines of an array still need this level's indentation
-                if let Value::Array(_) = inner {
+                if matches!(inner, Value::Array(_) | Value::Object(_)) {
                     fix_nested_indent(out, level);
                 }
             } else {
@@ -484,7 +537,12 @@ fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<*c
             }
         });
     }
+    if container_addr(v).is_some_and(|a| visiting.contains(&a)) {
+        out.extend_from_slice(format!("{pad}*RECURSION*\n").as_bytes());
+        return;
+    }
     out.extend_from_slice(pad.as_bytes());
+    let key_pad = " ".repeat(level + 1);
     match v {
         Value::Null => out.extend_from_slice(b"NULL\n"),
         Value::Bool(b) => out.extend_from_slice(format!("bool({b})\n").as_bytes()),
@@ -497,18 +555,24 @@ fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<*c
         }
         Value::Array(arr) => {
             out.extend_from_slice(format!("array({}) {{\n", arr.len()).as_bytes());
-            visiting.push(Rc::as_ptr(arr));
-            let key_pad = " ".repeat(level + 1);
+            visiting.push(Rc::as_ptr(arr) as usize);
             for (k, v) in arr.iter() {
-                out.extend_from_slice(key_pad.as_bytes());
                 match k {
-                    Key::Int(i) => out.extend_from_slice(format!("[{i}]=>\n").as_bytes()),
-                    Key::Str(s) => {
-                        out.extend_from_slice(b"[\"");
-                        out.extend_from_slice(s);
-                        out.extend_from_slice(b"\"]=>\n");
-                    }
+                    Key::Int(i) => out.extend_from_slice(format!("{key_pad}[{i}]=>\n").as_bytes()),
+                    Key::Str(s) => dump_key(out, &key_pad, s, None),
                 }
+                var_dump_at(out, v, level + 2, visiting);
+            }
+            visiting.pop();
+            out.extend_from_slice(pad.as_bytes());
+            out.extend_from_slice(b"}\n");
+        }
+        Value::Object(o) => {
+            let props = object::debug_props(o);
+            out.extend_from_slice(format!("object({})#{} ({}) {{\n", o.class.name, o.id, props.len()).as_bytes());
+            visiting.push(Rc::as_ptr(o) as usize);
+            for (name, vis, v) in &props {
+                dump_key(out, &key_pad, name.as_bytes(), Some(vis));
                 var_dump_at(out, v, level + 2, visiting);
             }
             visiting.pop();
@@ -537,30 +601,53 @@ pub fn print_r(out: &mut Vec<u8>, v: &Value, indent: usize) {
     print_r_at(out, v, indent, &mut Vec::new());
 }
 
-fn print_r_at(out: &mut Vec<u8>, v: &Value, indent: usize, visiting: &mut Vec<*const PhpArray>) {
-    if let Value::Ref(r) = v {
-        return with_deref(r, |inner| print_r_at(out, inner, indent, visiting));
-    }
-    let Value::Array(arr) = v else {
-        out.extend_from_slice(&v.to_bytes());
-        return;
+fn print_r_at(out: &mut Vec<u8>, v: &Value, indent: usize, visiting: &mut Vec<usize>) {
+    let entries: Vec<(Vec<u8>, Value)> = match v {
+        Value::Ref(r) => return with_deref(r, |inner| print_r_at(out, inner, indent, visiting)),
+        Value::Array(arr) => {
+            out.extend_from_slice(b"Array\n");
+            arr.iter()
+                .map(|(k, v)| {
+                    let key = match k {
+                        Key::Int(i) => i.to_string().into_bytes(),
+                        Key::Str(s) => s.to_vec(),
+                    };
+                    (key, v.clone())
+                })
+                .collect()
+        }
+        Value::Object(o) => {
+            out.extend_from_slice(format!("{} Object\n", o.class.name).as_bytes());
+            object::debug_props(o)
+                .into_iter()
+                .map(|(name, vis, v)| {
+                    let key = match vis {
+                        Visibility::Public => name,
+                        Visibility::Protected => format!("{name}:protected"),
+                        Visibility::Private(class) => format!("{name}:{class}:private"),
+                    };
+                    (key.into_bytes(), v)
+                })
+                .collect()
+        }
+        _ => {
+            out.extend_from_slice(&v.to_bytes());
+            return;
+        }
     };
-    out.extend_from_slice(b"Array\n");
-    if visiting.contains(&Rc::as_ptr(arr)) {
+    let addr = container_addr(v).unwrap_or(0);
+    if visiting.contains(&addr) {
         out.extend_from_slice(b" *RECURSION*");
         return;
     }
-    visiting.push(Rc::as_ptr(arr));
+    visiting.push(addr);
     let pad = " ".repeat(indent);
     out.extend_from_slice(pad.as_bytes());
     out.extend_from_slice(b"(\n");
-    for (k, v) in arr.iter() {
+    for (k, v) in &entries {
         out.extend_from_slice(pad.as_bytes());
         out.extend_from_slice(b"    [");
-        match k {
-            Key::Int(i) => out.extend_from_slice(i.to_string().as_bytes()),
-            Key::Str(s) => out.extend_from_slice(s),
-        }
+        out.extend_from_slice(k);
         out.extend_from_slice(b"] => ");
         print_r_at(out, v, indent + 8, visiting);
         out.push(b'\n');
