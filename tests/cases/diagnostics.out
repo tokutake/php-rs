@@ -1,0 +1,50 @@
+
+Warning: A non-numeric value encountered in diagnostics.php on line 2
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in diagnostics.php on line 5
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in diagnostics.php on line 6
+
+Warning: The float 1.0E+19 is not representable as an int, cast occurred in diagnostics.php on line 7
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in diagnostics.php on line 9
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in diagnostics.php on line 9
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in diagnostics.php on line 10
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in diagnostics.php on line 11
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in diagnostics.php on line 12
+
+Warning: Undefined array key "x" in diagnostics.php on line 13
+
+Warning: Undefined variable $u in diagnostics.php on line 14
+
+Warning: Undefined array key 9 in diagnostics.php on line 15
+
+Warning: Trying to access array offset on null in diagnostics.php on line 15
+
+Warning: Trying to access array offset on null in diagnostics.php on line 16
+
+Warning: Uninitialized string offset 10 in diagnostics.php on line 17
+
+Warning: Trying to access array offset on int in diagnostics.php on line 18
+
+Warning: Array to string conversion in diagnostics.php on line 19
+Array
+
+Warning: foreach() argument must be of type array|object, int given in diagnostics.php on line 20
+
+Warning: Illegal string offset "1x" in diagnostics.php on line 21
+
+Warning: String offset cast occurred in diagnostics.php on line 22
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in diagnostics.php on line 23
+
+Deprecated: Implicit conversion from float-string "1.5" to int loses precision in diagnostics.php on line 24
+
+Fatal error: Uncaught TypeError: Unsupported operand types: string * int in diagnostics.php:25
+Stack trace:
+#0 {main}
+  thrown in diagnostics.php on line 25

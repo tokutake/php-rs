@@ -1,0 +1,9 @@
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in function_errors1.php on line 2
+11
+
+Fatal error: Uncaught ArgumentCountError: Too few arguments to function add(), 0 passed in function_errors1.php on line 4 and at least 1 expected in function_errors1.php:2
+Stack trace:
+#0 function_errors1.php(4): add()
+#1 {main}
+  thrown in function_errors1.php on line 2

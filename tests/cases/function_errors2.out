@@ -1,0 +1,7 @@
+hi x
+
+Fatal error: Uncaught TypeError: greet(): Argument #1 ($name) must be of type string, array given, called in function_errors2.php on line 4 and defined in function_errors2.php:2
+Stack trace:
+#0 function_errors2.php(4): greet(Array)
+#1 {main}
+  thrown in function_errors2.php on line 2

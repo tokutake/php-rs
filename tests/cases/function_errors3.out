@@ -1,0 +1,7 @@
+
+Fatal error: Uncaught TypeError: badret(): Return value must be of type int, string returned in function_errors3.php:2
+Stack trace:
+#0 function_errors3.php(3): badret()
+#1 function_errors3.php(4): wrap()
+#2 {main}
+  thrown in function_errors3.php on line 2

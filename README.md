@@ -1,0 +1,42 @@
+# php-rs
+
+A PHP interpreter written in Rust, aiming for compatibility with PHP 8 while
+removing the memory-safety bug classes of the C implementation.
+
+## Goals
+
+- **Safety**: no undefined behavior on integer edge cases (`PHP_INT_MIN % -1`,
+  oversized shifts), no crashes on pathological input (deep recursion, deep
+  nesting, reference cycles), refused allocations instead of runaway memory use.
+- **Compatibility**: output, warnings and error messages match PHP 8.5, checked
+  against the reference implementation.
+
+## Status
+
+Early stage. Implemented so far:
+
+- Scalars, strings (byte strings), arrays (ordered hash map, copy-on-write)
+- Operators with PHP 8 type juggling and comparison rules
+- Control flow: `if`, `while`, `do`, `for`, `foreach` (incl. by reference), `break`/`continue N`
+- User functions: type declarations, defaults, variadics, by-reference parameters,
+  `static`, `global`, references
+- Warnings, deprecations and uncaught errors in PHP's format, with line numbers and stack traces
+- A small set of built-in functions (`count`, `implode`, `explode`, `usort`, `array_map`, ...)
+
+Not yet: exceptions (`try`/`catch`), closures, classes, most of the standard library.
+
+## Usage
+
+```sh
+cargo run --release -- script.php
+```
+
+## Tests
+
+```sh
+cargo test
+```
+
+- `tests/cases/*.php` are run and compared with `*.out`, recorded from the
+  reference PHP. Re-record them with `tests/regen.sh` (requires `php`).
+- `tests/safety.rs` checks that hostile inputs end in a regular PHP error.

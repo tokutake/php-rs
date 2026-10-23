@@ -1,0 +1,13 @@
+023
+n=1 n=2 n=3 
+10 9 8 
+00 01 10 11 
+B
+pass elvis coalesce
+1 2 Fizz 4 Buzz Fizz 7 8 Fizz Buzz 11 Fizz 13 14 FizzBuzz 
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)

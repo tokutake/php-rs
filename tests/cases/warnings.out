@@ -1,0 +1,28 @@
+
+Warning: The float 1.0E+19 is not representable as an int, cast occurred in warnings.php on line 2
+
+Warning: The float -1.0E+19 is not representable as an int, cast occurred in warnings.php on line 2
+
+Warning: The float NAN is not representable as an int, cast occurred in warnings.php on line 2
+
+Warning: The float INF is not representable as an int, cast occurred in warnings.php on line 2
+int(-8446744073709551616)
+int(8446744073709551616)
+int(0)
+int(0)
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in warnings.php on line 3
+string(1) "b"
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in warnings.php on line 4
+string(2) "Ba"
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in warnings.php on line 5
+string(3) "aaa"
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in warnings.php on line 6
+string(2) "b0"
+int(10)
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in warnings.php on line 8
+NULL

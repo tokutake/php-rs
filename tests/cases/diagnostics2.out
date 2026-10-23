@@ -1,0 +1,47 @@
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in diagnostics2.php on line 2
+string(1) "1"
+
+Deprecated: Decrement on empty string is deprecated as non-numeric in diagnostics2.php on line 3
+int(-1)
+
+Deprecated: Decrement on non-numeric string has no effect and is deprecated in diagnostics2.php on line 4
+string(3) "abc"
+
+Warning: Increment on type bool has no effect, this will change in the next major version of PHP in diagnostics2.php on line 5
+
+Warning: Decrement on type bool has no effect, this will change in the next major version of PHP in diagnostics2.php on line 5
+bool(true)
+int(9223372036854775807)
+int(9223372036854775807)
+int(12)
+int(1900)
+
+Warning: The float 1.0E+19 is not representable as an int, cast occurred in diagnostics2.php on line 7
+int(-6)
+
+Deprecated: Implicit conversion from float 1.7 to int loses precision in diagnostics2.php on line 8
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+
+Warning: String offset cast occurred in diagnostics2.php on line 9
+string(1) "b"
+
+Warning: Undefined array key 1 in diagnostics2.php on line 10
+NULL
+
+Warning: String offset cast occurred in diagnostics2.php on line 11
+string(2) "xy"
+
+Warning: Array to string conversion in diagnostics2.php on line 12
+aArray
+
+Warning: Array to string conversion in diagnostics2.php on line 13
+string(5) "Array"
+
+Fatal error: Uncaught TypeError: Unsupported operand types: string + int in diagnostics2.php:14
+Stack trace:
+#0 {main}
+  thrown in diagnostics2.php on line 14
