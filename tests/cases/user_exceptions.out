@@ -1,0 +1,35 @@
+string(8) "NotFound"
+string(13) "[app] item 99"
+int(100)
+string(2) "db"
+bool(true)
+int(15)
+NotFound: [app] item 99 (db)
+array(1) {
+  ["name"]=>
+  string(8) "required"
+}
+string(7) "invalid"
+NotFound -> [app] wrapped
+object(AppException)#2 (8) {
+  ["message":protected]=>
+  string(10) "[app] dump"
+  ["string":"Exception":private]=>
+  string(0) ""
+  ["code":protected]=>
+  int(100)
+  ["file":protected]=>
+  string(62) "user_exceptions.php"
+  ["line":protected]=>
+  int(26)
+  ["trace":"Exception":private]=>
+  array(0) {
+  }
+  ["previous":"Exception":private]=>
+  NULL
+  ["context":"AppException":private]=>
+  string(4) "none"
+}
+
+Fatal error: Uncaught NotFound: [app] uncaught (end)
+  thrown in user_exceptions.php on line 28

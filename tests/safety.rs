@@ -24,7 +24,12 @@ fn assert_php_error(name: &str, src: &str, expected: &str) {
 
 #[test]
 fn infinite_recursion_is_an_error() {
-    assert_php_error("recursion", "<?php function r($n) { return r($n + 1); } r(0);", "Maximum call stack size reached");
+    assert_php_error("recursion", "<?php function r($n) { return r($n + 1); } r(0);", "Maximum call stack size of");
+    assert_php_error(
+        "tostring",
+        "<?php class S { function __toString(): string { return (string)$this; } } echo new S;",
+        "Maximum call stack size of",
+    );
 }
 
 #[test]
@@ -69,4 +74,25 @@ fn inconsistent_comparisons_do_not_panic_sort() {
     "#;
     let (code, out) = run("sort", src);
     assert_eq!((code, out.as_str()), (0, "3000"));
+}
+
+#[test]
+fn self_referencing_objects_are_handled() {
+    // Freeing a million-node linked list must not overflow the stack
+    let src = r#"<?php
+        class Node { public $next; }
+        $head = null;
+        for ($i = 0; $i < 1000000; $i++) { $n = new Node; $n->next = $head; $head = $n; }
+        $head = $n = null;
+        echo "freed";
+    "#;
+    assert_eq!(run("list", src), (0, "freed".to_string()));
+    assert_php_error(
+        "cmp",
+        "<?php class A { public $me; } $x = new A; $x->me = $x; $y = new A; $y->me = $y; var_dump($x == $y);",
+        "Nesting level too deep",
+    );
+    let (code, out) = run("dump", "<?php class A { public $me; } $x = new A; $x->me = $x; print_r($x);");
+    assert_eq!(code, 0);
+    assert!(out.contains("*RECURSION*"), "{out}");
 }

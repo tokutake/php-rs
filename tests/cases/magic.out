@@ -1,0 +1,35 @@
+set a
+get a
+isset a
+isset b
+isset a
+get a
+isset a
+get a
+int(1)
+bool(true)
+bool(false)
+bool(false)
+int(1)
+string(4) "real"
+get a
+set a
+get a
+int(6)
+unset a
+isset a
+bool(false)
+string(8) "foo(1,2)"
+string(13) "static bar(1)"
+int(42)
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(4)
+}
+bool(true)
+computing abc
+string(3) "ABC"
+string(17) "via __get: hidden"
+string(16) "via __get: other"

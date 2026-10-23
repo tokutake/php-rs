@@ -2,7 +2,10 @@
 
 use std::rc::Rc;
 
-use crate::ast::{Arg, ArrayItem, Catch, Expr, ExprKind, FuncDecl, FuncKind, Param, Stmt, TypeHint};
+use crate::ast::{
+    Arg, ArrayItem, Catch, ClassDecl, ClassRef, Expr, ExprKind, FuncDecl, FuncKind, Member, Name, Param, Stmt, TypeHint,
+};
+use crate::object::Visibility;
 use crate::lexer::{StrPart, Tok, Token};
 
 #[derive(Debug)]
@@ -103,6 +106,8 @@ fn cast_op(name: &str) -> Option<&'static str> {
         "float" | "double" => "(float)",
         "string" => "(string)",
         "bool" | "boolean" => "(bool)",
+        "array" => "(array)",
+        "object" => "(object)",
         _ => return None,
     })
 }
@@ -270,6 +275,11 @@ impl Parser {
                 "for" => self.for_statement(),
                 "foreach" => self.foreach_statement(),
                 "try" => self.try_statement(),
+                "class" | "interface" | "abstract" | "final" | "readonly"
+                    if matches!(self.peek_at(1), Tok::Ident(_)) =>
+                {
+                    self.class_decl()
+                }
                 "function" if matches!(self.peek_at(1), Tok::Ident(_)) || matches!(self.peek_at(1), Tok::Op("&")) => {
                     self.function_decl()
                 }
@@ -527,6 +537,20 @@ impl Parser {
         self.expect(Tok::Op("("))?;
         let mut params: Vec<Param> = Vec::new();
         while !self.eat(&Tok::Op(")")) {
+            // Constructor promotion modifiers
+            let mut vis = None;
+            let mut readonly = false;
+            while let Tok::Ident(kw) = self.peek() {
+                match kw.to_ascii_lowercase().as_str() {
+                    "public" => vis = Some(Visibility::Public),
+                    "protected" => vis = Some(Visibility::Protected),
+                    "private" => vis = Some(Visibility::Private),
+                    "readonly" => readonly = true,
+                    _ => break,
+                }
+                self.next();
+            }
+            let promote = (vis.is_some() || readonly).then(|| (vis.unwrap_or(Visibility::Public), readonly));
             let ty = if matches!(self.peek(), Tok::Variable(_) | Tok::Op("&" | "...")) { None } else { Some(self.type_hint()?) };
             let by_ref = self.eat(&Tok::Op("&"));
             let variadic = self.eat(&Tok::Op("..."));
@@ -541,7 +565,7 @@ impl Parser {
             if variadic && default.is_some() {
                 return Err(ParseError { msg: "Variadic parameter cannot have a default value".into(), line: self.line() });
             }
-            params.push(Param { name: pname, ty, default, by_ref, variadic });
+            params.push(Param { promote, name: pname, ty, default, by_ref, variadic });
             if variadic && !self.at(&Tok::Op(")")) && !(self.at(&Tok::Op(",")) && self.peek_at(1) == &Tok::Op(")")) {
                 return Err(ParseError { msg: "Only the last parameter can be variadic".into(), line: self.line() });
             }
@@ -551,6 +575,187 @@ impl Parser {
             }
         }
         Ok(params)
+    }
+
+    fn class_decl(&mut self) -> PResult<Stmt> {
+        let line = self.line();
+        let (mut is_abstract, mut is_final, mut is_readonly) = (false, false, false);
+        loop {
+            if self.eat_kw("abstract") {
+                is_abstract = true;
+            } else if self.eat_kw("final") {
+                is_final = true;
+            } else if self.eat_kw("readonly") {
+                is_readonly = true;
+            } else {
+                break;
+            }
+        }
+        let is_interface = self.eat_kw("interface");
+        if !is_interface && !self.eat_kw("class") {
+            return self.unexpected();
+        }
+        let Tok::Ident(name) = self.next() else {
+            self.pos -= 1;
+            return self.unexpected();
+        };
+        let mut parent = None;
+        let mut interfaces = Vec::new();
+        if self.eat_kw("extends") {
+            if is_interface {
+                interfaces = self.name_list()?;
+            } else {
+                parent = Some(self.class_name()?);
+            }
+        }
+        if !is_interface && self.eat_kw("implements") {
+            interfaces = self.name_list()?;
+        }
+        self.expect(Tok::Op("{"))?;
+        let mut members = Vec::new();
+        while !self.eat(&Tok::Op("}")) {
+            if self.at(&Tok::Eof) {
+                return self.unexpected();
+            }
+            self.class_member(&mut members, is_interface)?;
+        }
+        let decl = ClassDecl { name, is_interface, is_abstract, is_final, is_readonly, parent, interfaces, members, line };
+        Ok(Stmt::Class(Rc::new(decl)))
+    }
+
+    fn class_name(&mut self) -> PResult<String> {
+        match self.next() {
+            Tok::Ident(n) => Ok(n.trim_start_matches('\\').to_string()),
+            _ => {
+                self.pos -= 1;
+                self.unexpected()
+            }
+        }
+    }
+
+    fn name_list(&mut self) -> PResult<Vec<String>> {
+        let mut names = vec![self.class_name()?];
+        while self.eat(&Tok::Op(",")) {
+            names.push(self.class_name()?);
+        }
+        Ok(names)
+    }
+
+    fn class_member(&mut self, members: &mut Vec<Member>, in_interface: bool) -> PResult<()> {
+        let line = self.line();
+        let (mut vis, mut is_static, mut is_abstract, mut is_final, mut readonly) = (None, false, false, false, false);
+        while let Tok::Ident(kw) = self.peek() {
+            match kw.to_ascii_lowercase().as_str() {
+                "public" | "var" => vis = Some(Visibility::Public),
+                "protected" => vis = Some(Visibility::Protected),
+                "private" => vis = Some(Visibility::Private),
+                "static" => is_static = true,
+                "abstract" => is_abstract = true,
+                "final" => is_final = true,
+                "readonly" => readonly = true,
+                _ => break,
+            }
+            self.next();
+        }
+        let vis = vis.unwrap_or(Visibility::Public);
+        if self.eat_kw("use") {
+            return Err(ParseError { msg: "Traits are not supported yet".into(), line });
+        }
+        if self.eat_kw("const") {
+            // An optional type before the name (PHP 8.3)
+            if matches!((self.peek(), self.peek_at(1)), (Tok::Ident(_), Tok::Ident(_))) {
+                self.type_hint()?;
+            }
+            loop {
+                let name = self.class_name()?;
+                self.expect(Tok::Op("="))?;
+                members.push(Member::Const { name, value: self.expr()?, vis });
+                if !self.eat(&Tok::Op(",")) {
+                    break;
+                }
+            }
+            return self.end_statement();
+        }
+        if self.eat_kw("function") {
+            self.eat(&Tok::Op("&"));
+            let name = self.class_name()?;
+            let params = self.params()?;
+            let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
+            let is_abstract = is_abstract || in_interface;
+            let body = if self.eat(&Tok::Semicolon) {
+                if !is_abstract {
+                    return Err(ParseError { msg: format!("Non-abstract method {name}() must contain body"), line });
+                }
+                Vec::new()
+            } else {
+                if is_abstract {
+                    return Err(ParseError { msg: format!("Abstract function {name}() cannot contain body"), line });
+                }
+                self.brace_body()?
+            };
+            if params.iter().any(|p| p.promote.is_some()) && !name.eq_ignore_ascii_case("__construct") {
+                return Err(ParseError { msg: "Cannot declare promoted property outside a constructor".into(), line });
+            }
+            let func = Rc::new(FuncDecl { kind: FuncKind::Method, name, uses: Vec::new(), params, ret, body, line });
+            members.push(Member::Method { func, vis, is_static, is_abstract, is_final });
+            return Ok(());
+        }
+        if in_interface {
+            return Err(ParseError { msg: "Interfaces may not include properties".into(), line });
+        }
+        let ty = if matches!(self.peek(), Tok::Variable(_)) { None } else { Some(self.type_hint()?) };
+        loop {
+            let Tok::Variable(name) = self.next() else {
+                self.pos -= 1;
+                return self.unexpected();
+            };
+            let default = if self.eat(&Tok::Op("=")) { Some(self.expr()?) } else { None };
+            members.push(Member::Prop { name, ty: ty.clone(), default, vis, is_static, readonly });
+            if !self.eat(&Tok::Op(",")) {
+                break;
+            }
+        }
+        self.end_statement()
+    }
+
+    /// After `X::`: a static property, static call, constant or `::class`
+    fn static_member(&mut self, class: ClassRef) -> PResult<ExprKind> {
+        Ok(match self.next() {
+            Tok::Variable(name) => ExprKind::StaticProp { class, name },
+            Tok::Ident(name) if self.eat(&Tok::Op("(")) => ExprKind::StaticCall { class, name, args: self.call_args()? },
+            Tok::Ident(name) => ExprKind::ClassConst { class, name },
+            _ => {
+                self.pos -= 1;
+                return self.unexpected();
+            }
+        })
+    }
+
+    /// The class after `new` or `instanceof`
+    fn class_ref(&mut self) -> PResult<ClassRef> {
+        let line = self.line();
+        match self.next() {
+            Tok::Ident(name) => Ok(ClassRef::from_name(&name)),
+            Tok::Variable(v) => {
+                let mut e = Expr::new(ExprKind::Var(v), line);
+                // `new $this->cls` uses a property as the class name
+                while self.at(&Tok::Op("->")) {
+                    self.next();
+                    let name = self.class_name()?;
+                    e = Expr::new(ExprKind::Prop { object: Box::new(e), name: Name::Lit(name), nullsafe: false }, line);
+                }
+                Ok(ClassRef::Dynamic(Box::new(e)))
+            }
+            Tok::Op("(") => {
+                let e = self.expr()?;
+                self.expect(Tok::Op(")"))?;
+                Ok(ClassRef::Dynamic(Box::new(e)))
+            }
+            _ => {
+                self.pos -= 1;
+                self.unexpected()
+            }
+        }
     }
 
     fn try_statement(&mut self) -> PResult<Stmt> {
@@ -739,12 +944,9 @@ impl Parser {
                     break;
                 }
                 self.next();
-                let Tok::Ident(class) = self.next() else {
-                    self.pos -= 1;
-                    return Err(ParseError { msg: "instanceof needs a class name".into(), line: self.line() });
-                };
+                let class = self.class_ref()?;
                 let line = lhs.line;
-                lhs = Expr::new(ExprKind::InstanceOf(Box::new(lhs), class.trim_start_matches('\\').to_string()), line);
+                lhs = Expr::new(ExprKind::InstanceOf(Box::new(lhs), class), line);
                 continue;
             }
 
@@ -779,9 +981,18 @@ impl Parser {
                 Tok::Op(op @ ("->" | "?->")) => {
                     let nullsafe = *op == "?->";
                     self.next();
-                    let Tok::Ident(name) = self.next() else {
-                        self.pos -= 1;
-                        return self.unexpected();
+                    let name = match self.next() {
+                        Tok::Ident(n) => Name::Lit(n),
+                        Tok::Variable(v) => Name::Dyn(Box::new(Expr::new(ExprKind::Var(v), self.line()))),
+                        Tok::Op("{") => {
+                            let e = self.expr()?;
+                            self.expect(Tok::Op("}"))?;
+                            Name::Dyn(Box::new(e))
+                        }
+                        _ => {
+                            self.pos -= 1;
+                            return self.unexpected();
+                        }
                     };
                     if self.eat(&Tok::Op("(")) {
                         let args = self.call_args()?;
@@ -793,6 +1004,10 @@ impl Parser {
                 Tok::Op("(") => {
                     self.next();
                     ExprKind::CallValue(Box::new(e), self.call_args()?)
+                }
+                Tok::Op("::") => {
+                    self.next();
+                    self.static_member(ClassRef::Dynamic(Box::new(e)))?
                 }
                 _ => return Ok(e),
             };
@@ -830,6 +1045,10 @@ impl Parser {
                     return self.unexpected();
                 }
                 ExprKind::IncDec { target: Box::new(target), inc: op == "++", prefix: true }
+            }
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("clone") => {
+                self.next();
+                ExprKind::Clone(Box::new(self.expr_bp(P_UNARY)?))
             }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("throw") => {
                 self.next();
@@ -880,12 +1099,16 @@ impl Parser {
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("function") => self.closure(line)?,
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("fn") => self.arrow_fn(line)?,
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("new") => {
-                let Tok::Ident(class) = self.next() else {
-                    self.pos -= 1;
-                    return self.unexpected();
-                };
+                if self.at_kw("class") {
+                    return Err(ParseError { msg: "Anonymous classes are not supported yet".into(), line });
+                }
+                let class = self.class_ref()?;
                 let args = if self.eat(&Tok::Op("(")) { self.call_args()? } else { Vec::new() };
-                ExprKind::New(class.trim_start_matches('\\').to_string(), args)
+                ExprKind::New(class, args)
+            }
+            Tok::Ident(name) if self.at(&Tok::Op("::")) => {
+                self.next();
+                self.static_member(ClassRef::from_name(&name))?
             }
             Tok::Ident(name) => {
                 let lname = name.to_ascii_lowercase();
@@ -963,8 +1186,20 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
             free_vars(b, out);
         }
         ExprKind::IncDec { target, .. } => free_vars(target, out),
-        ExprKind::Unary(_, x) | ExprKind::Empty(x) | ExprKind::Throw(x) | ExprKind::InstanceOf(x, _) => free_vars(x, out),
-        ExprKind::Prop { object, .. } => free_vars(object, out),
+        ExprKind::Unary(_, x) | ExprKind::Empty(x) | ExprKind::Throw(x) | ExprKind::Clone(x) => free_vars(x, out),
+        ExprKind::InstanceOf(x, class) => {
+            free_vars(x, out);
+            class_vars(class, out);
+        }
+        ExprKind::StaticProp { class, .. } | ExprKind::ClassConst { class, .. } => class_vars(class, out),
+        ExprKind::StaticCall { class, args: a, .. } => {
+            class_vars(class, out);
+            args(a, out);
+        }
+        ExprKind::Prop { object, name, .. } => {
+            free_vars(object, out);
+            name_vars(name, out);
+        }
         ExprKind::Ternary(c, t, f) => {
             free_vars(c, out);
             if let Some(t) = t {
@@ -972,17 +1207,34 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
             }
             free_vars(f, out);
         }
-        ExprKind::Call(_, a) | ExprKind::New(_, a) => args(a, out),
+        ExprKind::Call(_, a) => args(a, out),
+        ExprKind::New(class, a) => {
+            class_vars(class, out);
+            args(a, out);
+        }
         ExprKind::CallValue(f, a) => {
             free_vars(f, out);
             args(a, out);
         }
-        ExprKind::MethodCall { object, args: a, .. } => {
+        ExprKind::MethodCall { object, name, args: a, .. } => {
             free_vars(object, out);
+            name_vars(name, out);
             args(a, out);
         }
         ExprKind::Isset(list) => list.iter().for_each(|x| free_vars(x, out)),
         // A nested closure only needs what it captures itself
         ExprKind::Closure(f) => f.uses.iter().for_each(|(name, _)| add(name, out)),
+    }
+}
+
+fn name_vars(name: &Name, out: &mut Vec<String>) {
+    if let Name::Dyn(e) = name {
+        free_vars(e, out);
+    }
+}
+
+fn class_vars(class: &ClassRef, out: &mut Vec<String>) {
+    if let ClassRef::Dynamic(e) = class {
+        free_vars(e, out);
     }
 }

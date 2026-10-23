@@ -24,11 +24,15 @@ Early stage. Implemented so far:
   built-in Throwable hierarchy, chained previous exceptions
 - Closures and arrow functions (`use`, by-reference captures, auto-capture),
   callables, `?->`, `instanceof`
+- Classes and interfaces: inheritance, abstract/final, visibility, typed and
+  readonly properties, constructor promotion, static members, constants,
+  `self`/`parent`/`static` (late static binding), magic methods (`__get`,
+  `__set`, `__call`, `__toString`, `__invoke`, ...), `clone`, user exceptions
 - Warnings, deprecations and uncaught errors in PHP's format, with line numbers and stack traces
 - A small set of built-in functions (`count`, `implode`, `explode`, `usort`, `array_map`, ...)
 
-Not yet: user-defined classes, interfaces and traits, namespaces, generators,
-`match`, most of the standard library.
+Not yet: traits, enums, `__destruct`, namespaces, generators, `match`, most of
+the standard library. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage
 

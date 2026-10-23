@@ -44,18 +44,27 @@ const MAX_COMPARE_DEPTH: u32 = 256;
 
 thread_local! {
     static COMPARE_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static TOO_DEEP: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Runs a nested comparison step, or returns None when nesting is too deep
+/// Runs a nested comparison step, or returns None when nesting is too deep.
+/// That case is remembered so the caller can raise PHP's error for it
 fn nested<T>(f: impl FnOnce() -> T) -> Option<T> {
     let depth = COMPARE_DEPTH.with(Cell::get);
     if depth >= MAX_COMPARE_DEPTH {
+        TOO_DEEP.with(|t| t.set(true));
         return None;
     }
     COMPARE_DEPTH.with(|d| d.set(depth + 1));
     let out = f();
     COMPARE_DEPTH.with(|d| d.set(depth));
     Some(out)
+}
+
+/// Whether a comparison since the last call gave up on too deep a nesting
+/// (a structure containing itself), which PHP reports as an Error
+pub fn take_too_deep() -> bool {
+    TOO_DEEP.with(|t| t.replace(false))
 }
 
 /// `==` on Value is PHP's `===`
@@ -333,7 +342,8 @@ impl Value {
             Value::Str(s) => s.to_vec(),
             Value::Array(_) => b"Array".to_vec(),
             // Only Throwables are stringable so far; callers check that via interp::to_str
-            Value::Object(o) => object::to_string(o).unwrap_or_default(),
+            Value::Object(o) if o.class.is_throwable => object::throwable_to_string(o),
+            Value::Object(_) => Vec::new(),
             Value::Ref(r) => with_deref(r, Value::to_bytes),
         }
     }
@@ -423,7 +433,12 @@ pub fn loose_cmp(a: &Value, b: &Value) -> Option<Ordering> {
         (Str(_), Int(_) | Float(_)) => loose_cmp(b, a).map(Ordering::reverse),
         (Array(x), Array(y)) => nested(|| cmp_arrays(x, y)).flatten(),
         (Object(x), Object(y)) if Rc::ptr_eq(x, y) => Some(Ordering::Equal),
-        // Comparing distinct objects needs property comparison, which arrives with classes
+        // Objects of the same class compare by their properties; anything else is uncomparable
+        (Object(x), Object(y)) if Rc::ptr_eq(&x.class, &y.class) && x.closure().is_none() => {
+            let px: PhpArray = x.ordered_props().into_iter().collect();
+            let py: PhpArray = y.ordered_props().into_iter().collect();
+            nested(|| cmp_arrays(&px, &py)).flatten()
+        }
         (Object(_), _) | (_, Object(_)) => None,
         (Array(_), _) => Some(Ordering::Greater),
         (_, Array(_)) => Some(Ordering::Less),

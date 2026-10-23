@@ -1,0 +1,4 @@
+
+Fatal error: Access level to C::f() must be public (as in class P) in class_fatal4.php on line 3
+Stack trace:
+#0 {main}

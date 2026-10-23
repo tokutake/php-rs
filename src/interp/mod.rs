@@ -1,23 +1,26 @@
 //! Tree-walking interpreter that executes the AST directly.
+//! Class and object handling lives in the `oop` submodule.
+
+mod oop;
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::rc::Rc;
 
 use crate::array::{Key, PhpArray};
-use crate::ast::{Arg, Expr, ExprKind, FuncDecl, FuncKind, Stmt, TypeHint};
-use crate::builtins;
+use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, Name, Stmt, TypeHint};
+use crate::builtins::{self, Runtime};
 use crate::diag;
-use crate::object::{self, ClassEntry, Closure, Object, ObjectKind, ThrowableData, TraceFrame};
+use crate::object::{self, ClassEntry, Closure, Internal, Method, Object, TraceFrame};
 use crate::value::{self, float_fits_int, float_to_int_implicit, loose_cmp, parse_numeric, ArithError, Num, Numeric, Value};
 
 /// PHP code recursing deeper than this gets an Error instead of overflowing the
 /// native stack. The interpreter thread is given a stack large enough for it
 pub const MAX_CALL_DEPTH: usize = 10_000;
 
-/// An uncaught PHP exception (Error hierarchy)
+/// An uncaught PHP exception (Error hierarchy), or a fatal error that cannot be caught
 #[derive(Debug)]
 pub struct Fatal {
     pub class: &'static str,
@@ -27,15 +30,22 @@ pub struct Fatal {
     pub trace: Option<Vec<TraceFrame>>,
     /// A user-thrown exception object, which carries its own message, line and trace
     pub object: Option<Rc<Object>>,
+    /// A compile-time style error ("Fatal error: Cannot redeclare ..."), not an exception
+    pub uncatchable: bool,
 }
 
 impl Fatal {
     pub fn new(class: &'static str, msg: impl Into<String>) -> Self {
-        Fatal { class, msg: msg.into(), line: None, trace: None, object: None }
+        Fatal { class, msg: msg.into(), line: None, trace: None, object: None, uncatchable: false }
     }
 
     fn thrown(object: Rc<Object>) -> Self {
-        Fatal { class: object.class.name, msg: String::new(), line: None, trace: None, object: Some(object) }
+        Fatal { object: Some(object), ..Fatal::new("", "") }
+    }
+
+    /// A fatal error that try/catch does not see
+    pub fn compile(msg: impl Into<String>) -> Self {
+        Fatal { uncatchable: true, ..Fatal::new("", msg) }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
@@ -70,10 +80,31 @@ enum Flow {
     Return(Value),
 }
 
-/// A write target: variable name (borrowed from the AST) plus evaluated offsets (None for `[]`)
-type Path<'a> = (&'a str, Vec<Option<Value>>);
-
 type RefCellValue = Rc<RefCell<Value>>;
+
+/// Where a write lands before any array offsets are applied
+#[derive(Clone)]
+enum Base<'e> {
+    /// A variable of the current frame, named in the AST
+    Var(&'e str),
+    /// `$obj->name`
+    Prop(Rc<Object>, String),
+    /// A static property's storage, with its declared type and `Class::$name` for messages
+    Cell(RefCellValue, Option<(TypeHint, String)>),
+}
+
+/// A write target: a base plus evaluated offsets (None for `[]`)
+#[derive(Clone)]
+struct Path<'e> {
+    base: Base<'e>,
+    dims: Vec<Option<Value>>,
+}
+
+impl<'e> Path<'e> {
+    fn var(name: &'e str) -> Self {
+        Path { base: Base::Var(name), dims: Vec::new() }
+    }
+}
 
 /// An argument after evaluation: by-reference parameters receive the reference itself
 enum ArgVal {
@@ -81,15 +112,93 @@ enum ArgVal {
     Ref(RefCellValue),
 }
 
-struct Frame {
-    vars: HashMap<String, Value>,
-    /// None for the main script
-    func: Option<Rc<FuncDecl>>,
-    /// The function as named in traces and errors (`{closure:FILE:LINE}` for closures)
+/// What a call runs as: its name in messages and traces, and its class context
+#[derive(Clone, Default)]
+struct CallCtx {
+    /// `foo`, `A::foo` or `{closure:FILE:LINE}`, as used in error messages
     name: String,
-    call_line: u32,
+    /// The function part of a trace line
+    trace_fn: String,
+    /// Class and `->`/`::` of a method frame
+    trace_class: Option<(String, &'static str)>,
+    this: Option<Rc<Object>>,
+    /// The class whose private and protected members are visible (`self`)
+    scope: Option<Rc<ClassEntry>>,
+    /// The late static binding class (`static`)
+    static_class: Option<Rc<ClassEntry>>,
+}
+
+/// A frame's variables. Insertion-ordered, because dropping a frame destroys its
+/// variables in that order (like php-src's compiled variables), and the order in
+/// which objects die decides which handle numbers get reused
+#[derive(Default)]
+struct Vars {
+    index: HashMap<String, usize>,
+    slots: Vec<Option<(String, Value)>>,
+}
+
+impl Vars {
+    fn get(&self, name: &str) -> Option<&Value> {
+        let &i = self.index.get(name)?;
+        self.slots[i].as_ref().map(|(_, v)| v)
+    }
+
+    fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
+        let &i = self.index.get(name)?;
+        self.slots[i].as_mut().map(|(_, v)| v)
+    }
+
+    fn contains_key(&self, name: &str) -> bool {
+        self.index.contains_key(name)
+    }
+
+    fn insert(&mut self, name: String, v: Value) {
+        match self.index.get(&name) {
+            Some(&i) => self.slots[i].as_mut().unwrap().1 = v,
+            None => {
+                self.index.insert(name.clone(), self.slots.len());
+                self.slots.push(Some((name, v)));
+            }
+        }
+    }
+
+    /// The variable's slot, created as null if missing
+    fn entry(&mut self, name: &str) -> &mut Value {
+        if !self.contains_key(name) {
+            self.insert(name.to_string(), Value::Null);
+        }
+        self.get_mut(name).unwrap()
+    }
+
+    fn remove(&mut self, name: &str) {
+        if let Some(i) = self.index.remove(name) {
+            // The slot stays as a tombstone so the order of the others is kept
+            self.slots[i] = None;
+        }
+    }
+}
+
+impl FromIterator<(String, Value)> for Vars {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(iter: I) -> Self {
+        let mut vars = Vars::default();
+        for (k, v) in iter {
+            vars.insert(k, v);
+        }
+        vars
+    }
+}
+
+/// Fields drop in declaration order, which mirrors php-src: the argument copies
+/// kept for traces go first (freeing nothing while the variables still hold
+/// them), then the variables in order, then $this
+struct Frame {
     /// Arguments as passed, for func_get_args() and stack traces
     args: Vec<Value>,
+    vars: Vars,
+    /// None for the main script
+    func: Option<Rc<FuncDecl>>,
+    ctx: CallCtx,
+    call_line: u32,
 }
 
 pub struct Interp<W: Write> {
@@ -101,15 +210,26 @@ pub struct Interp<W: Write> {
     /// `static` variables, keyed by the declaring function (null for the main script)
     statics: HashMap<*const FuncDecl, HashMap<String, RefCellValue>>,
     classes: HashMap<String, Rc<ClassEntry>>,
+    /// Class declarations already executed (hoisted ones are seen twice)
+    declared: HashSet<*const ClassDecl>,
+    /// Magic accessors running per (object id, property, kind), so that
+    /// `$this->x` inside `__get('x')` reads the property instead of recursing
+    magic_guard: HashSet<(u32, String, u8)>,
 }
 
 fn recursive_reference() -> Fatal {
     Fatal::error("Cannot modify a value through a reference to itself")
 }
 
+impl<W: Write> Runtime for Interp<W> {
+    fn stringify(&mut self, v: &Value) -> EResult<Vec<u8>> {
+        Interp::stringify(self, v)
+    }
+}
+
 impl<W: Write> Interp<W> {
     pub fn new(out: W, file: String) -> Self {
-        let main = Frame { vars: HashMap::new(), func: None, name: String::new(), call_line: 0, args: Vec::new() };
+        let main = Frame { vars: Vars::default(), func: None, ctx: CallCtx::default(), call_line: 0, args: Vec::new() };
         Interp {
             out,
             file,
@@ -117,6 +237,8 @@ impl<W: Write> Interp<W> {
             functions: HashMap::new(),
             statics: HashMap::new(),
             classes: object::builtin_classes(),
+            declared: HashSet::new(),
+            magic_guard: HashSet::new(),
         }
     }
 
@@ -126,29 +248,62 @@ impl<W: Write> Interp<W> {
 
     /// Runs a script. An uncaught error is reported the way PHP does; returns false then
     pub fn run(&mut self, stmts: &[Stmt]) -> bool {
-        // Unconditional top-level functions exist before any code runs
         let result = self.hoist(stmts).and_then(|_| self.block(stmts));
         self.flush_diags();
-        match result {
-            Ok(_) => true,
-            Err(e) => {
-                let ex = self.exception_object(e);
-                let text = String::from_utf8_lossy(&object::to_string(&ex).unwrap_or_default()).into_owned();
-                let (file, line) = ex.throwable().map(|t| (t.file.clone(), t.line)).unwrap_or_default();
-                let msg = format!("\nFatal error: Uncaught {text}\n  thrown in {file} on line {line}\n");
-                let _ = self.out.write_all(msg.as_bytes());
-                false
-            }
-        }
+        let Err(e) = result else { return true };
+        let msg = if e.uncatchable {
+            let line = e.line.unwrap_or_else(diag::line);
+            let trace = object::trace_string(&e.trace.unwrap_or_default());
+            format!("\nFatal error: {} in {} on line {line}\nStack trace:\n{trace}\n", e.msg, self.file)
+        } else {
+            let ex = self.exception_object(e);
+            // Uncaught output goes through __toString, which a subclass may override
+            let text = match self.stringify(&Value::Object(ex.clone())) {
+                Ok(s) => s,
+                Err(_) => object::throwable_to_string(&ex),
+            };
+            self.flush_diags();
+            let file = String::from_utf8_lossy(&ex.get("\0*\0file").to_bytes()).into_owned();
+            let line = ex.get("\0*\0line").to_int();
+            format!("\nFatal error: Uncaught {}\n  thrown in {file} on line {line}\n", String::from_utf8_lossy(&text))
+        };
+        let _ = self.out.write_all(msg.as_bytes());
+        false
     }
 
+    /// Unconditional top-level functions and classes exist before any code runs.
+    /// A class is hoisted once its parent and interfaces are known
     fn hoist(&mut self, stmts: &[Stmt]) -> EResult<()> {
         for s in stmts {
             if let Stmt::Function(f) = s {
                 self.declare(f)?;
             }
         }
-        Ok(())
+        let mut pending: Vec<&Rc<ClassDecl>> =
+            stmts.iter().filter_map(|s| if let Stmt::Class(c) = s { Some(c) } else { None }).collect();
+        loop {
+            let before = pending.len();
+            let mut rest = Vec::new();
+            for c in pending {
+                let lname = c.name.to_ascii_lowercase();
+                let deps_known = c.parent.iter().chain(&c.interfaces).all(|d| self.classes.contains_key(&d.to_ascii_lowercase()));
+                if deps_known && !self.classes.contains_key(&lname) {
+                    if self.declare_class(c).is_ok() {
+                        continue;
+                    }
+                    // A declaration that fails is left for runtime, where its error belongs
+                    // (php-src likewise only early-binds classes that link cleanly)
+                    self.classes.remove(&lname);
+                    self.declared.remove(&Rc::as_ptr(c));
+                    diag::take();
+                }
+                rest.push(c);
+            }
+            pending = rest;
+            if pending.is_empty() || pending.len() == before {
+                return Ok(());
+            }
+        }
     }
 
     fn declare(&mut self, f: &Rc<FuncDecl>) -> EResult<()> {
@@ -159,14 +314,14 @@ impl<W: Write> Interp<W> {
                 return Ok(());
             }
             diag::set_line(f.line);
-            return Err(Fatal::error(format!(
+            return Err(Fatal::compile(format!(
                 "Cannot redeclare function {}() (previously declared in {}:{})",
                 f.name, self.file, existing.line
             )));
         }
         if builtins::exists(&lname) {
             diag::set_line(f.line);
-            return Err(Fatal::error(format!("Cannot redeclare function {}()", f.name)));
+            return Err(Fatal::compile(format!("Cannot redeclare function {}()", f.name)));
         }
         self.functions.insert(lname, f.clone());
         Ok(())
@@ -188,6 +343,10 @@ impl<W: Write> Interp<W> {
         self.frames.last_mut().unwrap()
     }
 
+    fn ctx(&self) -> &CallCtx {
+        &self.frames.last().unwrap().ctx
+    }
+
     fn block(&mut self, stmts: &[Stmt]) -> EResult<Flow> {
         for s in stmts {
             match self.stmt(s)? {
@@ -203,7 +362,7 @@ impl<W: Write> Interp<W> {
             Stmt::Echo(exprs) => {
                 for e in exprs {
                     let v = self.expr(e)?;
-                    let bytes = to_str(&v)?;
+                    let bytes = self.stringify(&v)?;
                     self.write(&bytes)?;
                 }
             }
@@ -258,20 +417,23 @@ impl<W: Write> Interp<W> {
                 }
             }
             Stmt::Foreach { subject, key, value, by_ref: false, body } => {
-                let arr = match self.expr(subject)? {
-                    Value::Array(arr) => arr,
+                let entries: Vec<(Value, Value)> = match self.expr(subject)? {
+                    // Iterating our own Rc handle means writes to the variable inside the
+                    // loop copy-on-write, so the loop sees the array as it was (PHP semantics)
+                    Value::Array(arr) => {
+                        return self.foreach_array(&arr, key.as_ref(), value, body);
+                    }
+                    Value::Object(o) => self.visible_props(&o),
                     other => {
                         foreach_type_warning(&other);
                         return Ok(Flow::Normal);
                     }
                 };
-                // Iterating our own Rc handle means writes to the variable inside the
-                // loop copy-on-write, so the loop sees the array as it was (PHP semantics)
-                for (k, v) in arr.iter() {
+                for (k, v) in entries {
                     if let Some(key_target) = key {
-                        self.assign(key_target, k.to_value())?;
+                        self.assign(key_target, k)?;
                     }
-                    self.assign(value, v.copy_out())?;
+                    self.assign(value, v)?;
                     if let Some(flow) = loop_flow(self.block(body)?) {
                         return Ok(flow);
                     }
@@ -292,6 +454,9 @@ impl<W: Write> Interp<W> {
                 })?;
                 let keys = match keys {
                     Ok(keys) => keys,
+                    Err(Value::Object(_)) => {
+                        return Err(Fatal::error("Iterating objects by reference is not supported yet"));
+                    }
                     Err(other) => {
                         foreach_type_warning(&other);
                         return Ok(Flow::Normal);
@@ -299,7 +464,7 @@ impl<W: Write> Interp<W> {
                 };
                 for k in keys {
                     let mut elem = path.clone();
-                    elem.1.push(Some(k.to_value()));
+                    elem.dims.push(Some(k.to_value()));
                     // Elements unset by the loop body are skipped
                     let exists = self.with_place(&path, false, true, |slot| {
                         Ok(matches!(slot, Value::Array(arr) if arr.contains_key(&k)))
@@ -325,14 +490,23 @@ impl<W: Write> Interp<W> {
                 }
             }
             Stmt::Function(f) => self.declare(f)?,
+            Stmt::Class(c) => {
+                if !self.declared.contains(&Rc::as_ptr(c)) {
+                    self.declare_class(c)?;
+                }
+            }
             Stmt::Try { body, catches, finally } => {
                 let mut result = self.block(body);
                 if let Err(e) = result {
+                    if e.uncatchable {
+                        return Err(e);
+                    }
                     let ex = self.exception_object(e);
                     result = Err(Fatal::thrown(ex.clone()));
-                    if let Some(c) = catches.iter().find(|c| c.types.iter().any(|t| ex.class.is_subclass_of(t))) {
+                    let caught = catches.iter().find(|c| c.types.iter().any(|t| self.is_instance_of(&ex.class, t)));
+                    if let Some(c) = caught {
                         result = match &c.var {
-                            Some(var) => self.with_place(&(var.as_str(), Vec::new()), false, true, |slot| {
+                            Some(var) => self.with_place(&Path::var(var), false, true, |slot| {
                                 *slot = Value::Object(ex.clone());
                                 Ok(())
                             }),
@@ -346,8 +520,12 @@ impl<W: Write> Interp<W> {
                     match self.block(fin) {
                         Ok(Flow::Normal) => {}
                         Ok(flow) => return Ok(flow),
+                        Err(new) if new.uncatchable => return Err(new),
                         Err(new) => {
                             let Err(pending) = result else { return Err(new) };
+                            if pending.uncatchable {
+                                return Err(pending);
+                            }
                             // The exception being replaced is kept as the new one's previous
                             let new = self.exception_object(new);
                             let pending = self.exception_object(pending);
@@ -367,8 +545,7 @@ impl<W: Write> Interp<W> {
             }
             Stmt::Global(names) => {
                 for name in names {
-                    let global = &mut self.frames[0].vars;
-                    let r = make_ref_slot(global.entry(name.clone()).or_insert(Value::Null));
+                    let r = make_ref_slot(self.frames[0].vars.entry(name));
                     self.frame().vars.insert(name.clone(), Value::Ref(r));
                 }
             }
@@ -395,7 +572,24 @@ impl<W: Write> Interp<W> {
         Ok(Flow::Normal)
     }
 
+    fn foreach_array(&mut self, arr: &Rc<PhpArray>, key: Option<&Expr>, value: &Expr, body: &[Stmt]) -> EResult<Flow> {
+        for (k, v) in arr.iter() {
+            if let Some(key_target) = key {
+                self.assign(key_target, k.to_value())?;
+            }
+            self.assign(value, v.copy_out())?;
+            if let Some(flow) = loop_flow(self.block(body)?) {
+                return Ok(flow);
+            }
+        }
+        Ok(Flow::Normal)
+    }
+
     fn lookup(&mut self, name: &str) -> Value {
+        if name == "this"
+            && let Some(this) = &self.ctx().this {
+                return Value::Object(this.clone());
+            }
         match self.frame().vars.get(name) {
             Some(v) => v.copy_out(),
             None => {
@@ -419,7 +613,7 @@ impl<W: Write> Interp<W> {
                 let mut s = Vec::new();
                 for part in parts {
                     let v = self.expr(part)?;
-                    s.extend_from_slice(&to_str(&v)?);
+                    s.extend_from_slice(&self.stringify(&v)?);
                 }
                 Value::str(s)
             }
@@ -473,18 +667,46 @@ impl<W: Write> Interp<W> {
             ExprKind::CompoundAssign(op, target, rhs) => {
                 let path = self.path(target)?;
                 let r = self.expr(rhs)?;
-                self.with_place(&path, true, true, |place| {
-                    if let (".", Value::Str(s)) = (*op, &mut *place) {
-                        // Append in place so `$s .= ...` in a loop stays linear
-                        Rc::make_mut(s).extend_from_slice(&to_str(&r)?);
+                // A whole property is read and written back, so its type, readonly
+                // state and __get/__set all apply
+                if let Some((obj, name)) = path.whole_prop() {
+                    let (obj, name) = (obj.clone(), name.to_string());
+                    let cur = self.read_prop(&obj, &name)?;
+                    let new = if *op == "." {
+                        let mut s = self.stringify(&cur)?;
+                        s.extend_from_slice(&self.stringify(&r)?);
+                        Value::str(s)
                     } else {
-                        *place = binary(op, place, &r)?;
+                        binary(op, &cur, &r)?
+                    };
+                    self.write_prop(&obj, &name, new.clone())?;
+                    return Ok(new);
+                }
+                // String conversion may run __toString, so it happens before the write
+                let r_str = if *op == "." { Some(self.stringify(&r)?) } else { None };
+                self.with_place(&path, true, true, |place| {
+                    match (r_str, &mut *place) {
+                        // Append in place so `$s .= ...` in a loop stays linear
+                        (Some(s), Value::Str(cur)) => Rc::make_mut(cur).extend_from_slice(&s),
+                        (Some(s), cur) => {
+                            let mut joined = to_str(cur)?;
+                            joined.extend_from_slice(&s);
+                            *place = Value::str(joined);
+                        }
+                        (None, _) => *place = binary(op, place, &r)?,
                     }
                     Ok(place.clone())
                 })?
             }
             ExprKind::IncDec { target, inc, prefix } => {
                 let path = self.path(target)?;
+                if let Some((obj, name)) = path.whole_prop() {
+                    let (obj, name) = (obj.clone(), name.to_string());
+                    let old = self.read_prop(&obj, &name)?;
+                    let new = if *inc { increment(&old)? } else { decrement(&old)? };
+                    self.write_prop(&obj, &name, new.clone())?;
+                    return Ok(if *prefix { new } else { old });
+                }
                 self.with_place(&path, true, true, |place| {
                     let old = place.clone();
                     *place = if *inc { increment(&old)? } else { decrement(&old)? };
@@ -505,8 +727,10 @@ impl<W: Write> Interp<W> {
                     },
                     "(int)" => Value::Int(v.cast_int()),
                     "(float)" => Value::Float(v.to_float()),
-                    "(string)" => Value::str(to_str(&v)?),
+                    "(string)" => Value::str(self.stringify(&v)?),
                     "(bool)" => Value::Bool(v.to_bool()),
+                    "(array)" => cast_array(v),
+                    "(object)" => self.cast_object(v),
                     _ => unreachable!("unknown unary operator {op}"),
                 }
             }
@@ -516,10 +740,22 @@ impl<W: Write> Interp<W> {
                 Some(v) if !v.is_null() => v,
                 _ => self.expr(r)?,
             },
+            ExprKind::Binary(".", l, r) => {
+                let lv = self.expr(l)?;
+                let rv = self.expr(r)?;
+                let mut s = self.stringify(&lv)?;
+                s.extend_from_slice(&self.stringify(&rv)?);
+                Value::str(s)
+            }
             ExprKind::Binary(op, l, r) => {
                 let lv = self.expr(l)?;
                 let rv = self.expr(r)?;
-                binary(op, &lv, &rv)?
+                let result = binary(op, &lv, &rv)?;
+                // Operands are released left to right like php-src (Rust would drop
+                // them in reverse), which decides the order object handles are reused
+                drop(lv);
+                drop(rv);
+                result
             }
             ExprKind::Ternary(cond, then, otherwise) => {
                 let c = self.expr(cond)?;
@@ -534,7 +770,7 @@ impl<W: Write> Interp<W> {
             }
             ExprKind::Isset(targets) => {
                 for t in targets {
-                    if self.quiet(t)?.is_none_or(|v| v.is_null()) {
+                    if self.quiet_inner(t, false)?.is_none_or(|v| v.is_null()) {
                         return Ok(Value::Bool(false));
                     }
                 }
@@ -554,28 +790,67 @@ impl<W: Write> Interp<W> {
                 v
             }
             ExprKind::Closure(f) => self.make_closure(f)?,
-            ExprKind::New(class, args) => self.instantiate(class, args, e.line)?,
+            ExprKind::New(class, args) => {
+                let class = self.resolve_class(class)?;
+                let v = self.instantiate(&class, args, e.line)?;
+                diag::set_line(e.line);
+                v
+            }
             ExprKind::MethodCall { object, name, args, nullsafe } => {
                 let o = self.expr(object)?;
                 if *nullsafe && o.is_null() {
                     // `?->` short-circuits: the arguments are not evaluated
                     return Ok(Value::Null);
                 }
-                let v = self.method_call(o, name, args, e.line)?;
+                let name = self.member_name(name)?;
+                let v = self.method_call(o, &name, args, e.line)?;
+                diag::set_line(e.line);
+                v
+            }
+            ExprKind::StaticCall { class, name, args } => {
+                let v = self.static_call(class, name, args, e.line)?;
                 diag::set_line(e.line);
                 v
             }
             ExprKind::Prop { object, name, nullsafe } => {
                 let o = self.expr(object)?;
-                read_prop(&o, name, *nullsafe)?
+                if *nullsafe && o.is_null() {
+                    return Ok(Value::Null);
+                }
+                let name = self.member_name(name)?;
+                match o {
+                    Value::Object(obj) => self.read_prop(&obj, &name)?,
+                    Value::Null if *nullsafe => Value::Null,
+                    other => {
+                        diag::warning(format!("Attempt to read property \"{name}\" on {}", other.type_name()));
+                        Value::Null
+                    }
+                }
             }
+            ExprKind::StaticProp { class, name } => {
+                let (cell, _) = self.static_prop_cell(class, name)?;
+                value::with_deref(&cell, Value::clone)
+            }
+            ExprKind::ClassConst { class, name } => self.class_const(class, name)?,
             ExprKind::InstanceOf(x, class) => {
                 let v = self.expr(x)?;
-                Value::Bool(matches!(&v, Value::Object(o) if o.class.is_subclass_of(class)))
+                let Value::Object(o) = &v else { return Ok(Value::Bool(false)) };
+                let name = match class {
+                    crate::ast::ClassRef::Named(n) => n.clone(),
+                    other => match self.resolve_class_quiet(other)? {
+                        Some(c) => c.name.to_string(),
+                        None => return Ok(Value::Bool(false)),
+                    },
+                };
+                Value::Bool(self.is_instance_of(&o.class, &name))
+            }
+            ExprKind::Clone(x) => {
+                let v = self.expr(x)?;
+                self.clone_value(v)?
             }
             ExprKind::Throw(x) => {
                 return match self.expr(x)? {
-                    Value::Object(o) if o.throwable().is_some() => Err(Fatal::thrown(o)),
+                    Value::Object(o) if o.class.is_throwable => Err(Fatal::thrown(o)),
                     _ => Err(Fatal::error("Can only throw objects")),
                 };
             }
@@ -585,7 +860,14 @@ impl<W: Write> Interp<W> {
     /// Evaluates without "undefined" warnings, as isset/empty/?? do.
     /// None means the variable or a key along the way does not exist
     fn quiet(&mut self, e: &Expr) -> EResult<Option<Value>> {
+        self.quiet_inner(e, true)
+    }
+
+    /// `need_value` is false for the outermost operand of isset(), which only asks
+    /// whether something exists: then a magic property is checked with __isset alone
+    fn quiet_inner(&mut self, e: &Expr, need_value: bool) -> EResult<Option<Value>> {
         match &e.kind {
+            ExprKind::Var(name) if name == "this" => Ok(self.ctx().this.clone().map(Value::Object)),
             ExprKind::Var(name) => Ok(self.frame().vars.get(name).map(Value::copy_out)),
             ExprKind::Index(base, Some(index)) => {
                 let Some(b) = self.quiet(base)? else { return Ok(None) };
@@ -599,7 +881,7 @@ impl<W: Write> Interp<W> {
                                 _ => None,
                             },
                             Value::Float(f) => Some(float_to_int_implicit(*f, &i)),
-                            Value::Array(_) => None,
+                            Value::Array(_) | Value::Object(_) => None,
                             other => Some(other.to_int()),
                         };
                         off.and_then(|o| byte_at(s, o)).map(|b| Value::str(vec![b]))
@@ -607,59 +889,102 @@ impl<W: Write> Interp<W> {
                     _ => None,
                 })
             }
+            ExprKind::Prop { object, name, .. } => match self.quiet(object)? {
+                Some(Value::Object(o)) => {
+                    let name = self.member_name(name)?;
+                    self.isset_prop(&o, &name, need_value)
+                }
+                _ => Ok(None),
+            },
+            ExprKind::StaticProp { class, name } => {
+                let Some(c) = self.resolve_class_quiet(class)? else { return Ok(None) };
+                Ok(c.find_static(name).map(|p| value::with_deref(&p.cell, Value::clone)))
+            }
             _ => self.expr(e).map(Some),
         }
     }
 
-    /// Resolves a write target into its variable name and evaluated offsets
+    /// Resolves a write target. Everything before the last property or static
+    /// property step is evaluated as a value: objects are handles, so writing
+    /// through them needs no write access to the variable holding them
     fn path<'e>(&mut self, target: &'e Expr) -> EResult<Path<'e>> {
         diag::set_line(target.line);
         match &target.kind {
-            ExprKind::Var(name) => Ok((name.as_str(), Vec::new())),
+            ExprKind::Var(name) => Ok(Path::var(name)),
             ExprKind::Index(base, index) => {
-                let (name, mut dims) = self.path(base)?;
-                dims.push(match index {
+                let mut path = self.path(base)?;
+                path.dims.push(match index {
                     Some(i) => Some(self.expr(i)?),
                     None => None,
                 });
-                Ok((name, dims))
+                Ok(path)
+            }
+            ExprKind::Prop { object, name, .. } => {
+                let o = self.expr(object)?;
+                let name = self.member_name(name)?;
+                match o {
+                    Value::Object(o) => Ok(Path { base: Base::Prop(o, name), dims: Vec::new() }),
+                    other => Err(Fatal::error(format!("Attempt to assign property \"{name}\" on {}", other.type_name()))),
+                }
+            }
+            ExprKind::StaticProp { class, name } => {
+                let (cell, ty) = self.static_prop_cell(class, name)?;
+                Ok(Path { base: Base::Cell(cell, ty), dims: Vec::new() })
             }
             _ => Err(Fatal::error("Cannot assign to this expression")),
         }
     }
 
-    /// Runs `f` on the storage for a path in the current frame, creating arrays and
-    /// elements along the way. With `read`, the old value is about to be used
-    /// (`.=`, `++`), so a missing variable or final key is reported like a read.
-    /// With `deref_last`, `f` sees the value behind a final reference rather than
-    /// the reference slot itself
+    /// Runs `f` on the storage for a path, creating arrays and elements along the
+    /// way. With `read`, the old value is about to be used (`.=`, `++`), so a
+    /// missing variable or final key is reported like a read. With `deref_last`,
+    /// `f` sees the value behind a final reference rather than the reference slot
     fn with_place<T>(
         &mut self,
-        (name, dims): &Path<'_>,
+        path: &Path<'_>,
         read: bool,
         deref_last: bool,
         f: impl FnOnce(&mut Value) -> EResult<T>,
     ) -> EResult<T> {
-        let vars = &mut self.frames.last_mut().unwrap().vars;
-        if !vars.contains_key(*name) {
-            if read && dims.is_empty() {
-                diag::warning(format!("Undefined variable ${name}"));
+        match &path.base {
+            Base::Var(name) => {
+                if *name == "this" {
+                    return Err(Fatal::error("Cannot re-assign $this"));
+                }
+                let vars = &mut self.frames.last_mut().unwrap().vars;
+                if read && path.dims.is_empty() && !vars.contains_key(name) {
+                    diag::warning(format!("Undefined variable ${name}"));
+                }
+                let slot = vars.entry(name);
+                descend(slot, &path.dims, read, deref_last, f)
             }
-            vars.insert(name.to_string(), Value::Null);
+            Base::Prop(obj, name) => {
+                let key = self.prop_key_for_update(obj, name, read && path.dims.is_empty())?;
+                let mut props = obj.props.try_borrow_mut().map_err(|_| recursive_reference())?;
+                let slot = props.entry(key);
+                descend(slot, &path.dims, read, deref_last, f)
+            }
+            Base::Cell(cell, _) => {
+                let mut slot = cell.try_borrow_mut().map_err(|_| recursive_reference())?;
+                descend(&mut slot, &path.dims, read, deref_last, f)
+            }
         }
-        // Looked up again so the common (existing variable) path does not allocate a key
-        let slot = vars.get_mut(*name).unwrap();
-        descend(slot, dims, read, deref_last, f)
     }
 
     /// Turns the slot at `path` into a reference (if it is not one yet) and returns it
     fn make_ref(&mut self, path: &Path<'_>) -> EResult<RefCellValue> {
+        if let (Base::Cell(cell, _), true) = (&path.base, path.dims.is_empty()) {
+            return Ok(cell.clone());
+        }
         self.with_place(path, false, false, |slot| Ok(make_ref_slot(slot)))
     }
 
     /// Makes `target` an alias of `r`, as `$target = &...` does
     fn bind_ref(&mut self, target: &Expr, r: RefCellValue) -> EResult<()> {
         let path = self.path(target)?;
+        if let (Base::Cell(..), true) = (&path.base, path.dims.is_empty()) {
+            return Err(Fatal::error("Binding static properties by reference is not supported yet"));
+        }
         self.with_place(&path, false, false, |slot| {
             *slot = Value::Ref(r);
             Ok(())
@@ -668,12 +993,32 @@ impl<W: Write> Interp<W> {
 
     fn assign(&mut self, target: &Expr, v: Value) -> EResult<()> {
         let mut path = self.path(target)?;
+        if let (Base::Prop(obj, name), true) = (&path.base, path.dims.is_empty()) {
+            return self.write_prop(obj, name, v);
+        }
+        if let (Base::Cell(cell, ty), true) = (&path.base, path.dims.is_empty()) {
+            let v = match ty {
+                Some((ty, label)) => {
+                    let err = |v: &Value, _: &str| {
+                        Fatal::type_error(format!("Cannot assign {} to property {label} of type {}", v.type_name(), ty.display))
+                    };
+                    self.check_param(v, Some(ty), &err)?
+                }
+                None => v,
+            };
+            let mut slot = cell.try_borrow_mut().map_err(|_| recursive_reference())?;
+            return set_slot(&mut slot, v);
+        }
         // `$s[i] = "x"` on a string replaces a byte rather than creating an element
-        if let Some(Some(index)) = path.1.last() {
+        if let Some(Some(index)) = path.dims.last() {
             let index = index.clone();
-            path.1.pop();
+            path.dims.pop();
+            // A string offset needs the value converted first; doing it here keeps
+            // __toString out of the borrowed write path
+            let as_str = if matches!(v, Value::Object(_)) { Some(self.stringify(&v)?) } else { None };
             return self.with_place(&path, false, true, |parent| {
                 if let Value::Str(s) = parent {
+                    let v = as_str.map_or(v, Value::str);
                     return assign_string_offset(Rc::make_mut(s), &index, &v);
                 }
                 set_slot(write_dim(parent, Some(&index), false)?, v)
@@ -686,26 +1031,75 @@ impl<W: Write> Interp<W> {
     }
 
     fn unset(&mut self, target: &Expr) -> EResult<()> {
-        let (name, mut dims) = self.path(target)?;
-        let Some(last) = dims.pop() else {
-            // Unsetting a variable only removes this name; a reference survives elsewhere
-            self.frame().vars.remove(name);
-            return Ok(());
+        let mut path = self.path(target)?;
+        let Some(last) = path.dims.pop() else {
+            return match &path.base {
+                // Unsetting a variable only removes this name; a reference survives elsewhere
+                Base::Var(name) => {
+                    self.frame().vars.remove(name);
+                    Ok(())
+                }
+                Base::Prop(obj, name) => self.unset_prop(obj, name),
+                Base::Cell(..) => Err(Fatal::error("Attempt to unset static property")),
+            };
         };
-        match self.frame().vars.get_mut(name) {
-            Some(slot) => unset_in(slot, &dims, last),
-            None => {
-                diag::warning(format!("Undefined variable ${name}"));
-                Ok(())
+        match &path.base {
+            Base::Var(name) => match self.frame().vars.get_mut(name) {
+                Some(slot) => unset_in(slot, &path.dims, last),
+                None => {
+                    diag::warning(format!("Undefined variable ${name}"));
+                    Ok(())
+                }
+            },
+            Base::Prop(obj, name) => {
+                let key = self.prop_key_for_update(obj, name, false)?;
+                let mut props = obj.props.try_borrow_mut().map_err(|_| recursive_reference())?;
+                match props.get_mut(&key) {
+                    Some(slot) => unset_in(slot, &path.dims, last),
+                    None => Ok(()),
+                }
             }
+            Base::Cell(cell, _) => {
+                let mut slot = cell.try_borrow_mut().map_err(|_| recursive_reference())?;
+                unset_in(&mut slot, &path.dims, last)
+            }
+        }
+    }
+
+    fn member_name(&mut self, name: &Name) -> EResult<String> {
+        match name {
+            Name::Lit(n) => Ok(n.clone()),
+            Name::Dyn(e) => {
+                let v = self.expr(e)?;
+                Ok(String::from_utf8_lossy(&self.stringify(&v)?).into_owned())
+            }
+        }
+    }
+
+    /// String conversion as done by echo, `.` and interpolation: arrays warn,
+    /// objects use __toString
+    pub fn stringify(&mut self, v: &Value) -> EResult<Vec<u8>> {
+        let Value::Object(o) = v else { return to_str(v) };
+        let Some(m) = o.class.find_method("__tostring").cloned() else {
+            return Err(Fatal::error(format!("Object of class {} could not be converted to string", o.class.name)));
+        };
+        let line = diag::line();
+        match self.call_method(Some(o.clone()), &m, Vec::new(), line, o.class.clone())? {
+            Value::Str(s) => Ok(s.to_vec()),
+            other => Err(Fatal::type_error(format!(
+                "{}::__toString(): Return value must be of type string, {} returned",
+                m.class,
+                other.type_name()
+            ))),
         }
     }
 
     fn call(&mut self, name: &str, args: &[Arg], line: u32) -> EResult<Value> {
         let lname = name.to_ascii_lowercase();
         if let Some(f) = self.functions.get(&lname).cloned() {
-            let bound = self.bind_args(&f, args)?;
-            return self.invoke(&f, bound, line);
+            let ctx = CallCtx { name: f.name.clone(), trace_fn: f.name.clone(), ..CallCtx::default() };
+            let bound = self.bind_args(&f, &ctx.name, args)?;
+            return self.invoke_with(&f, ctx, Vec::new(), bound, line);
         }
 
         // Built-ins that take their first argument by reference
@@ -732,7 +1126,8 @@ impl<W: Write> Interp<W> {
     fn call_builtin(&mut self, name: &str, lname: &str, vals: Vec<Value>, line: u32) -> EResult<Value> {
         match lname {
             "print" => {
-                self.write(&to_str(&vals[0])?)?;
+                let s = self.stringify(&vals[0])?;
+                self.write(&s)?;
                 Ok(Value::Int(1))
             }
             "var_dump" => {
@@ -756,10 +1151,16 @@ impl<W: Write> Interp<W> {
             "func_num_args" => Ok(Value::Int(self.frame().args.len() as i64)),
             "function_exists" => {
                 let n = vals.first().map(|v| v.to_bytes()).unwrap_or_default();
-                let n = String::from_utf8_lossy(&n).to_ascii_lowercase();
+                let n = String::from_utf8_lossy(&n).trim_start_matches('\\').to_ascii_lowercase();
                 Ok(Value::Bool(self.functions.contains_key(&n) || builtins::exists(&n)))
             }
-            "is_callable" => Ok(Value::Bool(vals.first().is_some_and(|v| self.callable_name(v).is_some()))),
+            "is_callable" => {
+                let callable = match vals.first() {
+                    Some(v) => self.callable(v)?.is_some(),
+                    None => false,
+                };
+                Ok(Value::Bool(callable))
+            }
             "call_user_func" => {
                 let Some((cb, rest)) = vals.split_first() else {
                     return Err(builtins::arg_count(lname, 1, 0));
@@ -780,7 +1181,12 @@ impl<W: Write> Interp<W> {
             }
             "array_map" => self.array_map(vals, line),
             "array_filter" => self.array_filter(vals, line),
-            _ => builtins::call(name, lname, vals),
+            _ => {
+                if let Some(v) = self.object_builtin(lname, &vals)? {
+                    return Ok(v);
+                }
+                builtins::call(self, name, lname, vals)
+            }
         }
     }
 
@@ -798,7 +1204,7 @@ impl<W: Write> Interp<W> {
     }
 
     /// Evaluates call arguments for a user function, taking references for by-ref parameters
-    fn bind_args(&mut self, f: &FuncDecl, args: &[Arg]) -> EResult<Vec<ArgVal>> {
+    fn bind_args(&mut self, f: &FuncDecl, fname: &str, args: &[Arg]) -> EResult<Vec<ArgVal>> {
         let mut bound = Vec::with_capacity(args.len());
         for a in args {
             if a.spread {
@@ -815,8 +1221,7 @@ impl<W: Write> Interp<W> {
                 if !a.value.is_lvalue() {
                     let pname = &f.params[i.min(f.params.len() - 1)].name;
                     return Err(Fatal::error(format!(
-                        "{}(): Argument #{} (${pname}) could not be passed by reference",
-                        f.name,
+                        "{fname}(): Argument #{} (${pname}) could not be passed by reference",
                         i + 1
                     )));
                 }
@@ -829,26 +1234,32 @@ impl<W: Write> Interp<W> {
         Ok(bound)
     }
 
-    fn invoke(&mut self, f: &Rc<FuncDecl>, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
-        self.invoke_with(f, f.name.clone(), Vec::new(), args, call_line)
-    }
-
     fn invoke_closure(&mut self, closure: &Closure, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
+        let ctx = CallCtx {
+            name: closure.name.clone(),
+            trace_fn: closure.name.clone(),
+            trace_class: None,
+            this: closure.this.clone(),
+            scope: closure.scope.clone(),
+            static_class: closure.this.as_ref().map(|t| t.class.clone()).or_else(|| closure.scope.clone()),
+        };
         // Each call gets its own copy of by-value captures; by-reference ones stay shared
-        let bound = closure.bound.clone();
-        self.invoke_with(&closure.func, closure.name.clone(), bound, args, call_line)
+        self.invoke_with(&closure.func, ctx, closure.bound.clone(), args, call_line)
     }
 
     fn invoke_with(
         &mut self,
         f: &Rc<FuncDecl>,
-        name: String,
+        ctx: CallCtx,
         bound: Vec<(String, Value)>,
         args: Vec<ArgVal>,
         call_line: u32,
     ) -> EResult<Value> {
         if self.frames.len() > MAX_CALL_DEPTH {
-            return Err(Fatal::error("Maximum call stack size reached. Infinite recursion?"));
+            // php-src measures the native stack; its default limit reads like this
+            return Err(Fatal::error(
+                "Maximum call stack size of 8355840 bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?",
+            ));
         }
         let shown = args
             .iter()
@@ -858,30 +1269,39 @@ impl<W: Write> Interp<W> {
             })
             .collect();
         let vars = bound.into_iter().collect();
-        self.frames.push(Frame { vars, func: Some(f.clone()), name: name.clone(), call_line, args: shown });
-        let result = self.invoke_inner(f, &name, args, call_line);
+        self.frames.push(Frame { vars, func: Some(f.clone()), ctx, call_line, args: shown });
+        let result = self.invoke_inner(f, args, call_line);
         // The trace is captured while the failing frames are still on the stack
+        // An internal error becomes its exception object here, while the failing
+        // frame is still on the stack: the trace is complete, and like php-src the
+        // object exists before the frame's own objects are released
         let result = result.map_err(|mut e| {
-            if e.object.is_none() && e.trace.is_none() {
-                e.line = Some(e.line.unwrap_or_else(diag::line));
+            if e.object.is_some() {
+                return e;
+            }
+            e.line = Some(e.line.unwrap_or_else(diag::line));
+            if e.trace.is_none() {
                 e.trace = Some(self.trace());
             }
-            e
+            if e.uncatchable {
+                return e;
+            }
+            Fatal::thrown(self.exception_object(e))
         });
         self.frames.pop();
         result
     }
 
-    fn invoke_inner(&mut self, f: &FuncDecl, fname: &str, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
+    fn invoke_inner(&mut self, f: &FuncDecl, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
         diag::set_line(f.line);
+        let fname = self.ctx().name.clone();
         let required = f.required();
         if args.len() < required {
             let exact = required == f.params.len();
             return Err(Fatal::new(
                 "ArgumentCountError",
                 format!(
-                    "Too few arguments to function {}(), {} passed in {} on line {call_line} and {} {required} expected",
-                    fname,
+                    "Too few arguments to function {fname}(), {} passed in {} on line {call_line} and {} {required} expected",
                     args.len(),
                     self.file,
                     if exact { "exactly" } else { "at least" }
@@ -890,29 +1310,22 @@ impl<W: Write> Interp<W> {
         }
         let mut args = args.into_iter();
         for (i, p) in f.params.iter().enumerate() {
-            let check = |v: Value| -> EResult<Value> {
-                match &p.ty {
-                    Some(ty) => coerce(v, ty, &|v| names_callable(&self.functions, v)).map_err(|v| {
-                        Fatal::type_error(format!(
-                            "{}(): Argument #{} (${}) must be of type {}, {} given, called in {} on line {call_line}",
-                            fname,
-                            i + 1,
-                            p.name,
-                            ty.display,
-                            v.type_name(),
-                            self.file
-                        ))
-                    }),
-                    None => Ok(v),
-                }
+            let type_error = |v: &Value, file: &str| {
+                Fatal::type_error(format!(
+                    "{fname}(): Argument #{} (${}) must be of type {}, {} given, called in {file} on line {call_line}",
+                    i + 1,
+                    p.name,
+                    p.ty.as_ref().map_or("mixed", |t| t.display.as_str()),
+                    v.type_name()
+                ))
             };
             if p.variadic {
                 let mut rest = PhpArray::new();
                 for a in args.by_ref() {
                     let elem = match a {
                         ArgVal::Ref(r) if p.by_ref => Value::Ref(r),
-                        ArgVal::Ref(r) => check(value::with_deref(&r, Value::clone))?,
-                        ArgVal::Val(v) => check(v)?,
+                        ArgVal::Ref(r) => self.check_param(value::with_deref(&r, Value::clone), p.ty.as_ref(), &type_error)?,
+                        ArgVal::Val(v) => self.check_param(v, p.ty.as_ref(), &type_error)?,
                     };
                     rest.push(elem).map_err(|_| next_element_occupied())?;
                 }
@@ -923,7 +1336,7 @@ impl<W: Write> Interp<W> {
                 Some(ArgVal::Ref(r)) => {
                     if p.ty.is_some() {
                         let v = value::with_deref(&r, Value::clone);
-                        let v = check(v)?;
+                        let v = self.check_param(v, p.ty.as_ref(), &type_error)?;
                         *r.try_borrow_mut().map_err(|_| recursive_reference())? = v;
                     }
                     Value::Ref(r)
@@ -931,13 +1344,12 @@ impl<W: Write> Interp<W> {
                 Some(ArgVal::Val(v)) => {
                     if p.by_ref {
                         diag::warning(format!(
-                            "{}(): Argument #{} (${}) must be passed by reference, value given",
-                            fname,
+                            "{fname}(): Argument #{} (${}) must be passed by reference, value given",
                             i + 1,
                             p.name
                         ));
                     }
-                    check(v)?
+                    self.check_param(v, p.ty.as_ref(), &type_error)?
                 }
                 None => match &p.default {
                     Some(d) => self.expr(d)?,
@@ -945,6 +1357,9 @@ impl<W: Write> Interp<W> {
                 },
             };
             self.frame().vars.insert(p.name.clone(), slot);
+        }
+        if f.kind == FuncKind::Method && f.name.eq_ignore_ascii_case("__construct") {
+            self.promote_params(f)?;
         }
 
         let ret = match self.block(&f.body)? {
@@ -960,19 +1375,37 @@ impl<W: Write> Interp<W> {
             None if ty.allows("null") => return Ok(Value::Null),
             None => {
                 return Err(Fatal::type_error(format!(
-                    "{}(): Return value must be of type {}, none returned",
-                    fname, ty.display
+                    "{fname}(): Return value must be of type {}, none returned",
+                    ty.display
                 )))
             }
         };
-        coerce(given, ty, &|v| names_callable(&self.functions, v)).map_err(|v| {
+        let type_error = |v: &Value, _: &str| {
             Fatal::type_error(format!(
-                "{}(): Return value must be of type {}, {} returned",
-                fname,
+                "{fname}(): Return value must be of type {}, {} returned",
                 ty.display,
                 v.type_name()
             ))
-        })
+        };
+        self.check_param(given, Some(ty), &type_error)
+    }
+
+    /// Type-checks (and in non-strict mode coerces) a value for a declared type
+    fn check_param(&mut self, v: Value, ty: Option<&TypeHint>, err: &dyn Fn(&Value, &str) -> Fatal) -> EResult<Value> {
+        let Some(ty) = ty else { return Ok(v) };
+        // Stringable objects pass for `string` by calling __toString
+        if let Value::Object(o) = &v
+            && !self.object_matches(o, ty) && ty.allows("string") && o.class.find_method("__tostring").is_some() {
+                return Ok(Value::str(self.stringify(&v)?));
+            }
+        let ctx = self.ctx();
+        let tc = TypeCtx {
+            functions: &self.functions,
+            classes: &self.classes,
+            scope: ctx.scope.as_deref(),
+            static_class: ctx.static_class.as_deref(),
+        };
+        coerce(v, ty, &tc).map_err(|v| err(&v, &self.file))
     }
 
     /// The stack trace of the current call frames, innermost first
@@ -981,197 +1414,78 @@ impl<W: Write> Interp<W> {
             .iter()
             .skip(1)
             .rev()
-            .map(|f| TraceFrame { file: self.file.clone(), line: f.call_line, function: f.name.clone(), args: f.args.clone() })
+            .map(|f| TraceFrame {
+                file: self.file.clone(),
+                line: f.call_line,
+                function: f.ctx.trace_fn.clone(),
+                class: f.ctx.trace_class.clone(),
+                args: f.args.clone(),
+            })
             .collect()
     }
 
-    fn make_closure(&mut self, f: &Rc<FuncDecl>) -> EResult<Value> {
-        let mut bound = Vec::with_capacity(f.uses.len());
-        for (name, by_ref) in &f.uses {
-            if *by_ref {
-                let r = self.make_ref(&(name.as_str(), Vec::new()))?;
-                bound.push((name.clone(), Value::Ref(r)));
-            } else if f.kind == FuncKind::Arrow {
-                // Arrow functions capture only what exists; using anything else warns when called
-                if let Some(v) = self.frame().vars.get(name) {
-                    bound.push((name.clone(), v.copy_out()));
-                }
-            } else {
-                bound.push((name.clone(), self.lookup(name)));
-            }
+    fn callback(&mut self, fname: &str, n: usize, v: &Value) -> EResult<Callable> {
+        if let Some(c) = self.callable(v)? {
+            return Ok(c);
         }
-        let name = format!("{{closure:{}:{}}}", self.file, f.line);
-        let closure = Closure { func: f.clone(), bound, name, file: self.file.clone() };
-        Ok(Value::Object(Object::new(self.classes["closure"].clone(), ObjectKind::Closure(closure))))
-    }
-
-    /// `$f(...)`: closures, and strings naming a function
-    fn call_value_expr(&mut self, f: Value, args: &[Arg], line: u32) -> EResult<Value> {
-        match &f {
-            Value::Object(o) => match &o.kind {
-                ObjectKind::Closure(c) => {
-                    let bound = self.bind_args(&c.func, args)?;
-                    self.invoke_closure(c, bound, line)
-                }
-                _ => Err(Fatal::error(format!("Object of type {} is not callable", o.class.name))),
-            },
-            Value::Str(name) => {
-                let name = String::from_utf8_lossy(name).into_owned();
-                self.call(name.trim_start_matches('\\'), args, line)
-            }
-            _ => Err(Fatal::error("Value not callable")),
-        }
-    }
-
-    fn instantiate(&mut self, class: &str, args: &[Arg], line: u32) -> EResult<Value> {
-        let Some(ce) = self.classes.get(&class.to_ascii_lowercase()).cloned() else {
-            return Err(Fatal::error(format!("Class \"{class}\" not found")));
+        let detail = match v {
+            Value::Str(s) => format!("function \"{}\" not found or invalid function name", String::from_utf8_lossy(s)),
+            Value::Array(_) => "array callback must have exactly two members".to_string(),
+            _ => "no array or string given".to_string(),
         };
-        if ce.is_interface {
-            return Err(Fatal::error(format!("Cannot instantiate interface {}", ce.name)));
-        }
-        if !ce.instantiable {
-            return Err(Fatal::error(format!("Instantiation of class {} is not allowed", ce.name)));
-        }
-        // Every instantiable built-in class is a Throwable so far
-        let ctor = format!("{}::__construct", ce.throwable_base());
-        let vals = self.eval_args(args)?;
-        if vals.len() > 3 {
-            return Err(Fatal::new(
-                "ArgumentCountError",
-                format!("{ctor}() expects at most 3 arguments, {} given", vals.len()),
-            ));
-        }
-        let mut vals = vals.into_iter();
-        let message = match vals.next() {
-            Some(v) => builtins::arg_str(&ctor, 1, "message", &v)?,
-            None => Vec::new(),
-        };
-        let code = match vals.next() {
-            Some(v) => builtins::arg_int(&ctor, 2, "code", &v)?,
-            None => 0,
-        };
-        let previous = match vals.next() {
-            None | Some(Value::Null) => None,
-            Some(Value::Object(o)) if o.throwable().is_some() => Some(o),
-            Some(other) => {
-                return Err(Fatal::type_error(format!(
-                    "{ctor}(): Argument #3 ($previous) must be of type ?Throwable, {} given",
-                    other.type_name()
-                )))
-            }
-        };
-        // Like php-src, the object remembers where `new` ran, not where it is thrown
-        let data = ThrowableData { message, code, file: self.file.clone(), line, trace: self.trace(), previous };
-        Ok(Value::Object(Object::new(ce, ObjectKind::Throwable(RefCell::new(data)))))
-    }
-
-    fn method_call(&mut self, o: Value, name: &str, args: &[Arg], line: u32) -> EResult<Value> {
-        let Value::Object(obj) = &o else {
-            return Err(Fatal::error(format!("Call to a member function {name}() on {}", o.type_name())));
-        };
-        let lname = name.to_ascii_lowercase();
-        let undefined = || Fatal::error(format!("Call to undefined method {}::{name}()", obj.class.name));
-        match &obj.kind {
-            ObjectKind::Closure(c) => match lname.as_str() {
-                "__invoke" => {
-                    let bound = self.bind_args(&c.func, args)?;
-                    self.invoke_closure(c, bound, line)
-                }
-                _ => Err(undefined()),
-            },
-            ObjectKind::Throwable(t) => {
-                let given = self.eval_args(args)?.len();
-                let base = obj.class.throwable_base();
-                let known = [
-                    "getmessage", "getcode", "getprevious", "getfile", "getline", "gettrace", "gettraceasstring",
-                    "__tostring",
-                ];
-                if !known.contains(&lname.as_str()) {
-                    return Err(undefined());
-                }
-                if given > 0 {
-                    return Err(Fatal::new(
-                        "ArgumentCountError",
-                        format!("{base}::{name}() expects exactly 0 arguments, {given} given"),
-                    ));
-                }
-                if lname == "__tostring" {
-                    return Ok(Value::str(object::to_string(obj).unwrap_or_default()));
-                }
-                let t = t.try_borrow().map_err(|_| recursive_reference())?;
-                Ok(match lname.as_str() {
-                    "getmessage" => Value::str(t.message.clone()),
-                    "getcode" => Value::Int(t.code),
-                    "getprevious" => t.previous.clone().map_or(Value::Null, Value::Object),
-                    "getfile" => Value::str(t.file.clone()),
-                    "getline" => Value::Int(t.line as i64),
-                    "gettrace" => trace_array(&t.trace),
-                    _ => Value::str(object::trace_string(&t.trace)),
-                })
-            }
-        }
-    }
-
-    /// The object for a caught or uncaught error: thrown objects as they are,
-    /// internal errors materialized with the place they happened
-    fn exception_object(&mut self, e: Fatal) -> Rc<Object> {
-        if let Some(obj) = e.object {
-            return obj;
-        }
-        let class = self.classes.get(&e.class.to_ascii_lowercase()).cloned().unwrap_or_else(|| self.classes["error"].clone());
-        let data = ThrowableData {
-            message: e.msg.into_bytes(),
-            code: 0,
-            file: self.file.clone(),
-            line: e.line.unwrap_or_else(diag::line),
-            trace: e.trace.unwrap_or_else(|| self.trace()),
-            previous: None,
-        };
-        Object::new(class, ObjectKind::Throwable(RefCell::new(data)))
-    }
-
-    /// The function a callable value names, if any
-    fn callable_name(&self, v: &Value) -> Option<Callable> {
-        if let Value::Object(o) = v {
-            return matches!(o.kind, ObjectKind::Closure(_)).then(|| Callable::Closure(o.clone()));
-        }
-        let Value::Str(s) = v else { return None };
-        let name = String::from_utf8_lossy(s).trim_start_matches('\\').to_ascii_lowercase();
-        if let Some(f) = self.functions.get(&name) {
-            return Some(Callable::User(f.clone()));
-        }
-        builtins::exists(&name).then_some(Callable::Builtin(name))
-    }
-
-    fn callback(&self, fname: &str, n: usize, v: &Value) -> EResult<Callable> {
-        self.callable_name(v).ok_or_else(|| {
-            let detail = match v {
-                Value::Str(s) => format!("function \"{}\" not found or invalid function name", String::from_utf8_lossy(s)),
-                _ => "no array or string given".to_string(),
-            };
-            Fatal::type_error(format!("{fname}(): Argument #{n} ($callback) must be a valid callback, {detail}"))
-        })
+        Err(Fatal::type_error(format!("{fname}(): Argument #{n} ($callback) must be a valid callback, {detail}")))
     }
 
     fn call_value(&mut self, f: &Callable, args: Vec<Value>, line: u32) -> EResult<Value> {
+        let vals = || args.clone().into_iter().map(ArgVal::Val).collect::<Vec<_>>();
         let v = match f {
-            Callable::User(f) => self.invoke(f, args.into_iter().map(ArgVal::Val).collect(), line)?,
-            Callable::Closure(o) => {
-                let ObjectKind::Closure(c) = &o.kind else { unreachable!("checked in callable_name") };
-                self.invoke_closure(c, args.into_iter().map(ArgVal::Val).collect(), line)?
+            Callable::User(f) => {
+                let ctx = CallCtx { name: f.name.clone(), trace_fn: f.name.clone(), ..CallCtx::default() };
+                self.invoke_with(f, ctx, Vec::new(), vals(), line)?
             }
+            Callable::Closure(o) => {
+                let c = o.closure().expect("checked when the callable was resolved");
+                self.invoke_closure(c, vals(), line)?
+            }
+            Callable::Method { this, method, class } => self.call_method(this.clone(), method, vals(), line, class.clone())?,
             Callable::Builtin(name) if builtins::BY_REF.contains(&name.as_str()) => {
                 // A callback cannot pass a variable by reference, so this works on a copy
-                let mut args = args.into_iter();
+                let mut args = args.clone().into_iter();
                 let mut target = args.next().unwrap_or(Value::Null);
                 diag::warning(format!("{name}(): Argument #1 ($array) must be passed by reference, value given"));
                 builtins::call_by_ref(name, &mut target, args.collect())?
             }
-            Callable::Builtin(name) => self.call_builtin(name, name, args, line)?,
+            Callable::Builtin(name) => self.call_builtin(name, name, args.clone(), line)?,
         };
         diag::set_line(line);
         Ok(v)
+    }
+
+    /// `$f(...)`: closures, invokable objects, and strings or arrays naming a function
+    fn call_value_expr(&mut self, f: Value, args: &[Arg], line: u32) -> EResult<Value> {
+        match &f {
+            Value::Object(o) => {
+                if let Some(c) = o.closure() {
+                    let bound = self.bind_args(&c.func, &c.name, args)?;
+                    return self.invoke_closure(c, bound, line);
+                }
+                self.method_call(f.clone(), "__invoke", args, line)
+            }
+            Value::Str(name) => {
+                let name = String::from_utf8_lossy(name).into_owned();
+                if let Some((class, method)) = name.split_once("::") {
+                    let class = crate::ast::ClassRef::Named(class.to_string());
+                    return self.static_call(&class, method, args, line);
+                }
+                self.call(name.trim_start_matches('\\'), args, line)
+            }
+            Value::Array(_) => {
+                let Some(c) = self.callable(&f)? else { return Err(Fatal::error("Array callback must have exactly two elements")) };
+                let vals = self.eval_args(args)?;
+                self.call_value(&c, vals, line)
+            }
+            _ => Err(Fatal::error("Value not callable")),
+        }
     }
 
     /// usort / uasort / uksort: sorts a copy with the user comparator, then stores it
@@ -1290,11 +1604,34 @@ impl<W: Write> Interp<W> {
         }
         Ok(Value::Array(Rc::new(out)))
     }
+
+    fn make_closure(&mut self, f: &Rc<FuncDecl>) -> EResult<Value> {
+        let mut bound = Vec::with_capacity(f.uses.len());
+        for (name, by_ref) in &f.uses {
+            if *by_ref {
+                let r = self.make_ref(&Path::var(name))?;
+                bound.push((name.clone(), Value::Ref(r)));
+            } else if f.kind == FuncKind::Arrow {
+                // Arrow functions capture only what exists; using anything else warns when called
+                if let Some(v) = self.frame().vars.get(name) {
+                    bound.push((name.clone(), v.copy_out()));
+                }
+            } else {
+                bound.push((name.clone(), self.lookup(name)));
+            }
+        }
+        let name = format!("{{closure:{}:{}}}", self.file, f.line);
+        // Closures created in a method keep its $this and class scope
+        let (this, scope) = (self.ctx().this.clone(), self.ctx().scope.clone());
+        let closure = Closure { func: f.clone(), bound, name, file: self.file.clone(), this, scope };
+        Ok(Value::Object(Object::new(self.classes["closure"].clone(), Internal::Closure(closure))))
+    }
 }
 
 enum Callable {
     User(Rc<FuncDecl>),
     Closure(Rc<Object>),
+    Method { this: Option<Rc<Object>>, method: Rc<Method>, class: Rc<ClassEntry> },
     Builtin(String),
 }
 
@@ -1317,50 +1654,14 @@ fn list(values: Vec<Value>) -> Value {
     Value::Array(Rc::new(PhpArray::from_values(values)))
 }
 
-/// getTrace(): one array per frame
-pub fn trace_array(frames: &[TraceFrame]) -> Value {
-    list(
-        frames
-            .iter()
-            .map(|f| {
-                let mut a = PhpArray::new();
-                a.insert(Key::from_bytes(b"file"), Value::str(f.file.clone()));
-                a.insert(Key::from_bytes(b"line"), Value::Int(f.line as i64));
-                a.insert(Key::from_bytes(b"function"), Value::str(f.function.clone()));
-                a.insert(Key::from_bytes(b"args"), list(f.args.clone()));
-                Value::Array(Rc::new(a))
-            })
-            .collect(),
-    )
-}
-
-/// `$obj->name` for reading. Only built-in objects exist so far, whose
-/// properties are all protected or private
-fn read_prop(o: &Value, name: &str, nullsafe: bool) -> EResult<Value> {
-    match o {
-        Value::Object(obj) => match &obj.kind {
-            ObjectKind::Closure(_) => Err(Fatal::error("Closure object cannot have properties")),
-            ObjectKind::Throwable(_) => {
-                let class = obj.class.name;
-                match name {
-                    "message" | "code" | "file" | "line" => {
-                        Err(Fatal::error(format!("Cannot access protected property {class}::${name}")))
-                    }
-                    "string" | "trace" | "previous" => {
-                        Err(Fatal::error(format!("Cannot access private property {class}::${name}")))
-                    }
-                    _ => {
-                        diag::warning(format!("Undefined property: {class}::${name}"));
-                        Ok(Value::Null)
-                    }
-                }
-            }
-        },
-        Value::Null if nullsafe => Ok(Value::Null),
-        other => {
-            diag::warning(format!("Attempt to read property \"{name}\" on {}", other.type_name()));
-            Ok(Value::Null)
-        }
+/// `(array)`: objects expose their properties under the mangled names
+fn cast_array(v: Value) -> Value {
+    match v {
+        Value::Array(_) => v,
+        Value::Null => Value::Array(Rc::new(PhpArray::new())),
+        Value::Object(ref o) if o.closure().is_some() => list(vec![v]),
+        Value::Object(o) => Value::Array(Rc::new(o.ordered_props().into_iter().collect())),
+        other => list(vec![other]),
     }
 }
 
@@ -1448,33 +1749,45 @@ fn unset_in(slot: &mut Value, dims: &[Option<Value>], last: Option<Value>) -> ER
     }
 }
 
-/// Non-strict-mode coercion of a value to a declared parameter or return type.
-/// Err hands the value back for the error message
-/// Whether a string names a user or built-in function (closures are checked by kind)
-fn names_callable(functions: &HashMap<String, Rc<FuncDecl>>, v: &Value) -> bool {
-    match v {
-        Value::Str(s) => {
-            let name = String::from_utf8_lossy(s).trim_start_matches('\\').to_ascii_lowercase();
-            functions.contains_key(&name) || builtins::exists(&name)
+/// What a type check needs to know about the calling context
+struct TypeCtx<'a> {
+    functions: &'a HashMap<String, Rc<FuncDecl>>,
+    classes: &'a HashMap<String, Rc<ClassEntry>>,
+    scope: Option<&'a ClassEntry>,
+    static_class: Option<&'a ClassEntry>,
+}
+
+impl TypeCtx<'_> {
+    /// Whether an object's class satisfies one member of a declared type
+    fn class_matches(&self, class: &ClassEntry, ty: &str) -> bool {
+        match ty {
+            "self" => self.scope.is_some_and(|s| class.is_subclass_of(s.name)),
+            "static" => self.static_class.is_some_and(|s| class.is_subclass_of(s.name)),
+            "parent" => self.scope.and_then(|s| s.parent.as_deref()).is_some_and(|p| class.is_subclass_of(p.name)),
+            "object" | "mixed" => true,
+            "callable" => class.name == "Closure" || class.find_method("__invoke").is_some(),
+            "iterable" => false,
+            _ => class.is_subclass_of(ty),
         }
-        Value::Object(o) => matches!(o.kind, ObjectKind::Closure(_)),
-        _ => false,
+    }
+
+    /// Whether a string names a user or built-in function, or `Class::method`
+    fn names_callable(&self, s: &[u8]) -> bool {
+        let name = String::from_utf8_lossy(s).trim_start_matches('\\').to_ascii_lowercase();
+        if let Some((class, method)) = name.split_once("::") {
+            return self.classes.get(class).is_some_and(|c| c.find_method(method).is_some());
+        }
+        self.functions.contains_key(&name) || builtins::exists(&name)
     }
 }
 
-fn coerce(v: Value, ty: &TypeHint, is_callable: &dyn Fn(&Value) -> bool) -> Result<Value, Value> {
+/// Non-strict-mode coercion of a value to a declared parameter or return type.
+/// Err hands the value back for the error message
+fn coerce(v: Value, ty: &TypeHint, ctx: &TypeCtx<'_>) -> Result<Value, Value> {
     if let Value::Object(o) = &v {
-        let ok = ty.allows("object")
-            || ty.types.iter().any(|t| o.class.is_subclass_of(t))
-            || ty.allows("callable") && is_callable(&v);
-        if ok {
+        if ty.types.iter().any(|t| ctx.class_matches(&o.class, t)) {
             return Ok(v);
         }
-        // Stringable objects pass for string in non-strict mode
-        if ty.allows("string")
-            && let Some(s) = object::to_string(o) {
-                return Ok(Value::str(s));
-            }
         return Err(v);
     }
     let actual = match &v {
@@ -1487,10 +1800,16 @@ fn coerce(v: Value, ty: &TypeHint, is_callable: &dyn Fn(&Value) -> bool) -> Resu
         Value::Array(_) => "array",
         Value::Object(_) | Value::Ref(_) => unreachable!("handled above or dereferenced before type checks"),
     };
+    let callable = ty.allows("callable")
+        && match &v {
+            Value::Str(s) => ctx.names_callable(s),
+            Value::Array(a) => a.len() == 2,
+            _ => false,
+        };
     let exact = ty.allows(actual)
         || matches!(v, Value::Bool(_)) && ty.allows("bool")
         || matches!(v, Value::Array(_)) && ty.allows("iterable")
-        || ty.allows("callable") && is_callable(&v);
+        || callable;
     if exact {
         return Ok(v);
     }
@@ -1538,12 +1857,12 @@ fn coerce(v: Value, ty: &TypeHint, is_callable: &dyn Fn(&Value) -> bool) -> Resu
     Err(v)
 }
 
-/// String conversion as done by echo, `.` and interpolation: arrays warn, and
-/// objects without a string form are an Error
+/// String conversion of non-object values: arrays warn. Objects need the
+/// interpreter (for __toString), see Interp::to_str
 pub fn to_str(v: &Value) -> EResult<Vec<u8>> {
     match v {
         Value::Array(_) => diag::warning("Array to string conversion"),
-        Value::Object(o) if o.throwable().is_none() => {
+        Value::Object(o) => {
             return Err(Fatal::error(format!("Object of class {} could not be converted to string", o.class.name)));
         }
         Value::Ref(r) => return value::with_deref(r, to_str),
@@ -1627,7 +1946,9 @@ fn string_offset(index: &Value) -> EResult<i64> {
             }
             (_, Numeric::No) => Err(Fatal::type_error("Cannot access offset of type string on string")),
         },
-        Value::Array(_) => Err(Fatal::type_error("Cannot access offset of type array on string")),
+        Value::Array(_) | Value::Object(_) => {
+            Err(Fatal::type_error(format!("Cannot access offset of type {} on string", index.type_name())))
+        }
         other => {
             diag::warning("String offset cast occurred");
             Ok(other.to_int())
@@ -1716,6 +2037,14 @@ fn loop_flow(flow: Flow) -> Option<Flow> {
 }
 
 fn binary(op: &str, l: &Value, r: &Value) -> EResult<Value> {
+    let v = binary_op(op, l, r)?;
+    if value::take_too_deep() {
+        return Err(Fatal::error("Nesting level too deep - recursive dependency?"));
+    }
+    Ok(v)
+}
+
+fn binary_op(op: &str, l: &Value, r: &Value) -> EResult<Value> {
     use Ordering::*;
     Ok(match op {
         "+" => value::add(l, r)?,

@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use crate::object::Visibility;
+
 /// An expression node. `line` is where the node starts, as in php-src's AST
 #[derive(Debug, Clone)]
 pub struct Expr {
@@ -36,13 +38,47 @@ pub enum ExprKind {
     CallValue(Box<Expr>, Vec<Arg>),
     /// `function () use ($x) {}` and `fn () => ...`
     Closure(Rc<FuncDecl>),
-    New(String, Vec<Arg>),
-    MethodCall { object: Box<Expr>, name: String, args: Vec<Arg>, nullsafe: bool },
-    Prop { object: Box<Expr>, name: String, nullsafe: bool },
-    InstanceOf(Box<Expr>, String),
+    New(ClassRef, Vec<Arg>),
+    MethodCall { object: Box<Expr>, name: Name, args: Vec<Arg>, nullsafe: bool },
+    Prop { object: Box<Expr>, name: Name, nullsafe: bool },
+    StaticCall { class: ClassRef, name: String, args: Vec<Arg> },
+    StaticProp { class: ClassRef, name: String },
+    /// `A::NAME`, including `A::class`
+    ClassConst { class: ClassRef, name: String },
+    InstanceOf(Box<Expr>, ClassRef),
+    Clone(Box<Expr>),
     Throw(Box<Expr>),
     Isset(Vec<Expr>),
     Empty(Box<Expr>),
+}
+
+/// A member name after `->`: literal, or `$name` / `{expr}` evaluated at runtime
+#[derive(Debug, Clone)]
+pub enum Name {
+    Lit(String),
+    Dyn(Box<Expr>),
+}
+
+/// The class part of `new X`, `X::m()`, `instanceof X`
+#[derive(Debug, Clone)]
+pub enum ClassRef {
+    Named(String),
+    SelfRef,
+    Parent,
+    Static,
+    /// `$obj::X`, `new $className`
+    Dynamic(Box<Expr>),
+}
+
+impl ClassRef {
+    pub fn from_name(name: &str) -> ClassRef {
+        match name.to_ascii_lowercase().as_str() {
+            "self" => ClassRef::SelfRef,
+            "parent" => ClassRef::Parent,
+            "static" => ClassRef::Static,
+            _ => ClassRef::Named(name.trim_start_matches('\\').to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -63,15 +99,16 @@ impl Expr {
         Expr { kind, line }
     }
 
-    /// Whether isset() accepts the expression: a variable or any offset access
+    /// Whether isset() accepts the expression: a variable, offset or property access
     pub fn is_variable(&self) -> bool {
-        matches!(self.kind, ExprKind::Var(_) | ExprKind::Index(..))
+        matches!(self.kind, ExprKind::Var(_) | ExprKind::Index(..) | ExprKind::Prop { .. } | ExprKind::StaticProp { .. })
     }
 
     /// Whether the expression can be assigned to
     pub fn is_lvalue(&self) -> bool {
         match &self.kind {
-            ExprKind::Var(_) => true,
+            ExprKind::Var(_) | ExprKind::StaticProp { .. } => true,
+            ExprKind::Prop { nullsafe, .. } => !nullsafe,
             ExprKind::Index(base, _) => base.is_lvalue(),
             _ => false,
         }
@@ -97,6 +134,29 @@ pub enum Stmt {
     /// `static $a = 1, $b;`
     StaticVar(Vec<(String, Option<Expr>)>),
     Try { body: Vec<Stmt>, catches: Vec<Catch>, finally: Option<Vec<Stmt>> },
+    Class(Rc<ClassDecl>),
+}
+
+#[derive(Debug)]
+pub struct ClassDecl {
+    pub name: String,
+    pub is_interface: bool,
+    pub is_abstract: bool,
+    pub is_final: bool,
+    pub is_readonly: bool,
+    pub parent: Option<String>,
+    /// For an interface, the interfaces it extends
+    pub interfaces: Vec<String>,
+    /// In declaration order, which decides property layout
+    pub members: Vec<Member>,
+    pub line: u32,
+}
+
+#[derive(Debug)]
+pub enum Member {
+    Const { name: String, value: Expr, vis: Visibility },
+    Prop { name: String, ty: Option<TypeHint>, default: Option<Expr>, vis: Visibility, is_static: bool, readonly: bool },
+    Method { func: Rc<FuncDecl>, vis: Visibility, is_static: bool, is_abstract: bool, is_final: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +174,7 @@ pub enum FuncKind {
     Closure,
     /// `fn () => expr`: captures used variables by value automatically
     Arrow,
+    Method,
 }
 
 #[derive(Debug)]
@@ -138,6 +199,8 @@ impl FuncDecl {
 
 #[derive(Debug)]
 pub struct Param {
+    /// Constructor promotion: `public readonly int $x`
+    pub promote: Option<(Visibility, bool)>,
     pub name: String,
     pub ty: Option<TypeHint>,
     pub default: Option<Expr>,

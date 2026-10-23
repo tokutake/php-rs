@@ -1,0 +1,48 @@
+Error: Typed property A::$typed must not be accessed before initialization
+Error: Cannot access protected property B::$prot
+
+Warning: Undefined property: B::$priv in class_errors.php on line 27
+NULL
+Error: Cannot modify readonly property A::$ro
+Error: Cannot unset readonly property A::$ro
+Error: Call to protected method A::protMethod() from global scope
+Error: Call to private method A::privMethod() from global scope
+Error: Call to private method A::privMethod() from scope B
+
+Warning: Undefined property: B::$priv in class_errors.php on line 21
+NULL
+string(4) "prot"
+Error: Cannot instantiate abstract class A
+Error: Cannot instantiate interface I
+Error: Class "Nope" not found
+Error: Non-static method A::inst() cannot be called statically
+Error: Call to undefined method B::nope()
+Error: Call to undefined method B::nope()
+Error: Undefined constant B::SECRET
+Error: Undefined constant B::NOPE
+Error: Cannot access private property B::$ps
+Error: Access to undeclared static property B::$nope
+
+Warning: Undefined property: B::$undefinedProp in class_errors.php on line 45
+NULL
+TypeError: Cannot assign string to property A::$typed of type int
+TypeError: Cannot assign string to property A::$typed of type int
+
+Deprecated: Creation of dynamic property B::$dynamic is deprecated in class_errors.php on line 48
+int(1)
+Error: Object of class B could not be converted to string
+Error: Object of class B could not be converted to string
+Error: Trying to clone an uncloneable object of class Exception
+Error: Cannot use a scalar value as an array
+Error: Attempt to assign property "prop" on null
+
+Warning: Attempt to read property "prop" on null in class_errors.php on line 54
+NULL
+Error: Call to a member function method() on null
+Error: Cannot use "self" in the global scope
+Error: Instantiation of class Closure is not allowed
+TypeError: Cannot use "::class" on int
+Error: Cannot indirectly modify readonly property Ro::$items
+Error: Cannot modify readonly property Ro::$items
+int(7)
+TypeError: Cannot assign string to property Typed2::$count of type ?int

@@ -5,11 +5,17 @@ use std::rc::Rc;
 
 use crate::array::{Key, PhpArray};
 use crate::diag;
-use crate::object::{self, Visibility};
-use crate::interp::{to_key, to_str, EResult, Fatal};
+use crate::object::{unmangle, Internal, Object, Visibility};
+use crate::interp::{to_key, EResult, Fatal};
 use crate::value::{
     float_fits_int, float_to_int_implicit, format_float_repr, loose_cmp, parse_numeric, with_deref, Num, Numeric, Value,
 };
+
+/// What built-ins need from the interpreter: converting objects to strings runs
+/// their __toString, which is PHP code
+pub trait Runtime {
+    fn stringify(&mut self, v: &Value) -> EResult<Vec<u8>>;
+}
 
 /// Built-ins whose first parameter is by reference
 pub const BY_REF: &[&str] = &["sort", "rsort", "array_push", "array_pop"];
@@ -24,7 +30,11 @@ const NAMES: &[&str] = &[
     "array_key_exists", "key_exists", "range", "sort", "rsort", "array_push", "array_pop",
     "usort", "uasort", "uksort", "print", "var_dump", "print_r", "func_get_args", "func_num_args",
     "function_exists", "is_callable", "call_user_func", "call_user_func_array", "array_map",
-    "array_filter", "get_class", "is_object", "gettype",
+    "array_filter", "get_class", "is_object", "gettype", "get_parent_class", "get_called_class",
+    "get_object_vars", "method_exists", "property_exists", "class_exists", "interface_exists", "is_a",
+    "is_subclass_of", "spl_object_id", "spl_object_hash", "strtoupper", "strtolower", "ucfirst", "lcfirst",
+    "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
+    "substr",
 ];
 
 pub fn exists(lname: &str) -> bool {
@@ -107,16 +117,19 @@ pub fn arg_int(fname: &str, n: usize, param: &str, v: &Value) -> EResult<i64> {
 }
 
 /// Coerces an argument to a `string` parameter
-pub fn arg_str(fname: &str, n: usize, param: &str, v: &Value) -> EResult<Vec<u8>> {
+pub fn arg_str(rt: &mut dyn Runtime, fname: &str, n: usize, param: &str, v: &Value) -> EResult<Vec<u8>> {
     match v {
         Value::Null => {
             null_param(fname, n, param, "string");
             Ok(Vec::new())
         }
         // Stringable objects convert; others are a type error
-        Value::Object(o) => object::to_string(o).ok_or_else(|| param_type_error(fname, n, param, "string", v)),
-        Value::Array(_) => Err(param_type_error(fname, n, param, "string", v)),
-        Value::Ref(r) => with_deref(r, |inner| arg_str(fname, n, param, inner)),
+        Value::Object(o) if o.class.find_method("__tostring").is_some() => rt.stringify(v),
+        Value::Object(_) | Value::Array(_) => Err(param_type_error(fname, n, param, "string", v)),
+        Value::Ref(r) => {
+            let inner = with_deref(r, Value::clone);
+            arg_str(rt, fname, n, param, &inner)
+        }
         _ => Ok(v.to_bytes()),
     }
 }
@@ -137,15 +150,81 @@ fn list(values: impl IntoIterator<Item = Value>) -> Value {
     Value::Array(Rc::new(PhpArray::from_values(values)))
 }
 
-pub fn call(name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
+pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
     match lname {
+        "strtoupper" | "strtolower" | "ucfirst" | "lcfirst" | "strrev" => {
+            let [s] = args::<1, 1>(name, vals)?;
+            let mut s = arg_str(rt, lname, 1, "string", &s.unwrap())?;
+            // ASCII only, like PHP 8's locale-independent case functions
+            match lname {
+                "strtoupper" => s.make_ascii_uppercase(),
+                "strtolower" => s.make_ascii_lowercase(),
+                "ucfirst" => s.first_mut().into_iter().for_each(u8::make_ascii_uppercase),
+                "lcfirst" => s.first_mut().into_iter().for_each(u8::make_ascii_lowercase),
+                _ => s.reverse(),
+            }
+            Ok(Value::str(s))
+        }
+        "trim" | "ltrim" | "rtrim" | "chop" => {
+            let [s, chars] = args::<1, 2>(name, vals)?;
+            let s = arg_str(rt, lname, 1, "string", &s.unwrap())?;
+            let chars = match chars {
+                Some(c) => arg_str(rt, lname, 2, "characters", &c)?,
+                None => b" \n\r\t\x0b\0".to_vec(),
+            };
+            let strip = |b: &u8| chars.contains(b);
+            let start = if lname == "rtrim" || lname == "chop" { 0 } else { s.iter().position(|b| !strip(b)).unwrap_or(s.len()) };
+            let end = if lname == "ltrim" { s.len() } else { s.iter().rposition(|b| !strip(b)).map_or(start, |i| i + 1) };
+            Ok(Value::str(s[start..end.max(start)].to_vec()))
+        }
+        "str_contains" | "str_starts_with" | "str_ends_with" => {
+            let [h, n] = args::<2, 2>(name, vals)?;
+            let h = arg_str(rt, lname, 1, "haystack", &h.unwrap())?;
+            let n = arg_str(rt, lname, 2, "needle", &n.unwrap())?;
+            Ok(Value::Bool(match lname {
+                "str_starts_with" => h.starts_with(&n),
+                "str_ends_with" => h.ends_with(&n),
+                _ => n.is_empty() || h.windows(n.len()).any(|w| w == n.as_slice()),
+            }))
+        }
+        "strpos" => {
+            let [h, n, off] = args::<2, 3>(name, vals)?;
+            let h = arg_str(rt, lname, 1, "haystack", &h.unwrap())?;
+            let n = arg_str(rt, lname, 2, "needle", &n.unwrap())?;
+            let off = match off {
+                Some(o) => arg_int(lname, 3, "offset", &o)?,
+                None => 0,
+            };
+            // Negative offsets count from the end; checked so i64::MIN cannot overflow
+            let start = if off < 0 { (h.len() as i64).checked_add(off) } else { Some(off) };
+            let Some(start) = start.filter(|&s| s >= 0 && s as usize <= h.len()).map(|s| s as usize) else {
+                return Err(Fatal::value_error("strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"));
+            };
+            let found = if n.is_empty() { Some(0) } else { h[start..].windows(n.len()).position(|w| w == n.as_slice()) };
+            Ok(found.map_or(Value::Bool(false), |i| Value::Int((start + i) as i64)))
+        }
+        "substr" => {
+            let [s, off, len] = args::<2, 3>(name, vals)?;
+            let s = arg_str(rt, lname, 1, "string", &s.unwrap())?;
+            let n = s.len() as i64;
+            let off = arg_int(lname, 2, "offset", &off.unwrap())?;
+            let start = if off < 0 { n.saturating_add(off).max(0) } else { off.min(n) };
+            let end = match len {
+                None | Some(Value::Null) => n,
+                Some(l) => {
+                    let l = arg_int(lname, 3, "length", &l)?;
+                    if l < 0 { n.saturating_add(l).max(start) } else { start.saturating_add(l).min(n) }
+                }
+            };
+            Ok(Value::str(s[start as usize..end.max(start) as usize].to_vec()))
+        }
         "strlen" => {
             let [s] = args::<1, 1>(name, vals)?;
-            Ok(Value::Int(arg_str(lname, 1, "string", &s.unwrap())?.len() as i64))
+            Ok(Value::Int(arg_str(rt, lname, 1, "string", &s.unwrap())?.len() as i64))
         }
         "str_repeat" => {
             let [s, n] = args::<2, 2>(name, vals)?;
-            let s = arg_str(lname, 1, "string", &s.unwrap())?;
+            let s = arg_str(rt, lname, 1, "string", &s.unwrap())?;
             let n = arg_int(lname, 2, "times", &n.unwrap())?;
             if n < 0 {
                 return Err(Fatal::value_error("str_repeat(): Argument #2 ($times) must be greater than or equal to 0"));
@@ -178,16 +257,6 @@ pub fn call(name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
                 ))),
             }
         }
-        "get_class" => {
-            let [v] = args::<1, 1>(name, vals)?;
-            match v.unwrap() {
-                Value::Object(o) => Ok(Value::str(o.class.name)),
-                other => Err(Fatal::type_error(format!(
-                    "get_class(): Argument #1 ($object) must be of type object, {} given",
-                    other.type_name()
-                ))),
-            }
-        }
         "is_object" => {
             let [v] = args::<1, 1>(name, vals)?;
             Ok(Value::Bool(matches!(v.unwrap(), Value::Object(_))))
@@ -213,8 +282,8 @@ pub fn call(name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
             let [a, b] = args::<1, 2>(name, vals)?;
             let (sep, arr) = match (a.unwrap(), b) {
                 (Value::Array(arr), None) => (Vec::new(), arr),
-                (sep, Some(Value::Array(arr))) => (arg_str(lname, 1, "separator", &sep)?, arr),
-                (Value::Array(arr), Some(sep)) => (arg_str(lname, 2, "array", &sep)?, arr),
+                (sep, Some(Value::Array(arr))) => (arg_str(rt, lname, 1, "separator", &sep)?, arr),
+                (Value::Array(arr), Some(sep)) => (arg_str(rt, lname, 2, "array", &sep)?, arr),
                 (_, None) => {
                     return Err(Fatal::type_error(format!(
                         "{lname}(): Argument #1 ($array) must be of type array, string given"
@@ -232,14 +301,14 @@ pub fn call(name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
                 if i > 0 {
                     out.extend_from_slice(&sep);
                 }
-                out.extend_from_slice(&to_str(v)?);
+                out.extend_from_slice(&rt.stringify(&v.copy_out())?);
             }
             Ok(Value::str(out))
         }
         "explode" => {
             let [sep, s, limit] = args::<2, 3>(name, vals)?;
-            let sep = arg_str(lname, 1, "separator", &sep.unwrap())?;
-            let s = arg_str(lname, 2, "string", &s.unwrap())?;
+            let sep = arg_str(rt, lname, 1, "separator", &sep.unwrap())?;
+            let s = arg_str(rt, lname, 2, "string", &s.unwrap())?;
             let limit = match limit {
                 Some(l) => arg_int(lname, 3, "limit", &l)?,
                 None => i64::MAX,
@@ -500,17 +569,73 @@ fn container_addr(v: &Value) -> Option<usize> {
     }
 }
 
-fn dump_key(out: &mut Vec<u8>, pad: &str, key: &[u8], vis: Option<&Visibility>) {
+fn dump_key(out: &mut Vec<u8>, pad: &str, key: &[u8], vis: Visibility, class: Option<&str>) {
     out.extend_from_slice(pad.as_bytes());
     out.extend_from_slice(b"[\"");
     out.extend_from_slice(key);
     out.push(b'"');
-    match vis {
-        Some(Visibility::Protected) => out.extend_from_slice(b":protected"),
-        Some(Visibility::Private(class)) => out.extend_from_slice(format!(":\"{class}\":private").as_bytes()),
+    match (vis, class) {
+        (Visibility::Protected, _) => out.extend_from_slice(b":protected"),
+        (Visibility::Private, Some(class)) => out.extend_from_slice(format!(":\"{class}\":private").as_bytes()),
         _ => {}
     }
     out.extend_from_slice(b"]=>\n");
+}
+
+/// A property as debug output shows it; `value` is None for an uninitialized typed one
+struct DebugProp {
+    key: Key,
+    value: Option<Value>,
+    ty: String,
+}
+
+/// Properties in var_dump order: declared ones in layout order (uninitialized
+/// typed ones included), then dynamic ones. Closures show what they capture
+fn debug_props(o: &Object) -> Vec<DebugProp> {
+    let prop = |name: &str, value: Value| DebugProp { key: Key::Str(name.as_bytes().into()), value: Some(value), ty: String::new() };
+    if let Internal::Closure(c) = &o.internal {
+        let mut props = vec![
+            prop("name", Value::str(c.name.clone())),
+            prop("file", Value::str(c.file.clone())),
+            prop("line", Value::Int(c.func.line as i64)),
+        ];
+        if !c.bound.is_empty() {
+            let vars = c.bound.iter().map(|(k, v)| (Key::from_bytes(k.as_bytes()), v.clone())).collect();
+            props.push(prop("static", Value::Array(Rc::new(vars))));
+        }
+        if let Some(this) = &c.this {
+            props.push(prop("this", Value::Object(this.clone())));
+        }
+        if !c.func.params.is_empty() {
+            let params = c
+                .func
+                .params
+                .iter()
+                .map(|p| {
+                    let name = format!("{}${}", if p.by_ref { "&" } else { "" }, p.name);
+                    let kind = if p.default.is_some() || p.variadic { "<optional>" } else { "<required>" };
+                    (Key::from_bytes(name.as_bytes()), Value::str(kind))
+                })
+                .collect();
+            props.push(prop("parameter", Value::Array(Rc::new(params))));
+        }
+        return props;
+    }
+    let Ok(stored) = o.props.try_borrow() else { return Vec::new() };
+    let mut out = Vec::new();
+    for p in &o.class.props {
+        let value = stored.get(&p.key).cloned();
+        if value.is_some() || p.ty.is_some() {
+            let ty = p.ty.as_ref().map_or(String::new(), |t| t.display.clone());
+            out.push(DebugProp { key: p.key.clone(), value, ty });
+        }
+    }
+    for (k, v) in stored.iter() {
+        if !o.class.props.iter().any(|p| &p.key == k) {
+            out.push(DebugProp { key: k.clone(), value: Some(v.clone()), ty: String::new() });
+        }
+    }
+    out
 }
 
 /// `visiting` holds the containers being printed, to cut cycles made through
@@ -559,7 +684,7 @@ fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<us
             for (k, v) in arr.iter() {
                 match k {
                     Key::Int(i) => out.extend_from_slice(format!("{key_pad}[{i}]=>\n").as_bytes()),
-                    Key::Str(s) => dump_key(out, &key_pad, s, None),
+                    Key::Str(s) => dump_key(out, &key_pad, s, Visibility::Public, None),
                 }
                 var_dump_at(out, v, level + 2, visiting);
             }
@@ -568,12 +693,17 @@ fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<us
             out.extend_from_slice(b"}\n");
         }
         Value::Object(o) => {
-            let props = object::debug_props(o);
-            out.extend_from_slice(format!("object({})#{} ({}) {{\n", o.class.name, o.id, props.len()).as_bytes());
+            let props = debug_props(o);
+            let count = props.iter().filter(|p| p.value.is_some()).count();
+            out.extend_from_slice(format!("object({})#{} ({count}) {{\n", o.class.name, o.id).as_bytes());
             visiting.push(Rc::as_ptr(o) as usize);
-            for (name, vis, v) in &props {
-                dump_key(out, &key_pad, name.as_bytes(), Some(vis));
-                var_dump_at(out, v, level + 2, visiting);
+            for p in &props {
+                let (name, vis, class) = unmangle(&p.key);
+                dump_key(out, &key_pad, name.as_bytes(), vis, class.as_deref());
+                match &p.value {
+                    Some(v) => var_dump_at(out, v, level + 2, visiting),
+                    None => out.extend_from_slice(format!("{}uninitialized({})\n", " ".repeat(level + 1), p.ty).as_bytes()),
+                }
             }
             visiting.pop();
             out.extend_from_slice(pad.as_bytes());
@@ -618,15 +748,16 @@ fn print_r_at(out: &mut Vec<u8>, v: &Value, indent: usize, visiting: &mut Vec<us
         }
         Value::Object(o) => {
             out.extend_from_slice(format!("{} Object\n", o.class.name).as_bytes());
-            object::debug_props(o)
+            debug_props(o)
                 .into_iter()
-                .map(|(name, vis, v)| {
+                .filter_map(|p| {
+                    let (name, vis, class) = unmangle(&p.key);
                     let key = match vis {
                         Visibility::Public => name,
                         Visibility::Protected => format!("{name}:protected"),
-                        Visibility::Private(class) => format!("{name}:{class}:private"),
+                        Visibility::Private => format!("{name}:{}:private", class.unwrap_or_default()),
                     };
-                    (key.into_bytes(), v)
+                    Some((key.into_bytes(), p.value?))
                 })
                 .collect()
         }

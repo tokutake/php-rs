@@ -200,6 +200,22 @@ impl<'a> Lexer<'a> {
                     self.bump();
                 }
                 Some(b'#') if self.peek_at(1) != Some(b'[') => self.line_comment(),
+                // Attributes are accepted and ignored for now
+                Some(b'#') => {
+                    let mut depth = 0;
+                    while let Some(c) = self.bump() {
+                        match c {
+                            b'[' => depth += 1,
+                            b']' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 Some(b'/') if self.peek_at(1) == Some(b'/') => self.line_comment(),
                 Some(b'/') if self.peek_at(1) == Some(b'*') => {
                     self.pos += 2;

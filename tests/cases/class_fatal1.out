@@ -1,0 +1,5 @@
+start
+
+Fatal error: Class Dog contains 2 abstract methods and must therefore be declared abstract or implement the remaining methods (Animal::legs, Speaks::listen) in class_fatal1.php on line 5
+Stack trace:
+#0 {main}

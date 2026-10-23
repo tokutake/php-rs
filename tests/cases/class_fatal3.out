@@ -1,0 +1,4 @@
+
+Fatal error: Cannot override final method P::f() in class_fatal3.php on line 3
+Stack trace:
+#0 {main}

@@ -1,0 +1,4 @@
+
+Fatal error: Class Breaker cannot extend final class Locked in class_fatal2.php on line 3
+Stack trace:
+#0 {main}
