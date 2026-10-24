@@ -298,7 +298,7 @@ impl<W: Write> Interp<W> {
         }
         let ty = class.backing.clone().expect("only backed enums have from()");
         let err = |v: &Value, _: &str| {
-            Fatal::type_error(format!("{fname}(): Argument #1 ($value) must be of type {}, {} given", ty.display, v.type_name()))
+            Fatal::type_error(format!("{fname}(): Argument #1 ($value) must be of type {}, {} given", ty.display, v.value_name()))
         };
         let v = self.check_param(vals.into_iter().next().unwrap(), Some(&ty), &err)?;
         for case in cases {
@@ -810,7 +810,7 @@ impl<W: Write> Interp<W> {
                 Some(other) => {
                     return Err(Fatal::type_error(format!(
                         "{fname}(): Argument #3 ($previous) must be of type ?Throwable, {} given",
-                        other.type_name()
+                        other.value_name()
                     )))
                 }
             }
@@ -997,7 +997,7 @@ impl<W: Write> Interp<W> {
         let err = |v: &Value, _: &str| {
             Fatal::type_error(format!(
                 "Cannot assign {} to property {}::${} of type {}",
-                v.type_name(),
+                v.value_name(),
                 p.class,
                 p.name,
                 ty.display
@@ -1264,7 +1264,7 @@ impl<W: Write> Interp<W> {
                 Some(other) => {
                     return Err(Fatal::type_error(format!(
                         "get_class(): Argument #1 ($object) must be of type object, {} given",
-                        other.type_name()
+                        other.value_name()
                     )))
                 }
             },

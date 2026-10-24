@@ -142,6 +142,7 @@ pub fn parse(tokens: Vec<Token>) -> PResult<Vec<Stmt>> {
     let mut stmts = Vec::new();
     while !p.at(&Tok::Eof) {
         stmts.push(p.statement()?);
+        p.seen_stmt = true;
     }
     Ok(stmts)
 }
@@ -158,6 +159,8 @@ struct Parser {
     /// Inside the items of `[...]` / `list(...)`, where a skipped element may
     /// belong to a list pattern that is only recognized at the outer `=`
     in_items: u32,
+    /// Whether a top-level statement has been parsed, for `declare(strict_types=1)`
+    seen_stmt: bool,
 }
 
 /// What kind of declaration a class member belongs to
@@ -177,7 +180,7 @@ enum FuncCtx {
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, depth: 0, class: None, in_trait: false, func: None, in_items: 0 }
+        Parser { tokens, pos: 0, depth: 0, class: None, in_trait: false, func: None, in_items: 0, seen_stmt: false }
     }
 
     /// Runs `f` with `func` as the enclosing function
@@ -307,7 +310,7 @@ impl Parser {
                 "while" => {
                     self.next();
                     let cond = self.paren_expr()?;
-                    let body = self.body()?;
+                    let body = self.body_or_alt("endwhile")?;
                     Ok(Stmt::While(cond, body))
                 }
                 "do" => {
@@ -323,6 +326,7 @@ impl Parser {
                 "for" => self.for_statement(),
                 "foreach" => self.foreach_statement(),
                 "switch" => self.switch_statement(),
+                "declare" => self.declare_statement(),
                 "const" if matches!(self.peek_at(1), Tok::Ident(_)) => {
                     self.next();
                     let mut consts = Vec::new();
@@ -453,6 +457,29 @@ impl Parser {
         Ok(e)
     }
 
+    /// A loop body, either a statement or the alternative syntax `: ... endwhile;`
+    fn body_or_alt(&mut self, end: &str) -> PResult<Vec<Stmt>> {
+        if !self.eat(&Tok::Op(":")) {
+            return self.body();
+        }
+        let body = self.alt_block(&[end])?;
+        self.next();
+        self.end_statement()?;
+        Ok(body)
+    }
+
+    /// Statements up to (not including) one of the given keywords
+    fn alt_block(&mut self, ends: &[&str]) -> PResult<Vec<Stmt>> {
+        let mut body = Vec::new();
+        while !ends.iter().any(|e| self.at_kw(e)) {
+            if self.at(&Tok::Eof) {
+                return self.unexpected();
+            }
+            body.push(self.statement()?);
+        }
+        Ok(body)
+    }
+
     /// Body of a control structure, normalized to Vec<Stmt> for both blocks and single statements
     fn body(&mut self) -> PResult<Vec<Stmt>> {
         match self.statement()? {
@@ -463,7 +490,11 @@ impl Parser {
 
     fn if_statement(&mut self) -> PResult<Stmt> {
         self.next();
-        let mut branches = vec![(self.paren_expr()?, self.body()?)];
+        let cond = self.paren_expr()?;
+        if self.eat(&Tok::Op(":")) {
+            return self.alt_if(cond);
+        }
+        let mut branches = vec![(cond, self.body()?)];
         let mut else_body = None;
         loop {
             if self.eat_kw("elseif") {
@@ -482,6 +513,27 @@ impl Parser {
         Ok(Stmt::If(branches, else_body))
     }
 
+    /// `if (...): ... elseif (...): ... else: ... endif;` after the first condition and colon
+    fn alt_if(&mut self, cond: Expr) -> PResult<Stmt> {
+        const ENDS: &[&str] = &["elseif", "else", "endif"];
+        let mut branches = vec![(cond, self.alt_block(ENDS)?)];
+        let mut else_body = None;
+        loop {
+            if self.eat_kw("elseif") {
+                let cond = self.paren_expr()?;
+                self.expect(Tok::Op(":"))?;
+                branches.push((cond, self.alt_block(ENDS)?));
+            } else if self.eat_kw("else") {
+                self.expect(Tok::Op(":"))?;
+                else_body = Some(self.alt_block(&["endif"])?);
+            } else {
+                self.next();
+                self.end_statement()?;
+                return Ok(Stmt::If(branches, else_body));
+            }
+        }
+    }
+
     fn for_statement(&mut self) -> PResult<Stmt> {
         self.next();
         self.expect(Tok::Op("("))?;
@@ -491,17 +543,70 @@ impl Parser {
         self.expect(Tok::Semicolon)?;
         let step = self.expr_list(&Tok::Op(")"))?;
         self.expect(Tok::Op(")"))?;
-        let body = self.body()?;
+        let body = self.body_or_alt("endfor")?;
         Ok(Stmt::For(init, cond, step, body))
+    }
+
+    /// `declare(strict_types=1);`. Other directives (ticks, encoding) have no effect here
+    fn declare_statement(&mut self) -> PResult<Stmt> {
+        let line = self.line();
+        self.next();
+        self.expect(Tok::Op("("))?;
+        let mut strict = None;
+        loop {
+            let name = self.class_name()?;
+            self.expect(Tok::Op("="))?;
+            let value = self.expr()?;
+            if name.eq_ignore_ascii_case("strict_types") {
+                let ExprKind::Int(v @ (0 | 1)) = value.kind else {
+                    return Err(ParseError { msg: "strict_types declaration must have 0 or 1 as its value".into(), line });
+                };
+                if self.seen_stmt || self.depth > 1 {
+                    let msg = "strict_types declaration must be the very first statement in the script".into();
+                    return Err(ParseError { msg, line });
+                }
+                strict = Some(v == 1);
+            }
+            if !self.eat(&Tok::Op(",")) {
+                break;
+            }
+        }
+        self.expect(Tok::Op(")"))?;
+        if let Some(strict) = strict {
+            if !self.at(&Tok::Semicolon) {
+                let msg = "strict_types declaration must not use block mode".into();
+                return Err(ParseError { msg, line });
+            }
+            self.next();
+            return Ok(Stmt::StrictTypes(strict));
+        }
+        if self.eat(&Tok::Op(":")) {
+            let body = self.alt_block(&["enddeclare"])?;
+            self.next();
+            self.end_statement()?;
+            return Ok(Stmt::Block(body));
+        }
+        self.statement()
     }
 
     fn switch_statement(&mut self) -> PResult<Stmt> {
         self.next();
         let subject = self.paren_expr()?;
-        self.expect(Tok::Op("{"))?;
+        let alt = self.eat(&Tok::Op(":"));
+        if !alt {
+            self.expect(Tok::Op("{"))?;
+        }
+        let close = |p: &mut Self| if alt { p.at_kw("endswitch") } else { p.at(&Tok::Op("}")) };
         let mut cases = Vec::new();
         let mut has_default = false;
-        while !self.eat(&Tok::Op("}")) {
+        loop {
+            if close(self) {
+                self.next();
+                if alt {
+                    self.end_statement()?;
+                }
+                break;
+            }
             let line = self.line();
             let cond = if self.eat_kw("case") {
                 Some(self.expr()?)
@@ -518,7 +623,7 @@ impl Parser {
                 self.expect(Tok::Semicolon)?;
             }
             let mut body = Vec::new();
-            while !self.at_kw("case") && !self.at_kw("default") && !self.at(&Tok::Op("}")) {
+            while !self.at_kw("case") && !self.at_kw("default") && !close(self) {
                 if self.at(&Tok::Eof) {
                     return self.unexpected();
                 }
@@ -554,7 +659,7 @@ impl Parser {
             });
         }
         self.expect(Tok::Op(")"))?;
-        let body = self.body()?;
+        let body = self.body_or_alt("endforeach")?;
         Ok(Stmt::Foreach { subject, key, value, by_ref, body })
     }
 

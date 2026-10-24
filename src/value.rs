@@ -304,6 +304,16 @@ impl Value {
         }
     }
 
+    /// Like type_name, but true and false by value, as type errors name them
+    pub fn value_name(&self) -> &'static str {
+        match self {
+            Value::Bool(true) => "true",
+            Value::Bool(false) => "false",
+            Value::Ref(r) => with_deref(r, Value::value_name),
+            other => other.type_name(),
+        }
+    }
+
     /// The value to store elsewhere when reading a slot: references are followed
     pub fn copy_out(&self) -> Value {
         match self {

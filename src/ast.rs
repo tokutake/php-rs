@@ -175,6 +175,8 @@ pub enum Stmt {
     Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
     /// `const A = 1, B = 2;` at the top level
     Const(Vec<(String, Expr)>),
+    /// `declare(strict_types=1)`, which can only be the first statement
+    StrictTypes(bool),
 }
 
 #[derive(Debug)]
