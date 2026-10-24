@@ -221,6 +221,7 @@ pub enum Internal {
 
 #[derive(Debug, Clone)]
 pub struct TraceFrame {
+    /// Empty for a call made by a built-in function (`[internal function]`)
     pub file: String,
     pub line: u32,
     pub function: String,
@@ -496,7 +497,8 @@ pub fn trace_string(frames: &[TraceFrame]) -> String {
     for (i, f) in frames.iter().enumerate() {
         let args: Vec<String> = f.args.iter().map(trace_arg).collect();
         let class = f.class.as_ref().map_or(String::new(), |(c, t)| format!("{c}{t}"));
-        out.push_str(&format!("#{i} {}({}): {class}{}({})\n", f.file, f.line, f.function, args.join(", ")));
+        let place = if f.file.is_empty() { "[internal function]".to_string() } else { format!("{}({})", f.file, f.line) };
+        out.push_str(&format!("#{i} {place}: {class}{}({})\n", f.function, args.join(", ")));
     }
     out.push_str(&format!("#{} {{main}}", frames.len()));
     out
@@ -507,8 +509,10 @@ pub fn trace_array(frames: &[TraceFrame]) -> Value {
     let rows = frames.iter().map(|f| {
         let mut a = PhpArray::new();
         let mut put = |k: &str, v: Value| a.insert(Key::from_bytes(k.as_bytes()), v);
-        put("file", Value::str(f.file.clone()));
-        put("line", Value::Int(f.line as i64));
+        if !f.file.is_empty() {
+            put("file", Value::str(f.file.clone()));
+            put("line", Value::Int(f.line as i64));
+        }
         put("function", Value::str(f.function.clone()));
         if let Some((class, call)) = &f.class {
             put("class", Value::str(class.clone()));

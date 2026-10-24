@@ -14,6 +14,24 @@ use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, ListItem, M
 use crate::builtins::{self, Runtime};
 use crate::diag;
 use crate::object::{self, ClassEntry, Closure, Internal, Method, Object, TraceFrame};
+
+/// Built-ins that php-src compiles to dedicated opcodes when called directly
+/// with this many arguments, so they get no frame in stack traces
+fn compiled_inline(lname: &str, args: &[Arg]) -> bool {
+    if args.iter().any(|a| a.spread) {
+        return false;
+    }
+    match lname {
+        "strlen" | "is_null" | "is_bool" | "is_long" | "is_int" | "is_integer" | "is_float" | "is_double"
+        | "is_string" | "is_array" | "is_object" | "is_resource" | "is_scalar" | "boolval" | "intval" | "floatval"
+        | "doubleval" | "strval" | "defined" | "chr" | "ord" | "count" | "sizeof" | "gettype" => args.len() == 1,
+        "get_class" => args.len() <= 1,
+        "get_called_class" | "func_num_args" | "func_get_args" => args.is_empty(),
+        "array_key_exists" | "call_user_func_array" => args.len() == 2,
+        "call_user_func" => !args.is_empty(),
+        _ => false,
+    }
+}
 use crate::value::{self, float_fits_int, float_to_int_implicit, loose_cmp, parse_numeric, ArithError, Num, Numeric, Value};
 
 /// PHP code recursing deeper than this gets an Error instead of overflowing the
@@ -218,6 +236,9 @@ pub struct Interp<W: Write> {
     /// Magic accessors running per (object id, property, kind), so that
     /// `$this->x` inside `__get('x')` reads the property instead of recursing
     magic_guard: HashSet<(u32, String, u8)>,
+    /// Built-in calls in progress, with the number of PHP frames when each was
+    /// made, so stack traces can show them between the PHP frames
+    internal_calls: Vec<(usize, TraceFrame)>,
 }
 
 fn recursive_reference() -> Fatal {
@@ -232,7 +253,13 @@ impl<W: Write> Runtime for Interp<W> {
 
 impl<W: Write> Interp<W> {
     pub fn new(out: W, file: String) -> Self {
-        let main = Frame { vars: Vars::default(), func: None, ctx: CallCtx::default(), call_line: 0, args: Vec::new() };
+        let main = Frame {
+            vars: Vars::default(),
+            func: None,
+            ctx: CallCtx::default(),
+            call_line: 0,
+            args: Vec::new(),
+        };
         Interp {
             out,
             file,
@@ -243,6 +270,7 @@ impl<W: Write> Interp<W> {
             classes: object::builtin_classes(),
             declared: HashSet::new(),
             magic_guard: HashSet::new(),
+            internal_calls: Vec::new(),
         }
     }
 
@@ -1270,14 +1298,45 @@ impl<W: Write> Interp<W> {
             }
             let path = self.path(&first.value)?;
             let vals = self.eval_args(rest)?;
-            if lname.starts_with('u') {
-                return self.user_sort(&lname, &path, vals, line);
-            }
-            return self.with_place(&path, false, true, |place| builtins::call_by_ref(&lname, place, vals));
+            let mut shown = vec![self.with_place(&path, false, true, |slot| Ok(slot.clone()))?];
+            shown.extend(vals.iter().cloned());
+            return self.internal_call(lname.clone(), None, shown, line, |this| {
+                if lname.starts_with('u') {
+                    return this.user_sort(&lname, &path, vals, line);
+                }
+                this.with_place(&path, false, true, |place| builtins::call_by_ref(&lname, place, vals))
+            });
         }
 
         let vals = self.eval_args(args)?;
-        self.call_builtin(name, &lname, vals, line)
+        if compiled_inline(&lname, args) || lname == "print" || !builtins::exists(&lname) {
+            return self.call_builtin(name, &lname, vals, line);
+        }
+        self.internal_call(lname.clone(), None, vals.clone(), line, |this| this.call_builtin(name, &lname, vals, line))
+    }
+
+    /// Runs a built-in as php-src's internal call frame: an error the built-in
+    /// raises itself gets a stack trace starting with that frame
+    fn internal_call<T>(
+        &mut self,
+        function: String,
+        class: Option<(String, &'static str)>,
+        args: Vec<Value>,
+        line: u32,
+        f: impl FnOnce(&mut Self) -> EResult<T>,
+    ) -> EResult<T> {
+        let frame = TraceFrame { file: self.file.clone(), line, function, class, args };
+        self.internal_calls.push((self.frames.len(), frame));
+        let result = f(self).map_err(|mut e| {
+            if e.object.is_none() && e.trace.is_none() && !e.uncatchable {
+                // The error belongs to the line of the call
+                e.line = Some(e.line.unwrap_or(line));
+                e.trace = Some(self.trace());
+            }
+            e
+        });
+        self.internal_calls.pop();
+        result
     }
 
     /// Built-ins called with evaluated arguments
@@ -1593,20 +1652,43 @@ impl<W: Write> Interp<W> {
         coerce(v, ty, &tc).map_err(|v| err(&v, &self.file))
     }
 
-    /// The stack trace of the current call frames, innermost first
+    /// The stack trace of the current call frames, innermost first. Built-in
+    /// calls in progress sit between the frames; anything a built-in calls
+    /// shows as called from `[internal function]`
     fn trace(&self) -> Vec<TraceFrame> {
-        self.frames
-            .iter()
-            .skip(1)
-            .rev()
-            .map(|f| TraceFrame {
-                file: self.file.clone(),
+        let calls = &self.internal_calls;
+        // Whether something at this depth was called by one of the first `n` built-in calls
+        let by_builtin = |depth: usize, n: usize| calls[..n].iter().any(|(d, _)| *d == depth);
+        let builtin_frame = |i: usize| {
+            let (depth, f) = &calls[i];
+            let mut f = f.clone();
+            if by_builtin(*depth, i) {
+                f.file.clear();
+            }
+            f
+        };
+        let mut out = Vec::new();
+        let mut pending = calls.len();
+        for i in (1..self.frames.len()).rev() {
+            while pending > 0 && calls[pending - 1].0 > i {
+                pending -= 1;
+                out.push(builtin_frame(pending));
+            }
+            let f = &self.frames[i];
+            let internal = by_builtin(i, pending);
+            out.push(TraceFrame {
+                file: if internal { String::new() } else { self.file.clone() },
                 line: f.call_line,
                 function: f.ctx.trace_fn.clone(),
                 class: f.ctx.trace_class.clone(),
                 args: f.args.clone(),
-            })
-            .collect()
+            });
+        }
+        while pending > 0 {
+            pending -= 1;
+            out.push(builtin_frame(pending));
+        }
+        out
     }
 
     fn callback(&mut self, fname: &str, n: usize, v: &Value) -> EResult<Callable> {
@@ -1640,7 +1722,9 @@ impl<W: Write> Interp<W> {
                 diag::warning(format!("{name}(): Argument #1 ($array) must be passed by reference, value given"));
                 builtins::call_by_ref(name, &mut target, args.collect())?
             }
-            Callable::Builtin(name) => self.call_builtin(name, name, args.clone(), line)?,
+            Callable::Builtin(name) => {
+                self.internal_call(name.clone(), None, args.clone(), line, |this| this.call_builtin(name, name, args, line))?
+            }
         };
         diag::set_line(line);
         Ok(v)

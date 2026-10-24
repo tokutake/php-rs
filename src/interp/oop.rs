@@ -671,14 +671,18 @@ impl<W: Write> Interp<W> {
     ) -> EResult<Value> {
         let func = match &method.body {
             MethodBody::Native(n) => {
-                let vals = args
+                let vals: Vec<Value> = args
                     .into_iter()
                     .map(|a| match a {
                         ArgVal::Val(v) => v,
                         ArgVal::Ref(r) => value::with_deref(&r, Value::clone),
                     })
                     .collect();
-                return self.native_method(*n, method, this, vals, line);
+                let class = Some((method.class.to_string(), if this.is_some() && !method.is_static { "->" } else { "::" }));
+                let shown = vals.clone();
+                return self.internal_call(method.name.clone(), class, shown, line, |this_| {
+                    this_.native_method(*n, method, this, vals, line)
+                });
             }
             MethodBody::User(f) => f.clone(),
         };
