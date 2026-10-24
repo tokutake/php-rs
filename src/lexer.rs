@@ -184,6 +184,8 @@ impl<'a> Lexer<'a> {
         } else if c == b';' {
             self.pos += 1;
             Tok::Semicolon
+        } else if let Some(tok) = self.heredoc()? {
+            tok
         } else if let Some(op) = OPS.iter().find(|op| self.rest().starts_with(op.as_bytes())) {
             self.pos += op.len();
             Tok::Op(op)
@@ -351,14 +353,25 @@ impl<'a> Lexer<'a> {
 
     fn double_quoted(&mut self) -> Result<Tok, LexError> {
         self.bump();
+        self.interpolated(Some(b'"'))
+    }
+
+    /// The contents of a double-quoted string up to `end`, or of a heredoc body
+    /// (the whole input) when `end` is None
+    fn interpolated(&mut self, end: Option<u8>) -> Result<Tok, LexError> {
         let mut parts = Vec::new();
         let mut lit = Vec::new();
         loop {
             let Some(c) = self.bump() else {
+                if end.is_none() {
+                    break;
+                }
                 return self.err("syntax error, unterminated string");
             };
             match c {
-                b'"' => break,
+                c if Some(c) == end => break,
+                // A heredoc has no quote to escape, so `\"` stays as written
+                b'\\' if end.is_none() && self.peek() == Some(b'"') => lit.push(c),
                 b'\\' => self.escape(&mut lit),
                 b'$' if self.peek().is_some_and(is_ident_start) => {
                     flush(&mut parts, &mut lit);
@@ -378,11 +391,100 @@ impl<'a> Lexer<'a> {
         Ok(Tok::Template(parts))
     }
 
+    /// `<<<LABEL`, `<<<"LABEL"` (heredoc) or `<<<'LABEL'` (nowdoc) through the closing
+    /// label. None if the input here is not a heredoc header (then it is `<<`)
+    fn heredoc(&mut self) -> Result<Option<Tok>, LexError> {
+        let src = self.src;
+        if !self.rest().starts_with(b"<<<") {
+            return Ok(None);
+        }
+        let mut p = self.pos + 3;
+        while matches!(src.get(p), Some(b' ' | b'\t')) {
+            p += 1;
+        }
+        let quote = src.get(p).copied().filter(|&q| q == b'\'' || q == b'"');
+        p += usize::from(quote.is_some());
+        let label_start = p;
+        if !src.get(p).copied().is_some_and(is_ident_start) {
+            return Ok(None);
+        }
+        while src.get(p).copied().is_some_and(is_ident_char) {
+            p += 1;
+        }
+        let label = &src[label_start..p];
+        if let Some(q) = quote {
+            if src.get(p) != Some(&q) {
+                return Ok(None);
+            }
+            p += 1;
+        }
+        match &src[p..] {
+            [b'\n', ..] => p += 1,
+            [b'\r', b'\n', ..] => p += 2,
+            _ => return Ok(None),
+        }
+        let body_start = p;
+        // Find the closing label: the first line holding only indentation before it
+        let (close_line, indent) = loop {
+            let ws = src[p..].iter().take_while(|c| matches!(c, b' ' | b'\t')).count();
+            let after = p + ws + label.len();
+            if src[p + ws..].starts_with(label) && !src.get(after).copied().is_some_and(is_ident_char) {
+                break (p, &src[p..p + ws]);
+            }
+            match src[p..].iter().position(|&c| c == b'\n') {
+                Some(nl) => p += nl + 1,
+                None => {
+                    self.pos = src.len();
+                    self.line += src[body_start..].iter().filter(|&&c| c == b'\n').count() as u32;
+                    return self.err("syntax error, unexpected end of file");
+                }
+            }
+        };
+        let start_line = self.line;
+        // The newline before the closing label is not part of the string
+        let body_end = close_line.saturating_sub(1).max(body_start);
+        let body_end = if body_end > body_start && src[body_end - 1] == b'\r' { body_end - 1 } else { body_end };
+        let mut body = Vec::with_capacity(body_end - body_start);
+        if !indent.is_empty() && indent.contains(&b' ') && indent.contains(&b'\t') {
+            return self.err("Invalid indentation - tabs and spaces cannot be mixed");
+        }
+        for (i, line) in src[body_start..body_end].split(|&c| c == b'\n').enumerate() {
+            if i > 0 {
+                body.push(b'\n');
+            }
+            let ws = line.iter().take_while(|c| matches!(c, b' ' | b'\t')).count();
+            if ws < indent.len() && ws < line.len() {
+                self.line = start_line + 1 + i as u32;
+                return self.err(format!(
+                    "Invalid body indentation level (expecting an indentation level of at least {})",
+                    indent.len()
+                ));
+            }
+            body.extend_from_slice(&line[indent.len().min(line.len())..]);
+        }
+        self.pos = close_line + indent.len() + label.len();
+        self.line += src[body_start - 1..self.pos].iter().filter(|&&c| c == b'\n').count() as u32;
+        if quote == Some(b'\'') {
+            return Ok(Some(Tok::Str(body)));
+        }
+        let mut sub = Lexer { src: &body, pos: 0, line: start_line + 1, out: Vec::new() };
+        Ok(Some(sub.interpolated(None)?))
+    }
+
     /// `"$name"` or `"$name[key]"`, where key is a number, bare word or variable.
     /// The leading `$` has already been consumed
     fn simple_interpolation(&mut self) -> Result<Vec<Token>, LexError> {
         let line = self.line;
         let mut toks = vec![Token { tok: Tok::Variable(self.ident()), line }];
+        // `"$obj->prop"` and `"$obj?->prop"` read one property
+        for op in ["->", "?->"] {
+            if self.rest().starts_with(op.as_bytes()) && self.peek_at(op.len()).is_some_and(is_ident_start) {
+                self.pos += op.len();
+                toks.push(Token { tok: Tok::Op(if op == "->" { "->" } else { "?->" }), line });
+                toks.push(Token { tok: Tok::Ident(self.ident()), line });
+                return Ok(toks);
+            }
+        }
         if self.peek() != Some(b'[') {
             return Ok(toks);
         }

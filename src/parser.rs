@@ -3,7 +3,8 @@
 use std::rc::Rc;
 
 use crate::ast::{
-    Arg, ArrayItem, Catch, ClassDecl, ClassRef, Expr, ExprKind, FuncDecl, FuncKind, Member, Name, Param, Stmt, TypeHint,
+    Arg, ArrayItem, Catch, ClassDecl, ClassRef, Expr, ExprKind, FuncDecl, FuncKind, ListItem, Magic, MatchArm, Member, Name,
+    Param, Stmt, TypeHint,
 };
 use crate::object::Visibility;
 use crate::lexer::{StrPart, Tok, Token};
@@ -12,6 +13,18 @@ use crate::lexer::{StrPart, Tok, Token};
 pub struct ParseError {
     pub msg: String,
     pub line: u32,
+}
+
+impl ParseError {
+    /// How php-cli labels the error: grammar errors are parse errors, the
+    /// checks php-src does while compiling are fatal errors
+    pub fn label(&self) -> &'static str {
+        if self.msg.starts_with("syntax error") || self.msg == "memory exhausted" {
+            "Parse error"
+        } else {
+            "Fatal error"
+        }
+    }
 }
 
 type PResult<T> = Result<T, ParseError>;
@@ -116,7 +129,7 @@ fn cast_op(name: &str) -> Option<&'static str> {
 fn parse_embedded(mut tokens: Vec<Token>) -> PResult<Expr> {
     let line = tokens.last().map_or(0, |t| t.line);
     tokens.push(Token { tok: Tok::Eof, line });
-    let mut p = Parser { tokens, pos: 0, depth: 0 };
+    let mut p = Parser::new(tokens);
     let e = p.expr()?;
     if !p.at(&Tok::Eof) {
         return p.unexpected();
@@ -125,7 +138,7 @@ fn parse_embedded(mut tokens: Vec<Token>) -> PResult<Expr> {
 }
 
 pub fn parse(tokens: Vec<Token>) -> PResult<Vec<Stmt>> {
-    let mut p = Parser { tokens, pos: 0, depth: 0 };
+    let mut p = Parser::new(tokens);
     let mut stmts = Vec::new();
     while !p.at(&Tok::Eof) {
         stmts.push(p.statement()?);
@@ -137,9 +150,34 @@ struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     depth: u32,
+    /// The enclosing class and function, for `__CLASS__`, `__FUNCTION__` and `__METHOD__`
+    class: Option<String>,
+    func: Option<FuncCtx>,
+    /// Inside the items of `[...]` / `list(...)`, where a skipped element may
+    /// belong to a list pattern that is only recognized at the outer `=`
+    in_items: u32,
+}
+
+#[derive(Clone)]
+enum FuncCtx {
+    Named(String),
+    Method(String),
+    Closure,
 }
 
 impl Parser {
+    fn new(tokens: Vec<Token>) -> Self {
+        Parser { tokens, pos: 0, depth: 0, class: None, func: None, in_items: 0 }
+    }
+
+    /// Runs `f` with `func` as the enclosing function
+    fn in_func<T>(&mut self, func: FuncCtx, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+        let outer = self.func.replace(func);
+        let out = f(self);
+        self.func = outer;
+        out
+    }
+
     fn peek(&self) -> &Tok {
         &self.tokens[self.pos].tok
     }
@@ -274,6 +312,21 @@ impl Parser {
                 }
                 "for" => self.for_statement(),
                 "foreach" => self.foreach_statement(),
+                "switch" => self.switch_statement(),
+                "const" if matches!(self.peek_at(1), Tok::Ident(_)) => {
+                    self.next();
+                    let mut consts = Vec::new();
+                    loop {
+                        let name = self.class_name()?;
+                        self.expect(Tok::Op("="))?;
+                        consts.push((name, self.expr()?));
+                        if !self.eat(&Tok::Op(",")) {
+                            break;
+                        }
+                    }
+                    self.end_statement()?;
+                    Ok(Stmt::Const(consts))
+                }
                 "try" => self.try_statement(),
                 "class" | "interface" | "abstract" | "final" | "readonly"
                     if matches!(self.peek_at(1), Tok::Ident(_)) =>
@@ -424,6 +477,40 @@ impl Parser {
         Ok(Stmt::For(init, cond, step, body))
     }
 
+    fn switch_statement(&mut self) -> PResult<Stmt> {
+        self.next();
+        let subject = self.paren_expr()?;
+        self.expect(Tok::Op("{"))?;
+        let mut cases = Vec::new();
+        let mut has_default = false;
+        while !self.eat(&Tok::Op("}")) {
+            let line = self.line();
+            let cond = if self.eat_kw("case") {
+                Some(self.expr()?)
+            } else if self.eat_kw("default") {
+                if has_default {
+                    return Err(ParseError { msg: "Switch statements may only contain one default clause".into(), line });
+                }
+                has_default = true;
+                None
+            } else {
+                return self.unexpected();
+            };
+            if !self.eat(&Tok::Op(":")) {
+                self.expect(Tok::Semicolon)?;
+            }
+            let mut body = Vec::new();
+            while !self.at_kw("case") && !self.at_kw("default") && !self.at(&Tok::Op("}")) {
+                if self.at(&Tok::Eof) {
+                    return self.unexpected();
+                }
+                body.push(self.statement()?);
+            }
+            cases.push((cond, body));
+        }
+        Ok(Stmt::Switch(subject, cases))
+    }
+
     fn foreach_statement(&mut self) -> PResult<Stmt> {
         self.next();
         self.expect(Tok::Op("("))?;
@@ -462,14 +549,20 @@ impl Parser {
             self.pos -= 1;
             return self.unexpected();
         };
-        let params = self.params()?;
-        let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
-        let body = self.brace_body()?;
+        let (params, ret, body) = self.in_func(FuncCtx::Named(name.clone()), |p| {
+            let params = p.params()?;
+            let ret = if p.eat(&Tok::Op(":")) { Some(p.type_hint()?) } else { None };
+            Ok((params, ret, p.brace_body()?))
+        })?;
         Ok(Stmt::Function(Rc::new(FuncDecl { kind: FuncKind::Named, name, uses: Vec::new(), params, ret, body, line })))
     }
 
     /// `function (...) use (...) { ... }`, after the `function` keyword
     fn closure(&mut self, line: u32) -> PResult<ExprKind> {
+        self.in_func(FuncCtx::Closure, |p| p.closure_inner(line))
+    }
+
+    fn closure_inner(&mut self, line: u32) -> PResult<ExprKind> {
         self.eat(&Tok::Op("&"));
         let params = self.params()?;
         let mut uses = Vec::new();
@@ -502,6 +595,10 @@ impl Parser {
 
     /// `fn (...) => expr`, after the `fn` keyword
     fn arrow_fn(&mut self, line: u32) -> PResult<ExprKind> {
+        self.in_func(FuncCtx::Closure, |p| p.arrow_fn_inner(line))
+    }
+
+    fn arrow_fn_inner(&mut self, line: u32) -> PResult<ExprKind> {
         self.eat(&Tok::Op("&"));
         let params = self.params()?;
         let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
@@ -613,12 +710,14 @@ impl Parser {
         }
         self.expect(Tok::Op("{"))?;
         let mut members = Vec::new();
+        let outer = (self.class.replace(name.clone()), self.func.take());
         while !self.eat(&Tok::Op("}")) {
             if self.at(&Tok::Eof) {
                 return self.unexpected();
             }
             self.class_member(&mut members, is_interface)?;
         }
+        (self.class, self.func) = outer;
         let decl = ClassDecl { name, is_interface, is_abstract, is_final, is_readonly, parent, interfaces, members, line };
         Ok(Stmt::Class(Rc::new(decl)))
     }
@@ -679,20 +778,23 @@ impl Parser {
         if self.eat_kw("function") {
             self.eat(&Tok::Op("&"));
             let name = self.class_name()?;
-            let params = self.params()?;
-            let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
             let is_abstract = is_abstract || in_interface;
-            let body = if self.eat(&Tok::Semicolon) {
-                if !is_abstract {
-                    return Err(ParseError { msg: format!("Non-abstract method {name}() must contain body"), line });
-                }
-                Vec::new()
-            } else {
-                if is_abstract {
-                    return Err(ParseError { msg: format!("Abstract function {name}() cannot contain body"), line });
-                }
-                self.brace_body()?
-            };
+            let (params, ret, body) = self.in_func(FuncCtx::Method(name.clone()), |p| {
+                let params = p.params()?;
+                let ret = if p.eat(&Tok::Op(":")) { Some(p.type_hint()?) } else { None };
+                let body = if p.eat(&Tok::Semicolon) {
+                    if !is_abstract {
+                        return Err(ParseError { msg: format!("Non-abstract method {name}() must contain body"), line });
+                    }
+                    Vec::new()
+                } else {
+                    if is_abstract {
+                        return Err(ParseError { msg: format!("Abstract function {name}() cannot contain body"), line });
+                    }
+                    p.brace_body()?
+                };
+                Ok((params, ret, body))
+            })?;
             if params.iter().any(|p| p.promote.is_some()) && !name.eq_ignore_ascii_case("__construct") {
                 return Err(ParseError { msg: "Cannot declare promoted property outside a constructor".into(), line });
             }
@@ -816,6 +918,15 @@ impl Parser {
     }
 
     fn foreach_target(&mut self) -> PResult<Expr> {
+        let line = self.line();
+        if self.at(&Tok::Op("[")) || (self.at_kw("list") && self.peek_at(1) == &Tok::Op("(")) {
+            let close = if self.next() == Tok::Op("[") { Tok::Op("]") } else { Tok::Op(")") };
+            if close == Tok::Op(")") {
+                self.next();
+            }
+            let items = self.array_items(&close)?;
+            return Ok(Expr::new(list_pattern(items, line)?, line));
+        }
         let target = self.postfix_expr()?;
         if !target.is_lvalue() {
             return Err(ParseError { msg: "syntax error, foreach target must be a variable".into(), line: self.line() });
@@ -823,19 +934,34 @@ impl Parser {
         Ok(target)
     }
 
-    /// Array literal items up to `end`. Trailing commas are allowed
+    /// Items of an array literal or list pattern up to `end`. Trailing commas are
+    /// allowed; a skipped element becomes a Hole for a list pattern to accept
     fn array_items(&mut self, end: &Tok) -> PResult<Vec<ArrayItem>> {
+        self.in_items += 1;
+        let items = self.array_items_inner(end);
+        self.in_items -= 1;
+        items
+    }
+
+    fn array_items_inner(&mut self, end: &Tok) -> PResult<Vec<ArrayItem>> {
         let mut items = Vec::new();
         while !self.eat(end) {
-            if self.at(&Tok::Op(",")) {
-                return Err(ParseError { msg: "Cannot use empty array elements in arrays".into(), line: self.line() });
+            let line = self.line();
+            if self.eat(&Tok::Op(",")) {
+                items.push(ArrayItem { key: None, value: Expr::new(ExprKind::Hole, line), by_ref: false });
+                continue;
             }
+            let mut by_ref = self.eat(&Tok::Op("&"));
             let first = self.expr()?;
-            let item = if self.eat(&Tok::Op("=>")) {
-                ArrayItem { key: Some(first), value: self.expr()? }
+            let item = if !by_ref && self.eat(&Tok::Op("=>")) {
+                by_ref = self.eat(&Tok::Op("&"));
+                ArrayItem { key: Some(first), value: self.expr()?, by_ref }
             } else {
-                ArrayItem { key: None, value: first }
+                ArrayItem { key: None, value: first, by_ref }
             };
+            if item.by_ref && !item.value.is_lvalue() && !matches!(item.value.kind, ExprKind::List(_)) {
+                return Err(ParseError { msg: "Cannot assign reference to non referenceable value".into(), line });
+            }
             items.push(item);
             if !self.eat(&Tok::Op(",")) {
                 self.expect(end.clone())?;
@@ -843,6 +969,74 @@ impl Parser {
             }
         }
         Ok(items)
+    }
+
+    /// `[...]` after the opening bracket: a list pattern when assigned to, else an array
+    fn array_literal(&mut self, end: &Tok, line: u32) -> PResult<ExprKind> {
+        let items = self.array_items(end)?;
+        if self.at(&Tok::Op("=")) {
+            return list_pattern(items, line);
+        }
+        // Inside another `[...]` the decision belongs to the outermost one
+        if self.in_items == 0 {
+            check_array(&items)?;
+        }
+        Ok(ExprKind::Array(items))
+    }
+
+    /// `match (subject) { conds => expr, default => expr }`, after the keyword
+    fn match_expr(&mut self) -> PResult<ExprKind> {
+        let subject = self.paren_expr()?;
+        self.expect(Tok::Op("{"))?;
+        let mut arms = Vec::new();
+        while !self.eat(&Tok::Op("}")) {
+            let line = self.line();
+            let conds = if self.at_kw("default") && matches!(self.peek_at(1), Tok::Op("=>" | ",")) {
+                self.next();
+                self.eat(&Tok::Op(","));
+                if arms.iter().any(|a: &MatchArm| a.conds.is_none()) {
+                    return Err(ParseError { msg: "Match expressions may only contain one default arm".into(), line });
+                }
+                None
+            } else {
+                let mut conds = vec![self.expr()?];
+                while self.eat(&Tok::Op(",")) {
+                    if self.at(&Tok::Op("=>")) {
+                        break;
+                    }
+                    conds.push(self.expr()?);
+                }
+                Some(conds)
+            };
+            self.expect(Tok::Op("=>"))?;
+            arms.push(MatchArm { conds, body: self.expr()? });
+            if !self.eat(&Tok::Op(",")) {
+                self.expect(Tok::Op("}"))?;
+                break;
+            }
+        }
+        Ok(ExprKind::Match(Box::new(subject), arms))
+    }
+
+    /// `__CLASS__` and friends; None for an ordinary constant name
+    fn magic_const(&self, name: &str, line: u32) -> Option<ExprKind> {
+        let s = |s: &str| ExprKind::Str(Rc::new(s.as_bytes().to_vec()));
+        let class = self.class.as_deref().unwrap_or("");
+        Some(match name.to_ascii_uppercase().as_str() {
+            "__LINE__" => ExprKind::Int(line.into()),
+            "__FILE__" => ExprKind::Magic(Magic::File),
+            "__DIR__" => ExprKind::Magic(Magic::Dir),
+            "__CLASS__" => s(class),
+            "__NAMESPACE__" => s(""),
+            "__FUNCTION__" | "__METHOD__" => match &self.func {
+                None => s(""),
+                Some(FuncCtx::Closure) => ExprKind::Magic(Magic::ClosureName),
+                Some(FuncCtx::Named(f)) => s(f),
+                Some(FuncCtx::Method(m)) if name.eq_ignore_ascii_case("__METHOD__") => s(&format!("{class}::{m}")),
+                Some(FuncCtx::Method(m)) => s(m),
+            },
+            _ => return None,
+        })
     }
 
     /// Call arguments after `(`, through the closing `)`. Trailing commas are allowed
@@ -888,6 +1082,12 @@ impl Parser {
     fn expr_bp_inner(&mut self, min_prec: u8) -> PResult<Expr> {
         let mut lhs = self.prefix()?;
         loop {
+            if matches!(lhs.kind, ExprKind::List(_)) && self.eat(&Tok::Op("=")) {
+                let rhs = Box::new(self.expr_bp(P_ASSIGN)?);
+                let line = lhs.line;
+                lhs = Expr::new(ExprKind::Assign(Box::new(lhs), rhs), line);
+                continue;
+            }
             // Assignment applies only when the LHS is a variable, and takes the whole RHS regardless of precedence (e.g. `!$a = f()`)
             if lhs.is_lvalue() {
                 if self.at(&Tok::Op("=")) && self.peek_at(1) == &Tok::Op("&") {
@@ -1090,7 +1290,7 @@ impl Parser {
                 ExprKind::Interp(exprs)
             }
             Tok::Variable(name) => ExprKind::Var(name),
-            Tok::Op("[") => ExprKind::Array(self.array_items(&Tok::Op("]"))?),
+            Tok::Op("[") => self.array_literal(&Tok::Op("]"), line)?,
             Tok::Op("(") => {
                 let e = self.expr()?;
                 self.expect(Tok::Op(")"))?;
@@ -1098,6 +1298,17 @@ impl Parser {
             }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("function") => self.closure(line)?,
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("fn") => self.arrow_fn(line)?,
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("match") && self.at(&Tok::Op("(")) => self.match_expr()?,
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("list") && self.at(&Tok::Op("(")) => {
+                self.next();
+                let items = self.array_items(&Tok::Op(")"))?;
+                if !self.at(&Tok::Op("=")) && self.in_items == 0 {
+                    let mut e = self.unexpected::<()>().unwrap_err();
+                    e.msg.push_str(", expecting \"=\"");
+                    return Err(e);
+                }
+                list_pattern(items, line)?
+            }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("new") => {
                 if self.at_kw("class") {
                     return Err(ParseError { msg: "Anonymous classes are not supported yet".into(), line });
@@ -1115,7 +1326,7 @@ impl Parser {
                 if self.at(&Tok::Op("(")) && matches!(lname.as_str(), "array" | "isset" | "empty") {
                     self.next();
                     let kind = match lname.as_str() {
-                        "array" => ExprKind::Array(self.array_items(&Tok::Op(")"))?),
+                        "array" => self.array_literal(&Tok::Op(")"), line)?,
                         "isset" => {
                             let args = self.expr_list(&Tok::Op(")"))?;
                             self.expect(Tok::Op(")"))?;
@@ -1143,7 +1354,7 @@ impl Parser {
                     "true" => ExprKind::Bool(true),
                     "false" => ExprKind::Bool(false),
                     "null" => ExprKind::Null,
-                    _ => ExprKind::Const(name),
+                    _ => self.magic_const(&name, line).unwrap_or(ExprKind::Const(name)),
                 }
             }
             _ => {
@@ -1155,6 +1366,48 @@ impl Parser {
     }
 }
 
+/// Rejects skipped elements in what turned out to be an array literal
+fn check_array(items: &[ArrayItem]) -> PResult<()> {
+    for item in items {
+        match &item.value.kind {
+            ExprKind::Hole => {
+                return Err(ParseError { msg: "Cannot use empty array elements in arrays".into(), line: item.value.line });
+            }
+            ExprKind::Array(inner) => check_array(inner)?,
+            ExprKind::List(_) => {
+                return Err(ParseError { msg: "Cannot use list() outside of an assignment".into(), line: item.value.line });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Turns the items of `[...]` / `list(...)` into a destructuring pattern
+fn list_pattern(items: Vec<ArrayItem>, line: u32) -> PResult<ExprKind> {
+    let keyed = items.iter().filter(|i| !matches!(i.value.kind, ExprKind::Hole)).map(|i| i.key.is_some()).collect::<Vec<_>>();
+    if keyed.contains(&true) && keyed.contains(&false) {
+        return Err(ParseError { msg: "Cannot mix keyed and unkeyed array entries in assignments".into(), line });
+    }
+    if keyed.is_empty() {
+        return Err(ParseError { msg: "Cannot use empty list".into(), line });
+    }
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let target = match item.value.kind {
+            ExprKind::Hole => {
+                out.push(None);
+                continue;
+            }
+            ExprKind::Array(inner) => Expr::new(list_pattern(inner, item.value.line)?, item.value.line),
+            _ if item.value.is_lvalue() || matches!(item.value.kind, ExprKind::List(_)) => item.value,
+            _ => return Err(ParseError { msg: "Assignments can only happen to writable values".into(), line }),
+        };
+        out.push(Some(ListItem { key: item.key, target, by_ref: item.by_ref }));
+    }
+    Ok(ExprKind::List(out))
+}
+
 /// Variable names an arrow function body refers to, in first-use order
 fn free_vars(e: &Expr, out: &mut Vec<String>) {
     let add = |name: &str, out: &mut Vec<String>| {
@@ -1164,7 +1417,29 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
     };
     let args = |args: &[Arg], out: &mut Vec<String>| args.iter().for_each(|a| free_vars(&a.value, out));
     match &e.kind {
-        ExprKind::Null | ExprKind::Bool(_) | ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Const(_) => {}
+        ExprKind::Null
+        | ExprKind::Bool(_)
+        | ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::Const(_)
+        | ExprKind::Hole
+        | ExprKind::Magic(_) => {}
+        ExprKind::Match(subject, arms) => {
+            free_vars(subject, out);
+            for arm in arms {
+                arm.conds.iter().flatten().for_each(|c| free_vars(c, out));
+                free_vars(&arm.body, out);
+            }
+        }
+        ExprKind::List(items) => {
+            for item in items.iter().flatten() {
+                if let Some(k) = &item.key {
+                    free_vars(k, out);
+                }
+                free_vars(&item.target, out);
+            }
+        }
         ExprKind::Var(name) => add(name, out),
         ExprKind::Interp(parts) => parts.iter().for_each(|p| free_vars(p, out)),
         ExprKind::Array(items) => {

@@ -34,7 +34,7 @@ const NAMES: &[&str] = &[
     "get_object_vars", "method_exists", "property_exists", "class_exists", "interface_exists", "is_a",
     "is_subclass_of", "spl_object_id", "spl_object_hash", "strtoupper", "strtolower", "ucfirst", "lcfirst",
     "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
-    "substr",
+    "substr", "define", "defined", "constant",
 ];
 
 pub fn exists(lname: &str) -> bool {

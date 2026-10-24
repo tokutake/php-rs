@@ -1,0 +1,48 @@
+1 2
+2 1
+10 30
+kay vee
+1 2 3
+1 2 3
+
+Warning: Undefined array key 1 in destructuring.php on line 15
+NULL
+
+Warning: Undefined array key "nope" in destructuring.php on line 17
+NULL
+NULL
+NULL
+array(2) {
+  [0]=>
+  int(7)
+  [1]=>
+  int(8)
+}
+array(2) {
+  [0]=>
+  string(5) "first"
+  ["x"]=>
+  string(6) "second"
+}
+object(stdClass)#1 (2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  &int(100)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    &int(300)
+  }
+}
+1=one
+2=two
+x: 5 five
+1 a b
+z o

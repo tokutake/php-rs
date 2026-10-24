@@ -50,6 +50,38 @@ pub enum ExprKind {
     Throw(Box<Expr>),
     Isset(Vec<Expr>),
     Empty(Box<Expr>),
+    /// `match (subject) { ... }`
+    Match(Box<Expr>, Vec<MatchArm>),
+    /// `[$a, 'k' => $b] = ...` / `list(...)`: only valid as an assignment target.
+    /// Skipped positions (`[, $b]`) are None
+    List(Vec<Option<ListItem>>),
+    /// A skipped element in `[...]` that may still turn out to be a list pattern
+    Hole,
+    /// A magic constant that is only known at runtime
+    Magic(Magic),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Magic {
+    File,
+    Dir,
+    /// `__FUNCTION__` / `__METHOD__` inside a closure
+    ClosureName,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    /// None for `default`
+    pub conds: Option<Vec<Expr>>,
+    pub body: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListItem {
+    pub key: Option<Expr>,
+    /// A variable, offset, property or nested List
+    pub target: Expr,
+    pub by_ref: bool,
 }
 
 /// A member name after `->`: literal, or `$name` / `{expr}` evaluated at runtime
@@ -92,6 +124,8 @@ pub struct Arg {
 pub struct ArrayItem {
     pub key: Option<Expr>,
     pub value: Expr,
+    /// `[&$a]`: the element is a reference to the variable
+    pub by_ref: bool,
 }
 
 impl Expr {
@@ -135,6 +169,10 @@ pub enum Stmt {
     StaticVar(Vec<(String, Option<Expr>)>),
     Try { body: Vec<Stmt>, catches: Vec<Catch>, finally: Option<Vec<Stmt>> },
     Class(Rc<ClassDecl>),
+    /// Cases in order with their bodies; `default` has no condition
+    Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
+    /// `const A = 1, B = 2;` at the top level
+    Const(Vec<(String, Expr)>),
 }
 
 #[derive(Debug)]

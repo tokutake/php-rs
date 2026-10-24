@@ -10,7 +10,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::array::{Key, PhpArray};
-use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, Name, Stmt, TypeHint};
+use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, ListItem, Magic, Name, Stmt, TypeHint};
 use crate::builtins::{self, Runtime};
 use crate::diag;
 use crate::object::{self, ClassEntry, Closure, Internal, Method, Object, TraceFrame};
@@ -207,6 +207,8 @@ pub struct Interp<W: Write> {
     file: String,
     frames: Vec<Frame>,
     functions: HashMap<String, Rc<FuncDecl>>,
+    /// Constants from `const` and define()
+    constants: HashMap<String, Value>,
     /// `static` variables, keyed by the declaring function (null for the main script)
     statics: HashMap<*const FuncDecl, HashMap<String, RefCellValue>>,
     classes: HashMap<String, Rc<ClassEntry>>,
@@ -235,6 +237,7 @@ impl<W: Write> Interp<W> {
             file,
             frames: vec![main],
             functions: HashMap::new(),
+            constants: HashMap::new(),
             statics: HashMap::new(),
             classes: object::builtin_classes(),
             declared: HashSet::new(),
@@ -482,6 +485,39 @@ impl<W: Write> Interp<W> {
                     }
                 }
             }
+            Stmt::Switch(subject, cases) => {
+                let v = self.expr(subject)?;
+                let mut start = None;
+                for (i, (cond, _)) in cases.iter().enumerate() {
+                    if let Some(c) = cond {
+                        let cv = self.expr(c)?;
+                        if binary("==", &v, &cv)?.to_bool() {
+                            start = Some(i);
+                            break;
+                        }
+                    }
+                }
+                let Some(start) = start.or_else(|| cases.iter().position(|(c, _)| c.is_none())) else {
+                    return Ok(Flow::Normal);
+                };
+                // Execution falls through the following cases until a break.
+                // A switch counts as a loop level for break and continue
+                for (_, body) in &cases[start..] {
+                    match self.block(body)? {
+                        Flow::Normal => {}
+                        Flow::Break(1) | Flow::Continue(1) => break,
+                        Flow::Break(n) => return Ok(Flow::Break(n - 1)),
+                        Flow::Continue(n) => return Ok(Flow::Continue(n - 1)),
+                        ret @ Flow::Return(_) => return Ok(ret),
+                    }
+                }
+            }
+            Stmt::Const(consts) => {
+                for (name, e) in consts {
+                    let v = self.expr(e)?;
+                    self.define_const(name, v);
+                }
+            }
             Stmt::Break(n) => return Ok(Flow::Break(*n)),
             Stmt::Continue(n) => return Ok(Flow::Continue(*n)),
             Stmt::Unset(targets) => {
@@ -618,8 +654,31 @@ impl<W: Write> Interp<W> {
                 Value::str(s)
             }
             ExprKind::Var(name) => self.lookup(name),
-            ExprKind::Const(name) => {
-                constant(name).ok_or_else(|| Fatal::error(format!("Undefined constant \"{name}\"")))?
+            ExprKind::Const(name) => self.constant(name.trim_start_matches('\\'))?,
+            ExprKind::Magic(Magic::File) => Value::str(self.file.as_bytes()),
+            ExprKind::Magic(Magic::Dir) => {
+                let dir = std::path::Path::new(&self.file).parent().map_or(".".into(), |d| d.display().to_string());
+                Value::str(dir.into_bytes())
+            }
+            ExprKind::Magic(Magic::ClosureName) => Value::str(self.ctx().name.as_bytes()),
+            ExprKind::Hole => return Err(Fatal::compile("Cannot use empty array elements in arrays")),
+            ExprKind::List(_) => return Err(Fatal::compile("Cannot use list() outside of an assignment")),
+            ExprKind::Match(subject, arms) => {
+                let v = self.expr(subject)?;
+                for arm in arms {
+                    for c in arm.conds.iter().flatten() {
+                        if v.strict_eq(&self.expr(c)?) {
+                            return self.expr(&arm.body);
+                        }
+                    }
+                }
+                match arms.iter().find(|a| a.conds.is_none()) {
+                    Some(arm) => self.expr(&arm.body)?,
+                    None => {
+                        diag::set_line(e.line);
+                        return Err(Fatal::new("UnhandledMatchError", format!("Unhandled match case {}", match_case(&v))));
+                    }
+                }
             }
             ExprKind::Array(items) => {
                 let mut arr = PhpArray::new();
@@ -628,7 +687,12 @@ impl<W: Write> Interp<W> {
                         Some(k) => Some(to_key(&self.expr(k)?, "array")?),
                         None => None,
                     };
-                    let v = self.expr(&item.value)?;
+                    let v = if item.by_ref {
+                        let path = self.path(&item.value)?;
+                        Value::Ref(self.make_ref(&path)?)
+                    } else {
+                        self.expr(&item.value)?
+                    };
                     match key {
                         Some(k) => arr.insert(k, v),
                         None => {
@@ -644,11 +708,21 @@ impl<W: Write> Interp<W> {
                 let i = self.expr(index)?;
                 read_dim(&b, &i)?
             }
-            ExprKind::Assign(target, rhs) => {
-                let v = self.expr(rhs)?;
-                self.assign(target, v.clone())?;
-                v
-            }
+            ExprKind::Assign(target, rhs) => match &target.kind {
+                ExprKind::List(items) if has_ref(items) => {
+                    if !rhs.is_lvalue() {
+                        return Err(Fatal::compile("Cannot assign reference to non referenceable value"));
+                    }
+                    let path = self.path(rhs)?;
+                    self.destructure_ref(items, &path)?;
+                    self.expr(rhs)?
+                }
+                _ => {
+                    let v = self.expr(rhs)?;
+                    self.assign(target, v.clone())?;
+                    v
+                }
+            },
             ExprKind::AssignRef(target, source) => {
                 let path = self.path(source)?;
                 let r = self.make_ref(&path)?;
@@ -992,6 +1066,9 @@ impl<W: Write> Interp<W> {
     }
 
     fn assign(&mut self, target: &Expr, v: Value) -> EResult<()> {
+        if let ExprKind::List(items) = &target.kind {
+            return self.destructure(items, v);
+        }
         let mut path = self.path(target)?;
         if let (Base::Prop(obj, name), true) = (&path.base, path.dims.is_empty()) {
             return self.write_prop(obj, name, v);
@@ -1028,6 +1105,83 @@ impl<W: Write> Interp<W> {
             *slot = v;
             Ok(())
         })
+    }
+
+    /// `[$a, 'k' => $b] = $v`. Elements missing from an array warn like reads;
+    /// a non-array assigns null to every target
+    fn destructure(&mut self, items: &[Option<ListItem>], v: Value) -> EResult<()> {
+        let mut next = 0;
+        for item in items {
+            let Some(item) = item else {
+                next += 1;
+                continue;
+            };
+            let key = self.list_key(item, &mut next)?;
+            let elem = match &v {
+                Value::Array(_) => read_dim(&v, &key)?,
+                _ => Value::Null,
+            };
+            self.assign(&item.target, elem)?;
+        }
+        Ok(())
+    }
+
+    /// Destructuring with `&` targets, which bind to the elements of the source variable
+    fn destructure_ref(&mut self, items: &[Option<ListItem>], source: &Path<'_>) -> EResult<()> {
+        let mut next = 0;
+        for item in items {
+            let Some(item) = item else {
+                next += 1;
+                continue;
+            };
+            let key = self.list_key(item, &mut next)?;
+            let mut elem = source.clone();
+            elem.dims.push(Some(key.clone()));
+            match &item.target.kind {
+                _ if item.by_ref => {
+                    let r = self.make_ref(&elem)?;
+                    self.bind_ref(&item.target, r)?;
+                }
+                ExprKind::List(inner) if has_ref(inner) => self.destructure_ref(inner, &elem)?,
+                _ => {
+                    let container = self.with_place(source, false, true, |slot| Ok(slot.clone()))?;
+                    let v = match &container {
+                        Value::Array(_) => read_dim(&container, &key)?,
+                        _ => Value::Null,
+                    };
+                    self.assign(&item.target, v)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The key a list item reads: its own, or the next position
+    fn list_key(&mut self, item: &ListItem, next: &mut i64) -> EResult<Value> {
+        Ok(match &item.key {
+            Some(k) => self.expr(k)?,
+            None => {
+                *next += 1;
+                Value::Int(*next - 1)
+            }
+        })
+    }
+
+    fn constant(&mut self, name: &str) -> EResult<Value> {
+        if let Some(v) = self.constants.get(name) {
+            return Ok(v.clone());
+        }
+        constant(name).ok_or_else(|| Fatal::error(format!("Undefined constant \"{name}\"")))
+    }
+
+    /// Defines a global constant; false (with a warning) if it already exists
+    fn define_const(&mut self, name: &str, v: Value) -> bool {
+        if self.constants.contains_key(name) || constant(name).is_some() {
+            diag::warning(format!("Constant {name} already defined"));
+            return false;
+        }
+        self.constants.insert(name.to_string(), v);
+        true
     }
 
     fn unset(&mut self, target: &Expr) -> EResult<()> {
@@ -1178,6 +1332,33 @@ impl<W: Write> Interp<W> {
                     )));
                 };
                 self.call_value(&f, arr.values().map(Value::copy_out).collect(), line)
+            }
+            "define" => {
+                let [name, value] = <[Value; 2]>::try_from(vals).map_err(|v| builtins::arg_count(lname, 2, v.len()))?;
+                let name = String::from_utf8_lossy(&self.stringify(&name)?).into_owned();
+                if name.contains("::") {
+                    return Err(Fatal::value_error("define(): Argument #1 ($constant_name) cannot be a class constant"));
+                }
+                Ok(Value::Bool(self.define_const(&name, value)))
+            }
+            "defined" | "constant" => {
+                let [name] = <[Value; 1]>::try_from(vals).map_err(|v| builtins::arg_count(lname, 1, v.len()))?;
+                let name = String::from_utf8_lossy(&self.stringify(&name)?).trim_start_matches('\\').to_string();
+                let found = match name.split_once("::") {
+                    Some((class, cname)) => {
+                        let class = crate::ast::ClassRef::from_name(class);
+                        if lname == "defined" {
+                            let c = self.resolve_class_quiet(&class)?;
+                            return Ok(Value::Bool(c.is_some_and(|c| c.consts.contains_key(cname))));
+                        }
+                        self.class_const(&class, cname)
+                    }
+                    None => self.constant(&name),
+                };
+                match (lname, found) {
+                    ("defined", r) => Ok(Value::Bool(r.is_ok())),
+                    (_, r) => r,
+                }
             }
             "array_map" => self.array_map(vals, line),
             "array_filter" => self.array_filter(vals, line),
@@ -2026,6 +2207,48 @@ fn write_dim<'a>(cur: &'a mut Value, dim: Option<&Value>, read: bool) -> EResult
 }
 
 /// Given the result of a loop body, returns the Flow to propagate outward if the loop should exit
+fn has_ref(items: &[Option<ListItem>]) -> bool {
+    items.iter().flatten().any(|i| i.by_ref || matches!(&i.target.kind, ExprKind::List(inner) if has_ref(inner)))
+}
+
+/// The subject as shown in "Unhandled match case ...": scalars as literals, strings
+/// escaped and cut at 15 bytes, anything else by type
+fn match_case(v: &Value) -> String {
+    match v {
+        Value::Null => "NULL".into(),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => {
+            let s = value::format_float(*f);
+            if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') { s + ".0" } else { s }
+        }
+        Value::Str(s) => {
+            let mut out = String::from("'");
+            for &c in &s[..s.len().min(15)] {
+                match c {
+                    b'\n' => out.push_str("\\n"),
+                    b'\r' => out.push_str("\\r"),
+                    b'\t' => out.push_str("\\t"),
+                    0x0c => out.push_str("\\f"),
+                    0x0b => out.push_str("\\v"),
+                    b'\\' => out.push_str("\\\\"),
+                    0x1b => out.push_str("\\e"),
+                    c if !(32..=126).contains(&c) => out.push_str(&format!("\\x{c:02X}")),
+                    c => out.push(c as char),
+                }
+            }
+            if s.len() > 15 {
+                out.push_str("...");
+            }
+            out.push('\'');
+            out
+        }
+        Value::Array(_) => "of type array".into(),
+        Value::Object(o) => format!("of type {}", o.class.name),
+        Value::Ref(r) => value::with_deref(r, match_case),
+    }
+}
+
 fn loop_flow(flow: Flow) -> Option<Flow> {
     match flow {
         Flow::Normal | Flow::Continue(1) => None,
@@ -2170,6 +2393,28 @@ fn constant(name: &str) -> Option<Value> {
         "INF" => Value::Float(f64::INFINITY),
         "ARRAY_FILTER_USE_KEY" => Value::Int(builtins::ARRAY_FILTER_USE_KEY),
         "ARRAY_FILTER_USE_BOTH" => Value::Int(builtins::ARRAY_FILTER_USE_BOTH),
+        "PHP_VERSION" => Value::str(b"8.5.0".to_vec()),
+        "PHP_MAJOR_VERSION" => Value::Int(8),
+        "PHP_MINOR_VERSION" => Value::Int(5),
+        "PHP_RELEASE_VERSION" => Value::Int(0),
+        "PHP_VERSION_ID" => Value::Int(80500),
+        "PHP_OS" | "PHP_OS_FAMILY" => Value::str(b"Linux".to_vec()),
+        "DIRECTORY_SEPARATOR" => Value::str(b"/".to_vec()),
+        "PATH_SEPARATOR" => Value::str(b":".to_vec()),
+        "PHP_FLOAT_DIG" => Value::Int(15),
+        "M_PI" => Value::Float(std::f64::consts::PI),
+        "M_E" => Value::Float(std::f64::consts::E),
+        "M_SQRT2" => Value::Float(std::f64::consts::SQRT_2),
+        "E_ERROR" => Value::Int(1),
+        "E_WARNING" => Value::Int(2),
+        "E_PARSE" => Value::Int(4),
+        "E_NOTICE" => Value::Int(8),
+        "E_USER_ERROR" => Value::Int(256),
+        "E_USER_WARNING" => Value::Int(512),
+        "E_USER_NOTICE" => Value::Int(1024),
+        "E_DEPRECATED" => Value::Int(8192),
+        "E_USER_DEPRECATED" => Value::Int(16384),
+        "E_ALL" => Value::Int(32767),
         _ => return None,
     })
 }

@@ -1,0 +1,16 @@
+Hello, World!
+  Indented v and two and prop
+Escapes: 	 tab, $ dollar, \ backslash, "quotes" stay
+Closing marker indentation
+  is removed from every line
+World
+Nowdoc $name {$arr['k']} \t stays raw
+string(0) ""
+array(2) {
+  [0]=>
+  string(3) "one"
+  [1]=>
+  string(3) "two"
+}
+CALL ARG
+Line one concatenated
