@@ -86,11 +86,14 @@ pub struct StaticProp {
     pub cell: Rc<RefCell<Value>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ConstState {
     Unevaluated(Expr),
     Evaluating,
     Done(Value),
+    /// An enum case with its backing value expression. Its object is created on
+    /// first access, as php-src does, which decides its handle number
+    Case(Option<Expr>),
 }
 
 #[derive(Debug)]
@@ -113,6 +116,9 @@ pub enum Native {
     GetTraceAsString,
     ThrowableToString,
     ClosureInvoke,
+    EnumCases,
+    EnumFrom,
+    EnumTryFrom,
 }
 
 #[derive(Debug)]
@@ -141,9 +147,17 @@ pub struct ClassEntry {
     /// Every interface implemented, including inherited ones
     pub interfaces: Vec<&'static str>,
     pub is_interface: bool,
+    pub is_trait: bool,
+    pub is_enum: bool,
+    /// The backing type of an enum
+    pub backing: Option<TypeHint>,
+    /// Enum case names in declaration order
+    pub cases: Vec<String>,
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
+    /// Traits used directly by this class, for class_uses()
+    pub traits: Vec<&'static str>,
     /// Built-ins like Closure that `new` refuses
     pub internal_only: bool,
     pub is_throwable: bool,
@@ -317,6 +331,19 @@ impl Drop for Object {
     }
 }
 
+/// A natively implemented method of an enum: cases(), from(), tryFrom()
+pub fn enum_method(name: &str, class: &'static str, body: Native) -> Method {
+    Method {
+        name: name.to_string(),
+        class,
+        vis: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        body: MethodBody::Native(body),
+    }
+}
+
 fn native(name: &str, class: &'static str, body: Native, is_final: bool) -> (String, Rc<Method>) {
     let m = Method {
         name: name.to_string(),
@@ -400,6 +427,8 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     put(ClassEntry { name: "Stringable", is_interface: true, ..Default::default() });
     put(ClassEntry { name: "Throwable", is_interface: true, interfaces: vec!["Stringable"], ..Default::default() });
     put(ClassEntry { name: "stdClass", allow_dynamic: true, ..Default::default() });
+    put(ClassEntry { name: "UnitEnum", is_interface: true, ..Default::default() });
+    put(ClassEntry { name: "BackedEnum", is_interface: true, interfaces: vec!["UnitEnum"], ..Default::default() });
     let exception = put(throwable_base("Exception"));
     let error = put(throwable_base("Error"));
     let mut by_name: HashMap<&str, Rc<ClassEntry>> = HashMap::new();

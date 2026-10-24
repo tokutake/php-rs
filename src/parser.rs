@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::ast::{
     Arg, ArrayItem, Catch, ClassDecl, ClassRef, Expr, ExprKind, FuncDecl, FuncKind, ListItem, Magic, MatchArm, Member, Name,
-    Param, Stmt, TypeHint,
+    Param, Stmt, TraitRule, TypeHint,
 };
 use crate::object::Visibility;
 use crate::lexer::{StrPart, Tok, Token};
@@ -152,10 +152,20 @@ struct Parser {
     depth: u32,
     /// The enclosing class and function, for `__CLASS__`, `__FUNCTION__` and `__METHOD__`
     class: Option<String>,
+    /// Whether `class` is a trait, whose `__CLASS__` is only known at runtime
+    in_trait: bool,
     func: Option<FuncCtx>,
     /// Inside the items of `[...]` / `list(...)`, where a skipped element may
     /// belong to a list pattern that is only recognized at the outer `=`
     in_items: u32,
+}
+
+/// What kind of declaration a class member belongs to
+#[derive(Clone, Copy)]
+enum MemberCtx<'a> {
+    Class,
+    Interface,
+    Enum { name: &'a str, backed: bool },
 }
 
 #[derive(Clone)]
@@ -167,7 +177,7 @@ enum FuncCtx {
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, depth: 0, class: None, func: None, in_items: 0 }
+        Parser { tokens, pos: 0, depth: 0, class: None, in_trait: false, func: None, in_items: 0 }
     }
 
     /// Runs `f` with `func` as the enclosing function
@@ -328,8 +338,16 @@ impl Parser {
                     Ok(Stmt::Const(consts))
                 }
                 "try" => self.try_statement(),
-                "class" | "interface" | "abstract" | "final" | "readonly"
+                "class" | "interface" | "trait" | "abstract" | "final" | "readonly"
                     if matches!(self.peek_at(1), Tok::Ident(_)) =>
+                {
+                    self.class_decl()
+                }
+                // `enum` is only a keyword in front of a declaration
+                "enum"
+                    if matches!(self.peek_at(1), Tok::Ident(_))
+                        && (matches!(self.peek_at(2), Tok::Op("{" | ":"))
+                            || matches!(self.peek_at(2), Tok::Ident(k) if k.eq_ignore_ascii_case("implements"))) =>
                 {
                     self.class_decl()
                 }
@@ -689,36 +707,62 @@ impl Parser {
             }
         }
         let is_interface = self.eat_kw("interface");
-        if !is_interface && !self.eat_kw("class") {
+        let is_trait = !is_interface && self.eat_kw("trait");
+        let is_enum = !is_interface && !is_trait && self.eat_kw("enum");
+        if !is_interface && !is_trait && !is_enum && !self.eat_kw("class") {
             return self.unexpected();
         }
         let Tok::Ident(name) = self.next() else {
             self.pos -= 1;
             return self.unexpected();
         };
+        let backing = if is_enum && self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
+        if let Some(ty) = &backing
+            && (ty.types.len() != 1 || !matches!(ty.types[0].as_str(), "int" | "string"))
+        {
+            return Err(ParseError { msg: format!("Enum backing type must be int or string, {} given", ty.display), line });
+        }
         let mut parent = None;
         let mut interfaces = Vec::new();
-        if self.eat_kw("extends") {
+        if !is_trait && !is_enum && self.eat_kw("extends") {
             if is_interface {
                 interfaces = self.name_list()?;
             } else {
                 parent = Some(self.class_name()?);
             }
         }
-        if !is_interface && self.eat_kw("implements") {
+        if !is_interface && !is_trait && self.eat_kw("implements") {
             interfaces = self.name_list()?;
         }
         self.expect(Tok::Op("{"))?;
         let mut members = Vec::new();
-        let outer = (self.class.replace(name.clone()), self.func.take());
+        let outer = (self.class.replace(name.clone()), self.func.take(), std::mem::replace(&mut self.in_trait, is_trait));
         while !self.eat(&Tok::Op("}")) {
             if self.at(&Tok::Eof) {
                 return self.unexpected();
             }
-            self.class_member(&mut members, is_interface)?;
+            let kind = match (is_interface, is_enum, &backing) {
+                (true, ..) => MemberCtx::Interface,
+                (_, true, b) => MemberCtx::Enum { name: &name, backed: b.is_some() },
+                _ => MemberCtx::Class,
+            };
+            self.class_member(&mut members, kind)?;
         }
-        (self.class, self.func) = outer;
-        let decl = ClassDecl { name, is_interface, is_abstract, is_final, is_readonly, parent, interfaces, members, line };
+        (self.class, self.func, self.in_trait) = outer;
+        let decl = ClassDecl {
+            name,
+            is_interface,
+            is_trait,
+            is_enum,
+            backing,
+            is_abstract,
+            is_final,
+            is_readonly,
+            parent,
+            interfaces,
+            members,
+            line,
+        };
         Ok(Stmt::Class(Rc::new(decl)))
     }
 
@@ -740,7 +784,8 @@ impl Parser {
         Ok(names)
     }
 
-    fn class_member(&mut self, members: &mut Vec<Member>, in_interface: bool) -> PResult<()> {
+    fn class_member(&mut self, members: &mut Vec<Member>, ctx: MemberCtx<'_>) -> PResult<()> {
+        let in_interface = matches!(ctx, MemberCtx::Interface);
         let line = self.line();
         let (mut vis, mut is_static, mut is_abstract, mut is_final, mut readonly) = (None, false, false, false, false);
         while let Tok::Ident(kw) = self.peek() {
@@ -758,7 +803,36 @@ impl Parser {
         }
         let vis = vis.unwrap_or(Visibility::Public);
         if self.eat_kw("use") {
-            return Err(ParseError { msg: "Traits are not supported yet".into(), line });
+            let traits = self.name_list()?;
+            let mut rules = Vec::new();
+            if self.eat(&Tok::Op("{")) {
+                while !self.eat(&Tok::Op("}")) {
+                    rules.push(self.trait_rule()?);
+                }
+            } else {
+                self.end_statement()?;
+            }
+            members.push(Member::Use { traits, rules });
+            return Ok(());
+        }
+        if let MemberCtx::Enum { name: enum_name, backed } = ctx
+            && self.eat_kw("case")
+        {
+            let name = self.class_name()?;
+            let value = if self.eat(&Tok::Op("=")) { Some(self.expr()?) } else { None };
+            match (backed, &value) {
+                (true, None) => {
+                    let msg = format!("Case {name} of backed enum {enum_name} must have a value");
+                    return Err(ParseError { msg, line });
+                }
+                (false, Some(_)) => {
+                    let msg = format!("Case {name} of non-backed enum {enum_name} must not have a value");
+                    return Err(ParseError { msg, line });
+                }
+                _ => {}
+            }
+            members.push(Member::Case { name, value });
+            return self.end_statement();
         }
         if self.eat_kw("const") {
             // An optional type before the name (PHP 8.3)
@@ -802,8 +876,14 @@ impl Parser {
             members.push(Member::Method { func, vis, is_static, is_abstract, is_final });
             return Ok(());
         }
-        if in_interface {
-            return Err(ParseError { msg: "Interfaces may not include properties".into(), line });
+        match ctx {
+            MemberCtx::Interface => {
+                return Err(ParseError { msg: "Interfaces may not include properties".into(), line });
+            }
+            MemberCtx::Enum { name, .. } => {
+                return Err(ParseError { msg: format!("Enum {name} cannot include properties"), line });
+            }
+            MemberCtx::Class => {}
         }
         let ty = if matches!(self.peek(), Tok::Variable(_)) { None } else { Some(self.type_hint()?) };
         loop {
@@ -818,6 +898,38 @@ impl Parser {
             }
         }
         self.end_statement()
+    }
+
+    /// One `A::m insteadof B;` or `[A::]m as [visibility] [alias];` adaptation
+    fn trait_rule(&mut self) -> PResult<TraitRule> {
+        let first = self.class_name()?;
+        let (trait_name, method) = if self.eat(&Tok::Op("::")) { (Some(first), self.class_name()?) } else { (None, first) };
+        let rule = if self.eat_kw("insteadof") {
+            let Some(trait_name) = trait_name else { return self.unexpected() };
+            TraitRule::Insteadof { trait_name, method, excluded: self.name_list()? }
+        } else if self.eat_kw("as") {
+            let vis = match self.peek() {
+                Tok::Ident(k) => match k.to_ascii_lowercase().as_str() {
+                    "public" => Some(Visibility::Public),
+                    "protected" => Some(Visibility::Protected),
+                    "private" => Some(Visibility::Private),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if vis.is_some() {
+                self.next();
+            }
+            let alias = if matches!(self.peek(), Tok::Ident(_)) { Some(self.class_name()?) } else { None };
+            if vis.is_none() && alias.is_none() {
+                return self.unexpected();
+            }
+            TraitRule::Alias { trait_name, method, vis, alias }
+        } else {
+            return self.unexpected();
+        };
+        self.end_statement()?;
+        Ok(rule)
     }
 
     /// After `X::`: a static property, static call, constant or `::class`
@@ -1026,7 +1138,9 @@ impl Parser {
             "__LINE__" => ExprKind::Int(line.into()),
             "__FILE__" => ExprKind::Magic(Magic::File),
             "__DIR__" => ExprKind::Magic(Magic::Dir),
+            "__CLASS__" if self.in_trait => ExprKind::Magic(Magic::Class),
             "__CLASS__" => s(class),
+            "__TRAIT__" => s(if self.in_trait { class } else { "" }),
             "__NAMESPACE__" => s(""),
             "__FUNCTION__" | "__METHOD__" => match &self.func {
                 None => s(""),

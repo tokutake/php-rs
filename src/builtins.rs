@@ -34,7 +34,7 @@ const NAMES: &[&str] = &[
     "get_object_vars", "method_exists", "property_exists", "class_exists", "interface_exists", "is_a",
     "is_subclass_of", "spl_object_id", "spl_object_hash", "strtoupper", "strtolower", "ucfirst", "lcfirst",
     "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
-    "substr", "define", "defined", "constant",
+    "substr", "define", "defined", "constant", "trait_exists", "class_uses", "enum_exists",
 ];
 
 pub fn exists(lname: &str) -> bool {
@@ -692,6 +692,10 @@ fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<us
             out.extend_from_slice(pad.as_bytes());
             out.extend_from_slice(b"}\n");
         }
+        Value::Object(o) if o.class.is_enum => {
+            let case = String::from_utf8_lossy(&o.get("name").to_bytes()).into_owned();
+            out.extend_from_slice(format!("enum({}::{case})\n", o.class.name).as_bytes());
+        }
         Value::Object(o) => {
             let props = debug_props(o);
             let count = props.iter().filter(|p| p.value.is_some()).count();
@@ -747,7 +751,12 @@ fn print_r_at(out: &mut Vec<u8>, v: &Value, indent: usize, visiting: &mut Vec<us
                 .collect()
         }
         Value::Object(o) => {
-            out.extend_from_slice(format!("{} Object\n", o.class.name).as_bytes());
+            let kind = match &o.class.backing {
+                _ if !o.class.is_enum => "Object".to_string(),
+                Some(ty) => format!("Enum:{}", ty.display),
+                None => "Enum".to_string(),
+            };
+            out.extend_from_slice(format!("{} {kind}\n", o.class.name).as_bytes());
             debug_props(o)
                 .into_iter()
                 .filter_map(|p| {

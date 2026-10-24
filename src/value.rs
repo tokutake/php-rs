@@ -433,6 +433,8 @@ pub fn loose_cmp(a: &Value, b: &Value) -> Option<Ordering> {
         (Str(_), Int(_) | Float(_)) => loose_cmp(b, a).map(Ordering::reverse),
         (Array(x), Array(y)) => nested(|| cmp_arrays(x, y)).flatten(),
         (Object(x), Object(y)) if Rc::ptr_eq(x, y) => Some(Ordering::Equal),
+        // Enum cases are singletons: only identical ones are equal
+        (Object(x), Object(y)) if x.class.is_enum || y.class.is_enum => None,
         // Objects of the same class compare by their properties; anything else is uncomparable
         (Object(x), Object(y)) if Rc::ptr_eq(&x.class, &y.class) && x.closure().is_none() => {
             let px: PhpArray = x.ordered_props().into_iter().collect();

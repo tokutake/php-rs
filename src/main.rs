@@ -49,6 +49,10 @@ fn run(src: &[u8], file: String) -> bool {
         Ok(p) => p,
         Err((label, msg, line)) => {
             println!("\n{label}: {msg} in {file} on line {line}");
+            // PHP 8.5 prints a backtrace for fatal errors, empty while compiling
+            if label == "Fatal error" {
+                println!("Stack trace:\n#0 {{main}}");
+            }
             return false;
         }
     };

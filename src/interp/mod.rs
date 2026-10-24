@@ -209,8 +209,9 @@ pub struct Interp<W: Write> {
     functions: HashMap<String, Rc<FuncDecl>>,
     /// Constants from `const` and define()
     constants: HashMap<String, Value>,
-    /// `static` variables, keyed by the declaring function (null for the main script)
-    statics: HashMap<*const FuncDecl, HashMap<String, RefCellValue>>,
+    /// `static` variables, keyed by the declaring function (null for the main script) and the class
+    /// scope, since each class using a trait gets its own copy of the method
+    statics: HashMap<(*const FuncDecl, &'static str), HashMap<String, RefCellValue>>,
     classes: HashMap<String, Rc<ClassEntry>>,
     /// Class declarations already executed (hoisted ones are seen twice)
     declared: HashSet<*const ClassDecl>,
@@ -289,7 +290,8 @@ impl<W: Write> Interp<W> {
             let mut rest = Vec::new();
             for c in pending {
                 let lname = c.name.to_ascii_lowercase();
-                let deps_known = c.parent.iter().chain(&c.interfaces).all(|d| self.classes.contains_key(&d.to_ascii_lowercase()));
+                let deps_known =
+                    c.dependencies().iter().all(|d| self.classes.contains_key(&d.to_ascii_lowercase()));
                 if deps_known && !self.classes.contains_key(&lname) {
                     if self.declare_class(c).is_ok() {
                         continue;
@@ -586,7 +588,8 @@ impl<W: Write> Interp<W> {
                 }
             }
             Stmt::StaticVar(vars) => {
-                let key = self.frame().func.as_ref().map_or(std::ptr::null(), Rc::as_ptr);
+                let func = self.frame().func.as_ref().map_or(std::ptr::null(), Rc::as_ptr);
+                let key = (func, self.ctx().scope.as_ref().map_or("", |c| c.name));
                 for (name, init) in vars {
                     let existing = self.statics.get(&key).and_then(|m| m.get(name)).cloned();
                     let r = match existing {
@@ -661,6 +664,7 @@ impl<W: Write> Interp<W> {
                 Value::str(dir.into_bytes())
             }
             ExprKind::Magic(Magic::ClosureName) => Value::str(self.ctx().name.as_bytes()),
+            ExprKind::Magic(Magic::Class) => Value::str(self.ctx().scope.as_ref().map_or("", |c| c.name)),
             ExprKind::Hole => return Err(Fatal::compile("Cannot use empty array elements in arrays")),
             ExprKind::List(_) => return Err(Fatal::compile("Cannot use list() outside of an assignment")),
             ExprKind::Match(subject, arms) => {

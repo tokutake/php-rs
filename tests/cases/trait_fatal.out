@@ -1,0 +1,5 @@
+start
+
+Fatal error: Trait method B::f has not been applied as C::f, because of collision with A::f in trait_fatal.php on line 5
+Stack trace:
+#0 {main}

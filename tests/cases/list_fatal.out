@@ -1,2 +1,4 @@
 
 Fatal error: Cannot mix keyed and unkeyed array entries in assignments in list_fatal.php on line 3
+Stack trace:
+#0 {main}
