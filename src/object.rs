@@ -406,6 +406,12 @@ impl Object {
         }
     }
 
+    pub fn set_key(&self, key: Key, v: Value) {
+        if let Ok(mut p) = self.props.try_borrow_mut() {
+            p.insert(key, v);
+        }
+    }
+
     /// Initialized properties in slot order: declared ones in class layout order
     /// (even if re-set later), then dynamic ones in creation order
     pub fn ordered_props(&self) -> Vec<(Key, Value)> {
@@ -645,6 +651,12 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         is_interface: true,
         interfaces: vec!["Traversable"],
         methods: [abstract_method("getIterator", "IteratorAggregate")].into_iter().collect(),
+        ..Default::default()
+    });
+    put(ClassEntry {
+        name: "JsonSerializable",
+        is_interface: true,
+        methods: [abstract_method("jsonSerialize", "JsonSerializable")].into_iter().collect(),
         ..Default::default()
     });
     let generator_methods = [

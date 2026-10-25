@@ -64,11 +64,13 @@ pub struct Fatal {
     pub uncatchable: bool,
     /// `exit`: the script ends with this status, without being an error
     pub exit: Option<u8>,
+    /// The exception's code, for exceptions raised by built-ins
+    pub code: i64,
 }
 
 impl Fatal {
     pub fn new(class: &'static str, msg: impl Into<String>) -> Self {
-        Fatal { class, msg: msg.into(), line: None, file: None, trace: None, object: None, uncatchable: false, exit: None }
+        Fatal { class, msg: msg.into(), line: None, file: None, trace: None, object: None, uncatchable: false, exit: None, code: 0 }
     }
 
     fn thrown(object: Rc<Object>) -> Self {
@@ -321,6 +323,15 @@ fn recursive_reference() -> Fatal {
 impl<W: Write> Runtime for Interp<W> {
     fn stringify(&mut self, v: &Value) -> EResult<Vec<u8>> {
         Interp::stringify(self, v)
+    }
+
+    fn call_method0(&mut self, obj: &Rc<Object>, name: &str) -> EResult<Value> {
+        self.call_named_method(obj, name)
+    }
+
+    fn new_object(&mut self, class: &str) -> Option<Rc<Object>> {
+        let class = self.classes.get(&class.to_ascii_lowercase())?.clone();
+        Some(Object::new(class, crate::object::Internal::None))
     }
 }
 
@@ -2995,13 +3006,22 @@ fn list(values: Vec<Value>) -> Value {
     Value::Array(Rc::new(PhpArray::from_values(values)))
 }
 
-/// `(array)`: objects expose their properties under the mangled names
+/// `(array)`: objects expose their properties under the mangled names, and
+/// numeric property names become integer keys
 fn cast_array(v: Value) -> Value {
     match v {
         Value::Array(_) => v,
         Value::Null => Value::Array(Rc::new(PhpArray::new())),
         Value::Object(ref o) if o.closure().is_some() => list(vec![v]),
-        Value::Object(o) => Value::Array(Rc::new(o.ordered_props().into_iter().collect())),
+        Value::Object(o) => Value::Array(Rc::new(
+            o.ordered_props()
+                .into_iter()
+                .map(|(k, v)| match k {
+                    Key::Str(s) => (Key::from_bytes(&s), v),
+                    k => (k, v),
+                })
+                .collect(),
+        )),
         other => list(vec![other]),
     }
 }

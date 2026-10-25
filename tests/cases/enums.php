@@ -49,3 +49,11 @@ try { $s = Size::Small; $s->extra = 1; } catch (Error $e) { echo $e->getMessage(
 $label = match (Size::make()) { Size::Small => "S", Size::Large => "L" };
 echo $label, "\n";
 var_dump(Size::cases());
+
+// Using any constant of a backed enum creates all its cases, in order; pure enums create them one by one
+enum IdB: string { const K = 1; case X = 'x'; case Y = 'y'; }
+enum IdP { const K = 1; case X; case Y; }
+echo IdP::K, IdB::K, "\n";
+var_dump(new stdClass);
+$y = IdP::Y;
+var_dump(new stdClass);

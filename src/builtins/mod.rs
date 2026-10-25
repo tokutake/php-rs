@@ -4,6 +4,7 @@ mod array;
 mod env;
 mod file;
 mod format;
+mod json;
 mod signatures;
 mod math;
 mod string;
@@ -29,6 +30,7 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| array::constant(name))
         .or_else(|| file::constant(name))
         .or_else(|| env::constant(name))
+        .or_else(|| json::constant(name))
 }
 
 pub use format::{sprintf, vsprintf};
@@ -48,6 +50,10 @@ use crate::value::{
 /// their __toString, which is PHP code
 pub trait Runtime {
     fn stringify(&mut self, v: &Value) -> EResult<Vec<u8>>;
+    /// Calls a method without arguments
+    fn call_method0(&mut self, obj: &Rc<Object>, name: &str) -> EResult<Value>;
+    /// A fresh instance of a built-in class, without running a constructor
+    fn new_object(&mut self, class: &str) -> Option<Rc<Object>>;
 }
 
 /// Built-ins whose first parameter is by reference
@@ -102,6 +108,7 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (array::NAMES, array::call),
     (file::NAMES, file::call),
     (env::NAMES, env::call),
+    (json::NAMES, json::call),
 ];
 
 pub fn next_occupied() -> Fatal {
@@ -115,6 +122,14 @@ struct NoRuntime;
 impl Runtime for NoRuntime {
     fn stringify(&mut self, v: &Value) -> EResult<Vec<u8>> {
         Ok(v.to_bytes())
+    }
+
+    fn call_method0(&mut self, obj: &Rc<Object>, name: &str) -> EResult<Value> {
+        Err(Fatal::error(format!("Call to {}::{name}() from a by-reference built-in", obj.class.name)))
+    }
+
+    fn new_object(&mut self, _class: &str) -> Option<Rc<Object>> {
+        None
     }
 }
 

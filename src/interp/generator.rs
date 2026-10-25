@@ -881,7 +881,7 @@ impl<W: Write> Interp<W> {
         }
     }
 
-    fn call_named_method(&mut self, obj: &Rc<Object>, name: &str) -> EResult<Value> {
+    pub(super) fn call_named_method(&mut self, obj: &Rc<Object>, name: &str) -> EResult<Value> {
         let Some(m) = obj.class.find_method(name).cloned() else {
             return Err(Fatal::error(format!("Call to undefined method {}::{name}()", obj.class.name)));
         };

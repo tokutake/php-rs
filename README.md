@@ -56,8 +56,12 @@ Early stage. Implemented so far:
   math (`round`, `max`, `number_format`, base conversion, ...), arrays (`array_slice`,
   `array_splice`, `array_column`, `array_unique`, the sort functions with flags,
   `array_walk`, `compact`/`extract`, ...), and the `@` operator
+- JSON: `json_encode()` (all the flags, pretty printing, `JsonSerializable`, backed
+  enums), `json_decode()` (objects or arrays, big integers, depth limits),
+  `json_validate()`, `json_last_error()` and `JSON_THROW_ON_ERROR`; the decoder keeps
+  its own stack, so deeply nested input cannot overflow the native one
 
-Not yet: regular expressions, JSON, dates, writing files and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
+Not yet: regular expressions, dates, writing files and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage
 
