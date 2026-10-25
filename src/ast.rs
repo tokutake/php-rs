@@ -1,5 +1,18 @@
 use std::rc::Rc;
 
+/// A script file: its path as messages show it, and its declare(strict_types)
+#[derive(Debug)]
+pub struct SourceFile {
+    pub path: Rc<str>,
+    pub strict: bool,
+}
+
+/// A parsed file
+pub struct Program {
+    pub stmts: Vec<Stmt>,
+    pub file: Rc<SourceFile>,
+}
+
 use crate::object::Visibility;
 
 /// An expression node. `line` is where the node starts, as in php-src's AST
@@ -54,6 +67,10 @@ pub enum ExprKind {
     Clone(Box<Expr>),
     /// `@expr`: diagnostics raised while evaluating it are dropped
     Silence(Box<Expr>),
+    /// `include`, `require` and their `_once` forms
+    Include(IncludeKind, Box<Expr>),
+    /// `exit` / `die`, with an optional status or message
+    Exit(Option<Box<Expr>>),
     Throw(Box<Expr>),
     Isset(Vec<Expr>),
     Empty(Box<Expr>),
@@ -70,6 +87,25 @@ pub enum ExprKind {
     /// that these only remain as Stmt::Yield
     Yield { key: Option<Box<Expr>>, value: Option<Box<Expr>> },
     YieldFrom(Box<Expr>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IncludeKind {
+    Include,
+    IncludeOnce,
+    Require,
+    RequireOnce,
+}
+
+impl IncludeKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            IncludeKind::Include => "include",
+            IncludeKind::IncludeOnce => "include_once",
+            IncludeKind::Require => "require",
+            IncludeKind::RequireOnce => "require_once",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -188,8 +224,9 @@ pub enum Stmt {
     Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
     /// `const A = 1, B = 2;` at the top level
     Const(Vec<(String, Expr)>),
-    /// `declare(strict_types=1)`, which can only be the first statement
-    StrictTypes(bool),
+    /// `declare(strict_types=...)`, which can only be the first statement. The
+    /// mode is recorded in the file's SourceFile
+    StrictTypes,
     /// In a lowered generator body: a yield, whose result (the value sent in)
     /// goes to the hidden variable `target`
     Yield { key: Option<Expr>, value: Option<Expr>, target: Option<String> },
@@ -294,6 +331,8 @@ pub struct FuncDecl {
     /// Contains `yield`: calling it creates a Generator, and the body is lowered
     /// (see genlower)
     pub is_generator: bool,
+    /// Where it is declared, which decides the file of its diagnostics and its strict_types
+    pub file: Rc<SourceFile>,
 }
 
 impl FuncDecl {

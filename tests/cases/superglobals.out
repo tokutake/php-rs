@@ -1,0 +1,77 @@
+int(1)
+array(1) {
+  [0]=>
+  string(16) "superglobals.php"
+}
+bool(false)
+int(1)
+array(1) {
+  [0]=>
+  string(16) "superglobals.php"
+}
+string(16) "superglobals.php"
+string(16) "superglobals.php"
+string(0) ""
+bool(true)
+bool(true)
+array(0) {
+}
+array(0) {
+}
+array(0) {
+}
+array(0) {
+}
+array(0) {
+}
+bool(true)
+bool(true)
+bool(true)
+int(1)
+array(1) {
+  ["q"]=>
+  string(1) "x"
+}
+array(7) {
+  [0]=>
+  string(4) "_GET"
+  [1]=>
+  string(5) "_POST"
+  [2]=>
+  string(7) "_COOKIE"
+  [3]=>
+  string(6) "_FILES"
+  [4]=>
+  string(4) "argv"
+  [5]=>
+  string(4) "argc"
+  [6]=>
+  string(7) "_SERVER"
+}
+bool(false)
+bool(true)
+string(1) "1"
+bool(true)
+bool(false)
+string(3) "cli"
+string(3) "cli"
+bool(true)
+array(8) {
+  [0]=>
+  string(15) "SCRIPT_FILENAME"
+  [1]=>
+  string(15) "PATH_TRANSLATED"
+  [2]=>
+  string(13) "DOCUMENT_ROOT"
+  [3]=>
+  string(18) "REQUEST_TIME_FLOAT"
+  [4]=>
+  string(12) "REQUEST_TIME"
+  [5]=>
+  string(4) "argv"
+  [6]=>
+  string(4) "argc"
+  [7]=>
+  string(4) "mine"
+}
+putenv(): Argument #1 ($assignment) must have a valid syntax

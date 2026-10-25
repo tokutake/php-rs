@@ -1,0 +1,72 @@
+main include.php cases
+in a: a.php inc x=10
+string(8) "a-result"
+string(8) "set by a"
+int(200)
+in a: a.php inc x=10
+string(8) "a-result"
+bool(true)
+int(1)
+bool(true)
+string(18) "hello from b.php 2"
+int(43)
+
+Warning: include(inc/missing.php): Failed to open stream: No such file or directory in include.php on line 13
+
+Warning: include(): Failed opening 'inc/missing.php' for inclusion (include_path='.:/usr/share/php') in include.php on line 13
+bool(false)
+after missing
+bool(false)
+a.php:6
+#0 /include.php(16): a_throw()
+#1 {main}
+
+Warning: Undefined variable $undefined_in_a in inc/a.php on line 7
+NULL
+int(10)
+bool(false)
+int(5)
+int(20)
+string(3) "yes"
+bool(false)
+bool(true)
+bool(true)
+string(3) "5xx"
+strlen(): Argument #1 ($string) must be of type string, int given
+t.php:5
+#0 /include.php(31): include()
+t.php:3
+#0 /inc/t.php(6): thrower()
+t.php:7
+#0 /include.php(31): include()
+ParseError: syntax error, unexpected token ";" in broken.php:2
+string(5) "c.txt"
+string(1) "c"
+string(3) "dir"
+string(4) "/a/b"
+string(2) "/a"
+string(1) "."
+string(1) "/"
+array(4) {
+  ["dirname"]=>
+  string(4) "/x/y"
+  ["basename"]=>
+  string(14) "archive.tar.gz"
+  ["extension"]=>
+  string(2) "gz"
+  ["filename"]=>
+  string(11) "archive.tar"
+}
+string(0) ""
+bool(true)
+bool(false)
+bool(true)
+string(11) "include.php"
+bool(true)
+
+Warning: require(inc/missing2.php): Failed to open stream: No such file or directory in include.php on line 39
+
+Fatal error: Uncaught Error: Failed opening required 'inc/missing2.php' (include_path='.:/usr/share/php') in include.php:39
+Stack trace:
+#0 {main}
+  thrown in include.php on line 39

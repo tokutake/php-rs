@@ -178,6 +178,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "from_base", default: None, variadic: false, by_ref: false },
         Param { name: "to_base", default: None, variadic: false, by_ref: false },
     ]),
+    ("basename", &[
+        Param { name: "path", default: None, variadic: false, by_ref: false },
+        Param { name: "suffix", default: Some("\"\""), variadic: false, by_ref: false },
+    ]),
     ("bin2hex", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
@@ -282,6 +286,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("deg2rad", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
+    ("dirname", &[
+        Param { name: "path", default: None, variadic: false, by_ref: false },
+        Param { name: "levels", default: Some("1"), variadic: false, by_ref: false },
+    ]),
     ("doubleval", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
     ]),
@@ -359,6 +367,16 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "num1", default: None, variadic: false, by_ref: false },
         Param { name: "num2", default: None, variadic: false, by_ref: false },
     ]),
+    ("file_exists", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("file_get_contents", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "use_include_path", default: Some("false"), variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "offset", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
+    ]),
     ("floatval", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
     ]),
@@ -409,6 +427,12 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("get_parent_class", &[
         Param { name: "object_or_class", default: Some("UNKNOWN"), variadic: false, by_ref: false },
+    ]),
+    ("getcwd", &[
+    ]),
+    ("getenv", &[
+        Param { name: "name", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "local_only", default: Some("false"), variadic: false, by_ref: false },
     ]),
     ("gettype", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
@@ -473,8 +497,14 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("is_countable", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
     ]),
+    ("is_dir", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
     ("is_double", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
+    ]),
+    ("is_file", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
     ]),
     ("is_finite", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
@@ -508,6 +538,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("is_object", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
+    ]),
+    ("is_readable", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
     ]),
     ("is_scalar", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
@@ -587,6 +620,18 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("ord", &[
         Param { name: "character", default: None, variadic: false, by_ref: false },
     ]),
+    ("pathinfo", &[
+        Param { name: "path", default: None, variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("PATHINFO_ALL"), variadic: false, by_ref: false },
+    ]),
+    ("php_sapi_name", &[
+    ]),
+    ("php_uname", &[
+        Param { name: "mode", default: Some("\"a\""), variadic: false, by_ref: false },
+    ]),
+    ("phpversion", &[
+        Param { name: "extension", default: Some("null"), variadic: false, by_ref: false },
+    ]),
     ("pi", &[
     ]),
     ("pow", &[
@@ -605,6 +650,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "object_or_class", default: None, variadic: false, by_ref: false },
         Param { name: "property", default: None, variadic: false, by_ref: false },
     ]),
+    ("putenv", &[
+        Param { name: "assignment", default: None, variadic: false, by_ref: false },
+    ]),
     ("rad2deg", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
@@ -612,6 +660,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "start", default: None, variadic: false, by_ref: false },
         Param { name: "end", default: None, variadic: false, by_ref: false },
         Param { name: "step", default: Some("1"), variadic: false, by_ref: false },
+    ]),
+    ("realpath", &[
+        Param { name: "path", default: None, variadic: false, by_ref: false },
     ]),
     ("round", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },

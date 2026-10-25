@@ -566,7 +566,7 @@ impl<W: Write> Interp<W> {
         let obj = Object::new(class.clone(), Internal::None);
         if class.is_throwable {
             // Like php-src, a Throwable remembers where `new` ran, not where it is thrown
-            obj.set("\0*\0file", Value::str(self.file.clone()));
+            obj.set("\0*\0file", Value::str(self.file.path.to_string()));
             obj.set("\0*\0line", Value::Int(line as i64));
             obj.set(&obj.throwable_key("trace"), object::trace_array(&self.trace()));
         }
@@ -594,7 +594,8 @@ impl<W: Write> Interp<W> {
         let class = self.classes.get(&e.class.to_ascii_lowercase()).cloned().unwrap_or_else(|| self.classes["error"].clone());
         let obj = Object::new(class, Internal::None);
         obj.set("\0*\0message", Value::str(e.msg));
-        obj.set("\0*\0file", Value::str(self.file.clone()));
+        let file = e.file.unwrap_or_else(|| self.file.path.clone());
+        obj.set("\0*\0file", Value::str(file.to_string()));
         obj.set("\0*\0line", Value::Int(e.line.unwrap_or_else(diag::line) as i64));
         let trace = e.trace.unwrap_or_else(|| self.trace());
         obj.set(&obj.throwable_key("trace"), object::trace_array(&trace));

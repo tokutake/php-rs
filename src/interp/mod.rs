@@ -11,7 +11,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::array::{Key, PhpArray};
-use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, ListItem, Magic, Name, Stmt, TypeHint};
+use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, ListItem, Magic, Name, Program, SourceFile, Stmt, TypeHint};
 use crate::builtins::{self, Runtime};
 use crate::diag;
 use crate::object::{self, ClassEntry, Closure, Internal, Method, Native, Object, TraceFrame};
@@ -56,16 +56,19 @@ pub struct Fatal {
     pub msg: String,
     /// Where it was thrown and the stack trace, filled in as it leaves the innermost call
     pub line: Option<u32>,
+    pub file: Option<Rc<str>>,
     pub trace: Option<Vec<TraceFrame>>,
     /// A user-thrown exception object, which carries its own message, line and trace
     pub object: Option<Rc<Object>>,
     /// A compile-time style error ("Fatal error: Cannot redeclare ..."), not an exception
     pub uncatchable: bool,
+    /// `exit`: the script ends with this status, without being an error
+    pub exit: Option<u8>,
 }
 
 impl Fatal {
     pub fn new(class: &'static str, msg: impl Into<String>) -> Self {
-        Fatal { class, msg: msg.into(), line: None, trace: None, object: None, uncatchable: false }
+        Fatal { class, msg: msg.into(), line: None, file: None, trace: None, object: None, uncatchable: false, exit: None }
     }
 
     fn thrown(object: Rc<Object>) -> Self {
@@ -116,6 +119,8 @@ type RefCellValue = Rc<RefCell<Value>>;
 enum Base<'e> {
     /// A variable of the current frame, named in the AST
     Var(&'e str),
+    /// A global variable, through `$GLOBALS['name']`
+    Global(String),
     /// `$obj->name`
     Prop(Rc<Object>, String),
     /// A static property's storage, with its declared type and `Class::$name` for messages
@@ -246,12 +251,14 @@ struct Frame {
     /// Called back by a built-in function: its arguments come from internal
     /// code, which passes them in coercive mode even under strict_types
     by_builtin: bool,
+    /// The file the call was made from
+    call_file: Rc<str>,
 }
 
 pub struct Interp<W: Write> {
     out: W,
-    /// Script path as shown in diagnostics
-    file: String,
+    /// The file of the code running: its path as diagnostics show it, and its strict_types
+    file: Rc<SourceFile>,
     frames: Vec<Frame>,
     functions: HashMap<String, Rc<FuncDecl>>,
     /// Constants from `const` and define()
@@ -267,16 +274,22 @@ pub struct Interp<W: Write> {
     magic_guard: HashSet<(u32, String, u8)>,
     /// Built-in calls in progress, with the number of PHP frames when each was
     /// made, so stack traces can show them between the PHP frames
-    internal_calls: Vec<(usize, TraceFrame)>,
+    /// The bool marks an include, which is no built-in to the code it runs
+    internal_calls: Vec<(usize, TraceFrame, bool)>,
     /// Destructors called at the end of the script show as called internally
     in_shutdown: bool,
-    /// Destructor calls in progress. One running after a frame has gone does not
-    /// add to the frame count, but still nests natively
-    destructing: usize,
+    /// Destructor calls and includes in progress: they nest natively without
+    /// adding to the frame count, so they count towards the depth limit separately
+    nesting: usize,
     /// Generators being run, innermost last
     gen_runs: Vec<generator::GenRun>,
     /// Parsed defaults of built-in parameters, by source text
     builtin_defaults: HashMap<&'static str, Rc<Expr>>,
+    /// Files included so far, for include_once and require_once
+    included: HashSet<String>,
+    /// Included files' code by path, parsed once like php-src's compiled file cache.
+    /// Their functions and classes refer to it
+    programs: HashMap<String, Rc<Program>>,
 }
 
 fn undefined_constant(name: &str) -> Fatal {
@@ -291,6 +304,16 @@ fn const_key(name: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// The process environment as an array, as $_ENV and $_SERVER start with it
+fn env_array() -> PhpArray {
+    use std::os::unix::ffi::OsStrExt;
+    let mut arr = PhpArray::new();
+    for (k, v) in std::env::vars_os() {
+        arr.insert(Key::from_bytes(k.as_bytes()), Value::str(v.as_bytes().to_vec()));
+    }
+    arr
+}
+
 fn recursive_reference() -> Fatal {
     Fatal::error("Cannot modify a value through a reference to itself")
 }
@@ -302,7 +325,7 @@ impl<W: Write> Runtime for Interp<W> {
 }
 
 impl<W: Write> Interp<W> {
-    pub fn new(out: W, file: String) -> Self {
+    pub fn new(out: W, file: Rc<SourceFile>) -> Self {
         let main = Frame {
             vars: Vars::default(),
             func: None,
@@ -310,6 +333,7 @@ impl<W: Write> Interp<W> {
             call_line: 0,
             args: Vec::new(),
             by_builtin: false,
+            call_file: file.path.clone(),
         };
         Interp {
             out,
@@ -323,9 +347,11 @@ impl<W: Write> Interp<W> {
             magic_guard: HashSet::new(),
             internal_calls: Vec::new(),
             in_shutdown: false,
-            destructing: 0,
+            nesting: 0,
             gen_runs: Vec::new(),
             builtin_defaults: HashMap::new(),
+            included: HashSet::new(),
+            programs: HashMap::new(),
         }
     }
 
@@ -333,28 +359,163 @@ impl<W: Write> Interp<W> {
         self.out
     }
 
-    /// Runs a script. An uncaught error is reported the way PHP does; returns false then
-    pub fn run(&mut self, stmts: &[Stmt]) -> bool {
-        STRICT_TYPES.with(|s| s.set(matches!(stmts.first(), Some(Stmt::StrictTypes(true)))));
-        let result = self.hoist(stmts).and_then(|_| self.block(stmts));
-        let mut ok = true;
-        if let Err(e) = result {
-            ok = false;
-            let fatal = e.uncatchable;
-            self.report(e);
-            // A fatal error ends the script without destructors, an uncaught exception does not
-            if fatal {
-                object::disable_destructors();
-                return false;
+    /// Switches to the code of another file, returning the one left
+    fn enter_file(&mut self, file: &Rc<SourceFile>) -> Rc<SourceFile> {
+        if Rc::ptr_eq(&self.file, file) {
+            return file.clone();
+        }
+        STRICT_TYPES.with(|s| s.set(file.strict));
+        diag::set_file(file.path.clone());
+        std::mem::replace(&mut self.file, file.clone())
+    }
+
+    /// Runs a script, giving the exit status. An uncaught error is reported the
+    /// way PHP does, with status 255
+    pub fn run(&mut self, program: &Program) -> u8 {
+        self.included.insert(program.file.path.to_string());
+        self.run_main(program)
+    }
+
+    /// include / require: runs another file in the current scope. The result is
+    /// the file's `return` value, else 1; false when an include cannot open it
+    fn include(&mut self, kind: crate::ast::IncludeKind, path: &str, line: u32) -> EResult<Value> {
+        use crate::ast::IncludeKind;
+        const INCLUDE_PATH: &str = ".:/usr/share/php";
+        let fname = kind.name();
+        let require = matches!(kind, IncludeKind::Require | IncludeKind::RequireOnce);
+        let Some(found) = self.resolve_include(path) else {
+            diag::warning(format!("{fname}({path}): Failed to open stream: No such file or directory"));
+            if require {
+                return Err(Fatal::error(format!("Failed opening required '{path}' (include_path='{INCLUDE_PATH}')")));
+            }
+            diag::warning(format!("{fname}(): Failed opening '{path}' for inclusion (include_path='{INCLUDE_PATH}')"));
+            return Ok(Value::Bool(false));
+        };
+        let shown = found.display().to_string();
+        if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce) && self.included.contains(&shown) {
+            return Ok(Value::Bool(true));
+        }
+        self.included.insert(shown.clone());
+        let program = match self.programs.get(&shown) {
+            Some(p) => p.clone(),
+            None => {
+                let p = self.load(fname, path, &found, &shown)?;
+                let Some(p) = p else { return Ok(Value::Bool(false)) };
+                self.programs.insert(shown.clone(), p.clone());
+                p
+            }
+        };
+        // The include shows in stack traces like a call.
+        // Its argument (the file) only shows when the trace continues inside it
+        let args = vec![Value::str(shown.clone())];
+        let frame = TraceFrame { file: self.file.path.to_string(), line, function: fname.into(), class: None, args };
+        self.internal_calls.push((self.frames.len(), frame, true));
+        if self.frames.len() + self.nesting > MAX_CALL_DEPTH {
+            self.internal_calls.pop();
+            return Err(Fatal::error(
+                "Maximum call stack size of 8355840 bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?",
+            ));
+        }
+        let prev = self.enter_file(&program.file);
+        self.nesting += 1;
+        let result = self.hoist(&program.stmts).and_then(|_| self.block(&program.stmts));
+        self.nesting -= 1;
+        // Errors leaving the file are located while it is current
+        let result = result.map_err(|mut e| {
+            if e.object.is_none() && e.exit.is_none() {
+                e.line = Some(e.line.unwrap_or_else(diag::line));
+                e.file.get_or_insert_with(diag::file);
+                if e.trace.is_none() {
+                    e.trace = Some(self.trace());
+                }
+                if !e.uncatchable {
+                    return Fatal::thrown(self.exception_object(e));
+                }
+            }
+            e
+        });
+        self.enter_file(&prev);
+        self.internal_calls.pop();
+        Ok(match result? {
+            Flow::Return(v) => v,
+            _ => Value::Int(1),
+        })
+    }
+
+    /// Reads and parses an included file; None (after a warning) if it cannot be read
+    fn load(&mut self, fname: &str, path: &str, found: &std::path::Path, shown: &str) -> EResult<Option<Rc<Program>>> {
+        let src = match std::fs::read(found) {
+            Ok(s) => s,
+            Err(e) => {
+                diag::warning(format!("{fname}({path}): Failed to open stream: {e}"));
+                return Ok(None);
+            }
+        };
+        let parsed = crate::lexer::lex(&src)
+            .map_err(|e| ("Parse error", e.msg, e.line))
+            .and_then(|tokens| crate::parser::parse(tokens, shown).map_err(|e| (e.label(), e.msg, e.line)));
+        match parsed {
+            Ok(p) => Ok(Some(Rc::new(p))),
+            Err((label, msg, at)) => {
+                // A syntax error is a ParseError thrown by the include; other compile errors are fatal
+                let mut e = if label == "Parse error" { Fatal::new("ParseError", msg) } else { Fatal::compile(msg) };
+                e.line = Some(at);
+                e.file = Some(shown.into());
+                Err(e)
             }
         }
-        if let Err(e) = self.shutdown() {
-            ok = false;
-            self.report(e);
+    }
+
+    /// Finds an included file: absolute and ./ ../ paths as they are, others
+    /// in the include path (the working directory) and then the directory of
+    /// the including script, as php-src does
+    fn resolve_include(&self, path: &str) -> Option<std::path::PathBuf> {
+        use std::path::Path;
+        let p = Path::new(path);
+        let is_file = |p: &Path| p.is_file().then(|| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
+        if p.is_absolute() || path.starts_with("./") || path.starts_with("../") {
+            return is_file(p);
+        }
+        if let Some(found) = is_file(p) {
+            return Some(found);
+        }
+        let dir = Path::new(&*self.file.path).parent()?;
+        is_file(&dir.join(p))
+    }
+
+    fn run_main(&mut self, program: &Program) -> u8 {
+        let stmts = &program.stmts;
+        STRICT_TYPES.with(|s| s.set(program.file.strict));
+        diag::set_file(program.file.path.clone());
+        self.file = program.file.clone();
+        let result = self.hoist(stmts).and_then(|_| self.block(stmts));
+        let mut status = 0;
+        match result {
+            Ok(_) => {}
+            // exit ends the script normally, destructors included
+            Err(Fatal { exit: Some(s), .. }) => status = s,
+            Err(e) => {
+                status = 255;
+                let fatal = e.uncatchable;
+                self.report(e);
+                // A fatal error ends the script without destructors, an uncaught exception does not
+                if fatal {
+                    object::disable_destructors();
+                    return status;
+                }
+            }
+        }
+        match self.shutdown() {
+            Ok(()) => {}
+            Err(Fatal { exit: Some(s), .. }) => status = s,
+            Err(e) => {
+                status = 255;
+                self.report(e);
+            }
         }
         object::disable_destructors();
         self.flush_diags();
-        ok
+        status
     }
 
     /// Destroys what is left at the end of the script like php-src: global
@@ -393,9 +554,18 @@ impl<W: Write> Interp<W> {
         let msg = if e.uncatchable {
             let line = e.line.unwrap_or_else(diag::line);
             let trace = object::trace_string(&e.trace.unwrap_or_default());
-            format!("\nFatal error: {} in {} on line {line}\nStack trace:\n{trace}\n", e.msg, self.file)
+            let file = e.file.unwrap_or_else(|| self.file.path.clone());
+            format!("\nFatal error: {} in {file} on line {line}\nStack trace:\n{trace}\n", e.msg)
         } else {
             let ex = self.exception_object(e);
+            // An uncaught ParseError (from include) reads like the parse error it is
+            if ex.class.name == "ParseError" {
+                let file = String::from_utf8_lossy(&ex.get("\0*\0file").to_bytes()).into_owned();
+                let msg = String::from_utf8_lossy(&ex.get("\0*\0message").to_bytes()).into_owned();
+                let line = ex.get("\0*\0line").to_int();
+                let _ = self.out.write_all(format!("\nParse error: {msg} in {file} on line {line}\n").as_bytes());
+                return;
+            }
             // Uncaught output goes through __toString, which a subclass may override
             let text = match self.stringify(&Value::Object(ex.clone())) {
                 Ok(s) => s,
@@ -439,9 +609,9 @@ impl<W: Write> Interp<W> {
         }
         let Some(m) = obj.class.find_method("__destruct").cloned() else { return Ok(()) };
         let line = diag::line();
-        self.destructing += 1;
+        self.nesting += 1;
         let result = self.call_method(Some(obj.clone()), &m, Vec::new(), line, obj.class.clone());
-        self.destructing -= 1;
+        self.nesting -= 1;
         diag::set_line(line);
         result.map(drop)
     }
@@ -512,7 +682,7 @@ impl<W: Write> Interp<W> {
             diag::set_line(f.line);
             return Err(Fatal::compile(format!(
                 "Cannot redeclare function {}() (previously declared in {}:{})",
-                f.name, self.file, existing.line
+                f.name, existing.file.path, existing.line
             )));
         }
         if builtins::exists(&lname) {
@@ -525,7 +695,7 @@ impl<W: Write> Interp<W> {
 
     fn flush_diags(&mut self) {
         for d in diag::take() {
-            let msg = format!("\n{}: {} in {} on line {}\n", d.level.label(), d.msg, self.file, d.line);
+            let msg = format!("\n{}: {} in {} on line {}\n", d.level.label(), d.msg, d.file, d.line);
             let _ = self.out.write_all(msg.as_bytes());
         }
     }
@@ -720,7 +890,7 @@ impl<W: Write> Interp<W> {
                     }
                 }
             }
-            Stmt::StrictTypes(_) => {}
+            Stmt::StrictTypes => {}
             Stmt::Plain(inner) => return self.stmt(inner),
             Stmt::Yield { .. } | Stmt::YieldFrom { .. } => {
                 return Err(Fatal::error("yield outside the generator executor"));
@@ -840,13 +1010,78 @@ impl<W: Write> Interp<W> {
             && let Some(this) = &self.ctx().this {
                 return Value::Object(this.clone());
             }
+        if Self::is_superglobal(name) {
+            let name = self.superglobal(name);
+            return self.frames[0].vars.get(&name).map_or(Value::Null, Value::copy_out);
+        }
         match self.frame().vars.get(name) {
             Some(v) => v.copy_out(),
+            None if name == "GLOBALS" => self.globals_array(),
             None => {
                 diag::warning(format!("Undefined variable ${name}"));
                 Value::Null
             }
         }
+    }
+
+    /// Variables that every scope sees as the global ones
+    fn is_superglobal(name: &str) -> bool {
+        name.starts_with('_')
+            && matches!(name, "_SERVER" | "_GET" | "_POST" | "_COOKIE" | "_FILES" | "_ENV" | "_REQUEST")
+    }
+
+    /// A superglobal's slot name, creating $_ENV and $_REQUEST on first use as
+    /// php-src does (they are "just in time" globals)
+    fn superglobal(&mut self, name: &str) -> String {
+        if !self.frames[0].vars.contains_key(name) {
+            let v = match name {
+                "_ENV" => Value::Array(Rc::new(env_array())),
+                _ => Value::Array(Rc::new(PhpArray::new())),
+            };
+            self.frames[0].vars.insert(name.to_string(), v);
+        }
+        name.to_string()
+    }
+
+    /// The globals php-cli starts a script with: $_GET and friends (empty),
+    /// $argv / $argc, and $_SERVER with the environment and script details
+    pub fn set_globals(&mut self, argv: &[String]) {
+        let empty = || Value::Array(Rc::new(PhpArray::new()));
+        let args = Value::Array(Rc::new(PhpArray::from_values(argv.iter().map(|a| Value::str(a.as_str())))));
+        let argc = Value::Int(argv.len() as i64);
+        let script = Value::str(argv.first().cloned().unwrap_or_default());
+        let mut server = env_array();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let mut put = |k: &str, v: Value| server.insert(Key::Str(k.as_bytes().into()), v);
+        for k in ["PHP_SELF", "SCRIPT_NAME", "SCRIPT_FILENAME", "PATH_TRANSLATED"] {
+            put(k, script.clone());
+        }
+        put("DOCUMENT_ROOT", Value::str(""));
+        put("REQUEST_TIME_FLOAT", Value::Float(now.as_secs_f64()));
+        put("REQUEST_TIME", Value::Int(now.as_secs() as i64));
+        put("argv", args.clone());
+        put("argc", argc.clone());
+        let vars = &mut self.frames[0].vars;
+        for k in ["_GET", "_POST", "_COOKIE", "_FILES"] {
+            vars.insert(k.to_string(), empty());
+        }
+        vars.insert("argv".into(), args);
+        vars.insert("argc".into(), argc);
+        vars.insert("_SERVER".into(), Value::Array(Rc::new(server)));
+    }
+
+    /// `$GLOBALS` read as a whole: a copy of the global variables
+    fn globals_array(&self) -> Value {
+        let mut arr = PhpArray::new();
+        for (name, v) in self.frames[0].vars.slots.iter().flatten() {
+            arr.insert(Key::from_bytes(name.as_bytes()), v.copy_out());
+        }
+        Value::Array(Rc::new(arr))
+    }
+
+    /// `$GLOBALS[...]`, unless a local variable is called $GLOBALS
+    fn is_globals(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Var(n) if n == "GLOBALS") && !self.frames.last().unwrap().vars.contains_key("GLOBALS")
     }
 
     fn expr(&mut self, e: &Expr) -> EResult<Value> {
@@ -876,9 +1111,9 @@ impl<W: Write> Interp<W> {
             ExprKind::Yield { .. } | ExprKind::YieldFrom(_) => {
                 return Err(Fatal::error("yield outside the generator executor"));
             }
-            ExprKind::Magic(Magic::File) => Value::str(self.file.as_bytes()),
+            ExprKind::Magic(Magic::File) => Value::str(self.file.path.as_bytes()),
             ExprKind::Magic(Magic::Dir) => {
-                let dir = std::path::Path::new(&self.file).parent().map_or(".".into(), |d| d.display().to_string());
+                let dir = std::path::Path::new(&*self.file.path).parent().map_or(".".into(), |d| d.display().to_string());
                 Value::str(dir.into_bytes())
             }
             ExprKind::Magic(Magic::ClosureName) => Value::str(self.ctx().name.as_bytes()),
@@ -925,6 +1160,17 @@ impl<W: Write> Interp<W> {
                 Value::Array(Rc::new(arr))
             }
             ExprKind::Index(_, None) => return Err(Fatal::error("Cannot use [] for reading")),
+            ExprKind::Index(base, Some(index)) if self.is_globals(base) => {
+                let name = self.expr(index)?;
+                let name = String::from_utf8_lossy(&self.stringify(&name)?).into_owned();
+                match self.frames[0].vars.get(&name) {
+                    Some(v) => v.copy_out(),
+                    None => {
+                        diag::warning(format!("Undefined global variable ${name}"));
+                        Value::Null
+                    }
+                }
+            }
             ExprKind::Index(base, Some(index)) => {
                 let b = self.expr(base)?;
                 let i = self.expr(index)?;
@@ -1151,6 +1397,27 @@ impl<W: Write> Interp<W> {
                 Value::Bool(self.is_instance_of(&o.class, &name))
             }
             ExprKind::Silence(x) => diag::silenced(|| self.expr(x))?,
+            ExprKind::Include(kind, path) => {
+                let path = self.expr(path)?;
+                let path = String::from_utf8_lossy(&self.stringify(&path)?).into_owned();
+                let v = self.include(*kind, &path, e.line)?;
+                diag::set_line(e.line);
+                v
+            }
+            ExprKind::Exit(arg) => {
+                let status = match arg {
+                    None => 0,
+                    Some(a) => match self.expr(a)? {
+                        // A message is printed, and the status is 0
+                        Value::Str(s) => {
+                            self.write(&s)?;
+                            0
+                        }
+                        v => v.to_int() as u8,
+                    },
+                };
+                return Err(Fatal { uncatchable: true, exit: Some(status), ..Fatal::new("", "") });
+            }
             ExprKind::Clone(x) => {
                 let v = self.expr(x)?;
                 self.clone_value(v)?
@@ -1175,7 +1442,17 @@ impl<W: Write> Interp<W> {
     fn quiet_inner(&mut self, e: &Expr, need_value: bool) -> EResult<Option<Value>> {
         match &e.kind {
             ExprKind::Var(name) if name == "this" => Ok(self.ctx().this.clone().map(Value::Object)),
+            ExprKind::Var(name) if name == "GLOBALS" && !self.frame().vars.contains_key(name) => Ok(Some(self.globals_array())),
+            ExprKind::Var(name) if Self::is_superglobal(name) => {
+                let name = self.superglobal(name);
+                Ok(self.frames[0].vars.get(&name).map(Value::copy_out))
+            }
             ExprKind::Var(name) => Ok(self.frame().vars.get(name).map(Value::copy_out)),
+            ExprKind::Index(base, Some(index)) if self.is_globals(base) => {
+                let name = self.expr(index)?;
+                let name = String::from_utf8_lossy(&self.stringify(&name)?).into_owned();
+                Ok(self.frames[0].vars.get(&name).map(Value::copy_out))
+            }
             ExprKind::Index(base, Some(index)) => {
                 let Some(b) = self.quiet(base)? else { return Ok(None) };
                 let i = self.expr(index)?;
@@ -1217,7 +1494,15 @@ impl<W: Write> Interp<W> {
     fn path<'e>(&mut self, target: &'e Expr) -> EResult<Path<'e>> {
         diag::set_line(target.line);
         match &target.kind {
+            ExprKind::Var(name) if Self::is_superglobal(name) => {
+                Ok(Path { base: Base::Global(self.superglobal(name)), dims: Vec::new() })
+            }
             ExprKind::Var(name) => Ok(Path::var(name)),
+            ExprKind::Index(base, Some(index)) if self.is_globals(base) => {
+                let name = self.expr(index)?;
+                let name = String::from_utf8_lossy(&self.stringify(&name)?).into_owned();
+                Ok(Path { base: Base::Global(name), dims: Vec::new() })
+            }
             ExprKind::Index(base, index) => {
                 let mut path = self.path(base)?;
                 path.dims.push(match index {
@@ -1264,6 +1549,13 @@ impl<W: Write> Interp<W> {
                 }
                 let slot = vars.entry(name);
                 descend(slot, &path.dims, read, deref_last, f)
+            }
+            Base::Global(name) => {
+                let vars = &mut self.frames[0].vars;
+                if read && path.dims.is_empty() && !vars.contains_key(name) {
+                    diag::warning(format!("Undefined global variable ${name}"));
+                }
+                descend(vars.entry(name), &path.dims, read, deref_last, f)
             }
             Base::Prop(obj, name) => {
                 let key = self.prop_key_for_update(obj, name, read && path.dims.is_empty())?;
@@ -1431,6 +1723,10 @@ impl<W: Write> Interp<W> {
                     self.frame().vars.remove(name);
                     Ok(())
                 }
+                Base::Global(name) => {
+                    self.frames[0].vars.remove(name);
+                    Ok(())
+                }
                 Base::Prop(obj, name) => self.unset_prop(obj, name),
                 Base::Cell(..) => Err(Fatal::error("Attempt to unset static property")),
             };
@@ -1442,6 +1738,10 @@ impl<W: Write> Interp<W> {
                     diag::warning(format!("Undefined variable ${name}"));
                     Ok(())
                 }
+            },
+            Base::Global(name) => match self.frames[0].vars.get_mut(name) {
+                Some(slot) => unset_in(slot, &path.dims, last),
+                None => Ok(()),
             },
             Base::Prop(obj, name) => {
                 let key = self.prop_key_for_update(obj, name, false)?;
@@ -1605,8 +1905,8 @@ impl<W: Write> Interp<W> {
         line: u32,
         f: impl FnOnce(&mut Self) -> EResult<T>,
     ) -> EResult<T> {
-        let frame = TraceFrame { file: self.file.clone(), line, function, class, args };
-        self.internal_calls.push((self.frames.len(), frame));
+        let frame = TraceFrame { file: self.file.path.to_string(), line, function, class, args };
+        self.internal_calls.push((self.frames.len(), frame, false));
         let result = f(self).map_err(|mut e| {
             if e.object.is_none() && e.trace.is_none() && !e.uncatchable {
                 // The error belongs to the line of the call
@@ -2100,7 +2400,7 @@ impl<W: Write> Interp<W> {
         args: Vec<ArgVal>,
         call_line: u32,
     ) -> EResult<Value> {
-        if self.frames.len() + self.destructing > MAX_CALL_DEPTH {
+        if self.frames.len() + self.nesting > MAX_CALL_DEPTH {
             // php-src measures the native stack; its default limit reads like this
             return Err(Fatal::error(
                 "Maximum call stack size of 8355840 bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?",
@@ -2108,16 +2408,20 @@ impl<W: Write> Interp<W> {
         }
         let shown = args.iter().map(ArgVal::value).collect();
         let vars = bound.into_iter().collect();
-        let by_builtin = self.internal_calls.last().is_some_and(|(depth, _)| *depth == self.frames.len());
-        self.frames.push(Frame { vars, func: Some(f.clone()), ctx, call_line, args: shown, by_builtin });
+        let by_builtin = self.internal_calls.last().is_some_and(|(depth, _, include)| !include && *depth == self.frames.len());
+        let caller_file = self.enter_file(&f.file);
+        let call_file = caller_file.path.clone();
+        self.frames.push(Frame { vars, func: Some(f.clone()), ctx, call_line, args: shown, by_builtin, call_file });
         let result = self.invoke_inner(f, args, call_line);
         if f.is_generator && result.is_ok() {
             // The bound arguments wait in the generator until it is first resumed
             let frame = self.frames.pop().expect("pushed above");
+            self.enter_file(&caller_file);
             return Ok(self.make_generator(f, frame));
         }
         let result = result.map_err(|e| self.frame_error(e));
         self.frames.pop();
+        self.enter_file(&caller_file);
         self.with_destructors(result)
     }
 
@@ -2130,6 +2434,7 @@ impl<W: Write> Interp<W> {
             return e;
         }
         e.line = Some(e.line.unwrap_or_else(diag::line));
+        e.file.get_or_insert_with(diag::file);
         if e.trace.is_none() {
             e.trace = Some(self.trace());
         }
@@ -2151,7 +2456,7 @@ impl<W: Write> Interp<W> {
                 format!(
                     "Too few arguments to function {fname}(), {} passed in {} on line {call_line} and {} {required} expected",
                     args.len(),
-                    self.file,
+                    self.frame().call_file,
                     if exact { "exactly" } else { "at least" }
                 ),
             ));
@@ -2298,7 +2603,7 @@ impl<W: Write> Interp<W> {
             scope: ctx.scope.as_deref(),
             static_class: ctx.static_class.as_deref(),
         };
-        coerce(v, ty, &tc, strict).map_err(|v| err(&v, &self.file))
+        coerce(v, ty, &tc, strict).map_err(|v| err(&v, &self.frame().call_file))
     }
 
     /// The stack trace of the current call frames, innermost first. Built-in
@@ -2307,12 +2612,15 @@ impl<W: Write> Interp<W> {
     fn trace(&self) -> Vec<TraceFrame> {
         let calls = &self.internal_calls;
         // Whether something at this depth was called by one of the first `n` built-in calls
-        let by_builtin = |depth: usize, n: usize| calls[..n].iter().any(|(d, _)| *d == depth);
-        let builtin_frame = |i: usize| {
-            let (depth, f) = &calls[i];
+        let by_builtin = |depth: usize, n: usize| calls[..n].iter().any(|(d, _, include)| !include && *d == depth);
+        let builtin_frame = |i: usize, innermost: bool| {
+            let (depth, f, include) = &calls[i];
             let mut f = f.clone();
             if by_builtin(*depth, i) {
                 f.file.clear();
+            }
+            if *include && innermost {
+                f.args.clear();
             }
             f
         };
@@ -2321,12 +2629,12 @@ impl<W: Write> Interp<W> {
         for i in (1..self.frames.len()).rev() {
             while pending > 0 && calls[pending - 1].0 > i {
                 pending -= 1;
-                out.push(builtin_frame(pending));
+                out.push(builtin_frame(pending, out.is_empty()));
             }
             let f = &self.frames[i];
             let internal = by_builtin(i, pending) || (i == 1 && self.in_shutdown);
             out.push(TraceFrame {
-                file: if internal { String::new() } else { self.file.clone() },
+                file: if internal { String::new() } else { f.call_file.to_string() },
                 line: f.call_line,
                 function: f.ctx.trace_fn.clone(),
                 class: f.ctx.trace_class.clone(),
@@ -2335,7 +2643,7 @@ impl<W: Write> Interp<W> {
         }
         while pending > 0 {
             pending -= 1;
-            out.push(builtin_frame(pending));
+            out.push(builtin_frame(pending, out.is_empty()));
         }
         out
     }
@@ -2614,10 +2922,10 @@ impl<W: Write> Interp<W> {
                 bound.push((name.clone(), self.lookup(name)));
             }
         }
-        let name = format!("{{closure:{}:{}}}", self.file, f.line);
+        let name = format!("{{closure:{}:{}}}", self.file.path, f.line);
         // Closures created in a method keep its $this and class scope
         let (this, scope) = (self.ctx().this.clone(), self.ctx().scope.clone());
-        let closure = Closure { func: f.clone(), bound, name, file: self.file.clone(), this, scope };
+        let closure = Closure { func: f.clone(), bound, name, file: self.file.path.to_string(), this, scope };
         Ok(Value::Object(Object::new(self.classes["closure"].clone(), Internal::Closure(closure))))
     }
 }

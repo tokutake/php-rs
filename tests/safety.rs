@@ -131,3 +131,9 @@ fn deep_generator_delegation_is_an_error() {
         "Maximum call stack size of",
     );
 }
+
+#[test]
+fn recursive_include_is_an_error() {
+    // The script includes itself; the include path holds the script's directory
+    assert_php_error("self_include", "<?php include __FILE__;", "Maximum call stack size of");
+}
