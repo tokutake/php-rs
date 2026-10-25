@@ -1,0 +1,4 @@
+
+Fatal error: Cannot use Z\Y as Y because the name is already in use in namespace_fatal2.php on line 4
+Stack trace:
+#0 {main}

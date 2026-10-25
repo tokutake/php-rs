@@ -259,6 +259,18 @@ pub struct Interp<W: Write> {
     destructing: usize,
 }
 
+fn undefined_constant(name: &str) -> Fatal {
+    Fatal::error(format!("Undefined constant \"{name}\""))
+}
+
+/// Constants are case-sensitive, except for their namespace part
+fn const_key(name: &str) -> std::borrow::Cow<'_, str> {
+    match name.rfind('\\') {
+        Some(i) => format!("{}{}", name[..i].to_ascii_lowercase(), &name[i..]).into(),
+        None => name.into(),
+    }
+}
+
 fn recursive_reference() -> Fatal {
     Fatal::error("Cannot modify a value through a reference to itself")
 }
@@ -816,6 +828,10 @@ impl<W: Write> Interp<W> {
             }
             ExprKind::Var(name) => self.lookup(name),
             ExprKind::Const(name) => self.constant(name.trim_start_matches('\\'))?,
+            ExprKind::NsConst(name, global) => match self.lookup_const(name) {
+                Some(v) => v,
+                None => self.lookup_const(global).ok_or_else(|| undefined_constant(name))?,
+            },
             ExprKind::Magic(Magic::File) => Value::str(self.file.as_bytes()),
             ExprKind::Magic(Magic::Dir) => {
                 let dir = std::path::Path::new(&self.file).parent().map_or(".".into(), |d| d.display().to_string());
@@ -1014,7 +1030,17 @@ impl<W: Write> Interp<W> {
             }
             ExprKind::Empty(target) => Value::Bool(!self.quiet(target)?.is_some_and(|v| v.to_bool())),
             ExprKind::Call(name, args) => {
-                let v = self.call(name.trim_start_matches('\\'), args, e.line)?;
+                let v = self.call(name.trim_start_matches('\\'), args, e.line, true)?;
+                // Whatever the call did, diagnostics from here on belong to the call site
+                diag::set_line(e.line);
+                v
+            }
+            ExprKind::NsCall(name, global, args) => {
+                let lglobal = global.to_ascii_lowercase();
+                let use_global = !self.functions.contains_key(&name.to_ascii_lowercase())
+                    && (self.functions.contains_key(&lglobal) || builtins::exists(&lglobal));
+                // Resolved at runtime, so php-src does not compile it to a dedicated opcode
+                let v = if use_global { self.call(global, args, e.line, false)? } else { self.call(name, args, e.line, false)? };
                 // Whatever the call did, diagnostics from here on belong to the call site
                 diag::set_line(e.line);
                 v
@@ -1330,19 +1356,24 @@ impl<W: Write> Interp<W> {
     }
 
     fn constant(&mut self, name: &str) -> EResult<Value> {
-        if let Some(v) = self.constants.get(name) {
-            return Ok(v.clone());
+        self.lookup_const(name).ok_or_else(|| undefined_constant(name))
+    }
+
+    fn lookup_const(&self, name: &str) -> Option<Value> {
+        if let Some(v) = self.constants.get(&*const_key(name)) {
+            return Some(v.clone());
         }
-        constant(name).ok_or_else(|| Fatal::error(format!("Undefined constant \"{name}\"")))
+        constant(name)
     }
 
     /// Defines a global constant; false (with a warning) if it already exists
     fn define_const(&mut self, name: &str, v: Value) -> bool {
-        if self.constants.contains_key(name) || constant(name).is_some() {
+        let key = const_key(name);
+        if self.constants.contains_key(&*key) || constant(name).is_some() {
             diag::warning(format!("Constant {name} already defined"));
             return false;
         }
-        self.constants.insert(name.to_string(), v);
+        self.constants.insert(key.into_owned(), v);
         true
     }
 
@@ -1410,7 +1441,9 @@ impl<W: Write> Interp<W> {
         }
     }
 
-    fn call(&mut self, name: &str, args: &[Arg], line: u32) -> EResult<Value> {
+    /// Calls a function by name. `direct` is false for calls resolved at runtime,
+    /// which php-src never compiles to dedicated opcodes
+    fn call(&mut self, name: &str, args: &[Arg], line: u32, direct: bool) -> EResult<Value> {
         let lname = name.to_ascii_lowercase();
         if let Some(f) = self.functions.get(&lname).cloned() {
             let ctx = CallCtx { name: f.name.clone(), trace_fn: f.name.clone(), ..CallCtx::default() };
@@ -1439,7 +1472,7 @@ impl<W: Write> Interp<W> {
         }
 
         let vals = self.eval_args(args)?;
-        if compiled_inline(&lname, args) || lname == "print" || !builtins::exists(&lname) {
+        if (direct && compiled_inline(&lname, args)) || lname == "print" || !builtins::exists(&lname) {
             return self.call_builtin(name, &lname, vals, line);
         }
         self.internal_call(lname.clone(), None, vals.clone(), line, |this| this.call_builtin(name, &lname, vals, line))
@@ -1895,7 +1928,7 @@ impl<W: Write> Interp<W> {
                     let class = crate::ast::ClassRef::Named(class.to_string());
                     return self.static_call(&class, method, args, line);
                 }
-                self.call(name.trim_start_matches('\\'), args, line)
+                self.call(name.trim_start_matches('\\'), args, line, false)
             }
             Value::Array(_) => {
                 let Some(c) = self.callable(&f)? else { return Err(Fatal::error("Array callback must have exactly two elements")) };

@@ -1,0 +1,9 @@
+A\f(): Argument #1 ($x) must be of type int, string given, called in namespaces_errors.php on line 4
+#0 namespaces_errors.php(4): A\f('a')
+#1 {main}
+
+Fatal error: Uncaught TypeError: strlen(): Argument #1 ($string) must be of type string, array given in namespaces_errors.php:5
+Stack trace:
+#0 namespaces_errors.php(5): strlen(Array)
+#1 {main}
+  thrown in namespaces_errors.php on line 5

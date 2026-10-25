@@ -1,5 +1,6 @@
 //! Builds the AST from tokens. Expressions use a Pratt parser with PHP 8 precedence.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::ast::{
@@ -126,10 +127,16 @@ fn cast_op(name: &str) -> Option<&'static str> {
 }
 
 /// Parses the tokens of an interpolated `{$...}` / `$a[k]` inside a string
-fn parse_embedded(mut tokens: Vec<Token>) -> PResult<Expr> {
+/// An expression interpolated into a string, in the context of the code around it
+fn parse_embedded(outer: &Parser, mut tokens: Vec<Token>) -> PResult<Expr> {
     let line = tokens.last().map_or(0, |t| t.line);
     tokens.push(Token { tok: Tok::Eof, line });
     let mut p = Parser::new(tokens);
+    p.class = outer.class.clone();
+    p.in_trait = outer.in_trait;
+    p.func = outer.func.clone();
+    p.names = outer.names.clone();
+    p.depth = outer.depth;
     let e = p.expr()?;
     if !p.at(&Tok::Eof) {
         return p.unexpected();
@@ -137,15 +144,78 @@ fn parse_embedded(mut tokens: Vec<Token>) -> PResult<Expr> {
     Ok(e)
 }
 
+/// Parses a script. Names are resolved against the namespace and imports here,
+/// as php-src does while compiling; the statements of braced namespaces are
+/// flattened into the top level
 pub fn parse(tokens: Vec<Token>) -> PResult<Vec<Stmt>> {
     let mut p = Parser::new(tokens);
     let mut stmts = Vec::new();
     while !p.at(&Tok::Eof) {
-        stmts.push(p.statement()?);
+        if p.at_namespace_decl() {
+            p.namespace_decl(&mut stmts)?;
+            continue;
+        }
+        if p.braced_ns == Some(true) && !p.at_kw("declare") {
+            return Err(ParseError { msg: "No code may exist outside of namespace {}".into(), line: p.line() });
+        }
+        let s = p.statement()?;
+        p.seen_code |= !matches!(s, Stmt::StrictTypes(_) | Stmt::Block(_));
+        stmts.push(s);
         p.seen_stmt = true;
     }
     Ok(stmts)
 }
+
+/// The current namespace and its `use` imports. Class and function aliases are
+/// keyed in lowercase, constant aliases as written
+#[derive(Default, Clone)]
+struct Names {
+    ns: String,
+    classes: HashMap<String, String>,
+    functions: HashMap<String, String>,
+    consts: HashMap<String, String>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum UseKind {
+    Class,
+    Function,
+    Const,
+}
+
+/// How a name was written: `\A\B`, `namespace\A\B`, or relative to the imports
+enum NameForm<'a> {
+    Full(&'a str),
+    Relative(&'a str),
+    Plain(&'a str),
+}
+
+fn name_form(raw: &str) -> NameForm<'_> {
+    if let Some(rest) = raw.strip_prefix('\\') {
+        return NameForm::Full(rest);
+    }
+    if raw.len() > 10 && raw.as_bytes()[9] == b'\\' && raw[..9].eq_ignore_ascii_case("namespace") {
+        return NameForm::Relative(&raw[10..]);
+    }
+    NameForm::Plain(raw)
+}
+
+/// Reserved words, which syntax errors call tokens rather than identifiers
+const KEYWORDS: &[&str] = &[
+    "abstract", "and", "array", "as", "break", "callable", "case", "catch", "class", "clone", "const", "continue",
+    "declare", "default", "do", "echo", "else", "elseif", "empty", "enddeclare", "endfor", "endforeach", "endif",
+    "endswitch", "endwhile", "eval", "exit", "die", "extends", "final", "finally", "fn", "for", "foreach", "function",
+    "global", "goto", "if", "implements", "include", "include_once", "instanceof", "insteadof", "interface", "isset",
+    "list", "match", "namespace", "new", "or", "print", "private", "protected", "public", "readonly", "require",
+    "require_once", "return", "static", "switch", "throw", "trait", "try", "unset", "use", "var", "while", "xor",
+    "yield",
+];
+
+/// Type names that are not classes
+const BUILTIN_TYPES: &[&str] = &[
+    "int", "float", "string", "bool", "false", "true", "null", "void", "never", "iterable", "mixed", "object", "array",
+    "callable", "static", "self", "parent",
+];
 
 struct Parser {
     tokens: Vec<Token>,
@@ -161,6 +231,12 @@ struct Parser {
     in_items: u32,
     /// Whether a top-level statement has been parsed, for `declare(strict_types=1)`
     seen_stmt: bool,
+    /// Whether a top-level statement other than `declare` has been parsed, which
+    /// a first namespace declaration must not follow
+    seen_code: bool,
+    /// Whether the namespace declarations so far were braced, None before the first
+    braced_ns: Option<bool>,
+    names: Names,
 }
 
 /// What kind of declaration a class member belongs to
@@ -180,7 +256,217 @@ enum FuncCtx {
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, depth: 0, class: None, in_trait: false, func: None, in_items: 0, seen_stmt: false }
+        Parser {
+            tokens,
+            pos: 0,
+            depth: 0,
+            class: None,
+            in_trait: false,
+            func: None,
+            in_items: 0,
+            seen_stmt: false,
+            seen_code: false,
+            braced_ns: None,
+            names: Names::default(),
+        }
+    }
+
+    /// `namespace A;`, `namespace A { ... }` or `namespace { ... }`, as opposed to
+    /// a `namespace\name` reference (lexed as a single name)
+    fn at_namespace_decl(&self) -> bool {
+        self.at_kw("namespace") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Op("{"))
+    }
+
+    fn namespace_decl(&mut self, stmts: &mut Vec<Stmt>) -> PResult<()> {
+        let line = self.line();
+        let fatal = |msg: &str| Err(ParseError { msg: msg.into(), line });
+        self.next();
+        let name = match self.peek().clone() {
+            Tok::Ident(n) => {
+                self.next();
+                Some(n)
+            }
+            _ => None,
+        };
+        let braced = self.at(&Tok::Op("{"));
+        if name.is_none() && !braced {
+            return self.unexpected();
+        }
+        match self.braced_ns {
+            Some(b) if b != braced => {
+                return fatal("Cannot mix bracketed namespace declarations with unbracketed namespace declarations")
+            }
+            None if self.seen_code => {
+                return fatal(
+                    "Namespace declaration statement has to be the very first statement or after any declare call in the script",
+                )
+            }
+            _ => {}
+        }
+        if let Some(n) = &name {
+            if n.eq_ignore_ascii_case("namespace") {
+                return fatal(&format!("Cannot use '{n}' as namespace name"));
+            }
+            if n.starts_with('\\') {
+                return self.unexpected_at(self.pos - 1);
+            }
+        }
+        self.braced_ns = Some(braced);
+        self.seen_code = true;
+        self.names = Names { ns: name.unwrap_or_default(), ..Names::default() };
+        if braced {
+            self.next();
+            while !self.eat(&Tok::Op("}")) {
+                if self.at(&Tok::Eof) {
+                    return self.unexpected();
+                }
+                if self.at_namespace_decl() {
+                    return Err(ParseError { msg: "Namespace declarations cannot be nested".into(), line: self.line() });
+                }
+                stmts.push(self.statement()?);
+            }
+            self.names = Names::default();
+        } else {
+            self.end_statement()?;
+        }
+        Ok(())
+    }
+
+    /// `use A\B as C, ...;`, `use function ...`, `use const ...` and group uses
+    /// `use A\{B, function c, const D}`
+    fn use_decl(&mut self) -> PResult<()> {
+        self.next();
+        let kind = if self.eat_kw("function") {
+            UseKind::Function
+        } else if self.eat_kw("const") {
+            UseKind::Const
+        } else {
+            UseKind::Class
+        };
+        loop {
+            let line = self.line();
+            let name = self.class_name()?;
+            if self.eat(&Tok::Op("\\")) {
+                self.expect(Tok::Op("{"))?;
+                while !self.eat(&Tok::Op("}")) {
+                    let item_kind = if kind != UseKind::Class {
+                        kind
+                    } else if self.eat_kw("function") {
+                        UseKind::Function
+                    } else if self.eat_kw("const") {
+                        UseKind::Const
+                    } else {
+                        UseKind::Class
+                    };
+                    let line = self.line();
+                    let item = self.class_name()?;
+                    let alias = if self.eat_kw("as") { Some(self.class_name()?) } else { None };
+                    self.import(item_kind, format!("{name}\\{item}"), alias, line)?;
+                    if !self.eat(&Tok::Op(",")) {
+                        self.expect(Tok::Op("}"))?;
+                        break;
+                    }
+                }
+            } else {
+                let alias = if self.eat_kw("as") { Some(self.class_name()?) } else { None };
+                self.import(kind, name, alias, line)?;
+            }
+            if !self.eat(&Tok::Op(",")) {
+                break;
+            }
+        }
+        self.end_statement()
+    }
+
+    fn import(&mut self, kind: UseKind, name: String, alias: Option<String>, line: u32) -> PResult<()> {
+        let alias = alias.unwrap_or_else(|| name.rsplit('\\').next().unwrap_or(&name).to_string());
+        let what = match kind {
+            UseKind::Class => "",
+            UseKind::Function => " function",
+            UseKind::Const => " const",
+        };
+        if kind == UseKind::Class && matches!(alias.to_ascii_lowercase().as_str(), "self" | "parent" | "static") {
+            let msg = format!("Cannot use {name} as {alias} because '{alias}' is a special class name");
+            return Err(ParseError { msg, line });
+        }
+        let (map, key) = match kind {
+            UseKind::Class => (&mut self.names.classes, alias.to_ascii_lowercase()),
+            UseKind::Function => (&mut self.names.functions, alias.to_ascii_lowercase()),
+            UseKind::Const => (&mut self.names.consts, alias.clone()),
+        };
+        if map.contains_key(&key) {
+            let msg = format!("Cannot use{what} {name} as {alias} because the name is already in use");
+            return Err(ParseError { msg, line });
+        }
+        map.insert(key, name);
+        Ok(())
+    }
+
+    /// A declared name in the current namespace
+    fn prefix_ns(&self, name: &str) -> String {
+        if self.names.ns.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}\\{name}", self.names.ns)
+        }
+    }
+
+    /// A qualified name whose first part may be an imported class or namespace alias
+    fn resolve_qualified(&self, name: &str) -> String {
+        if let Some((first, rest)) = name.split_once('\\')
+            && let Some(full) = self.names.classes.get(&first.to_ascii_lowercase())
+        {
+            return format!("{full}\\{rest}");
+        }
+        self.prefix_ns(name)
+    }
+
+    /// The fully qualified name of a class reference (`self`, `parent` and
+    /// `static` stay as they are)
+    fn resolve_class(&self, raw: &str) -> String {
+        match name_form(raw) {
+            NameForm::Full(n) => n.to_string(),
+            NameForm::Relative(n) => self.prefix_ns(n),
+            NameForm::Plain(n) if matches!(n.to_ascii_lowercase().as_str(), "self" | "parent" | "static") => n.to_string(),
+            NameForm::Plain(n) if n.contains('\\') => self.resolve_qualified(n),
+            NameForm::Plain(n) => match self.names.classes.get(&n.to_ascii_lowercase()) {
+                Some(full) => full.clone(),
+                None => self.prefix_ns(n),
+            },
+        }
+    }
+
+    fn class_ref_named(&self, raw: &str) -> ClassRef {
+        match ClassRef::from_name(raw) {
+            ClassRef::Named(_) => ClassRef::Named(self.resolve_class(raw)),
+            special => special,
+        }
+    }
+
+    /// A function or constant name: the resolved name, and for an unqualified
+    /// name in a namespace the global name to fall back to at runtime
+    fn resolve_symbol(&self, raw: &str, kind: UseKind) -> (String, Option<String>) {
+        match name_form(raw) {
+            NameForm::Full(n) => (n.to_string(), None),
+            NameForm::Relative(n) => (self.prefix_ns(n), None),
+            NameForm::Plain(n) if n.contains('\\') => (self.resolve_qualified(n), None),
+            NameForm::Plain(n) => {
+                let imported = match kind {
+                    UseKind::Function => self.names.functions.get(&n.to_ascii_lowercase()),
+                    _ => self.names.consts.get(n),
+                };
+                match imported {
+                    Some(full) => (full.clone(), None),
+                    None if self.names.ns.is_empty() => (n.to_string(), None),
+                    None => (self.prefix_ns(n), Some(n.to_string())),
+                }
+            }
+        }
+    }
+
+    fn unexpected_at<T>(&mut self, pos: usize) -> PResult<T> {
+        self.pos = pos;
+        self.unexpected()
     }
 
     /// Runs `f` with `func` as the enclosing function
@@ -250,6 +536,12 @@ impl Parser {
         let what = match self.peek() {
             Tok::Eof => "end of file".to_string(),
             Tok::Variable(v) => format!("variable \"${v}\""),
+            Tok::Ident(s) if KEYWORDS.contains(&s.to_ascii_lowercase().as_str()) => format!("token \"{s}\""),
+            Tok::Ident(s) if s.contains('\\') => format!("{} \"{s}\"", match name_form(s) {
+                NameForm::Full(_) => "fully qualified name",
+                NameForm::Relative(_) => "namespace-relative name",
+                NameForm::Plain(_) => "namespaced name",
+            }),
             Tok::Ident(s) => format!("identifier \"{s}\""),
             Tok::Op(op) => format!("token \"{op}\""),
             Tok::Semicolon => "token \";\"".to_string(),
@@ -333,7 +625,7 @@ impl Parser {
                     loop {
                         let name = self.class_name()?;
                         self.expect(Tok::Op("="))?;
-                        consts.push((name, self.expr()?));
+                        consts.push((self.prefix_ns(&name), self.expr()?));
                         if !self.eat(&Tok::Op(",")) {
                             break;
                         }
@@ -342,6 +634,15 @@ impl Parser {
                     Ok(Stmt::Const(consts))
                 }
                 "try" => self.try_statement(),
+                // Imports only exist at the top level (and directly in namespaces)
+                "use" if self.depth == 1 => {
+                    self.use_decl()?;
+                    Ok(Stmt::Block(Vec::new()))
+                }
+                "use" => self.unexpected(),
+                "namespace" if self.at_namespace_decl() => {
+                    Err(ParseError { msg: "Namespace declarations cannot be nested".into(), line: self.line() })
+                }
                 "class" | "interface" | "trait" | "abstract" | "final" | "readonly"
                     if matches!(self.peek_at(1), Tok::Ident(_)) =>
                 {
@@ -672,6 +973,7 @@ impl Parser {
             self.pos -= 1;
             return self.unexpected();
         };
+        let name = self.prefix_ns(&name);
         let (params, ret, body) = self.in_func(FuncCtx::Named(name.clone()), |p| {
             let params = p.params()?;
             let ret = if p.eat(&Tok::Op(":")) { Some(p.type_hint()?) } else { None };
@@ -821,6 +1123,7 @@ impl Parser {
             self.pos -= 1;
             return self.unexpected();
         };
+        let name = self.prefix_ns(&name);
         let backing = if is_enum && self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
         if let Some(ty) = &backing
             && (ty.types.len() != 1 || !matches!(ty.types[0].as_str(), "int" | "string"))
@@ -831,13 +1134,13 @@ impl Parser {
         let mut interfaces = Vec::new();
         if !is_trait && !is_enum && self.eat_kw("extends") {
             if is_interface {
-                interfaces = self.name_list()?;
+                interfaces = self.class_list()?;
             } else {
-                parent = Some(self.class_name()?);
+                parent = Some(self.resolved_class_name()?);
             }
         }
         if !is_interface && !is_trait && self.eat_kw("implements") {
-            interfaces = self.name_list()?;
+            interfaces = self.class_list()?;
         }
         self.expect(Tok::Op("{"))?;
         let mut members = Vec::new();
@@ -881,10 +1184,21 @@ impl Parser {
         }
     }
 
-    fn name_list(&mut self) -> PResult<Vec<String>> {
-        let mut names = vec![self.class_name()?];
+    fn resolved_class_name(&mut self) -> PResult<String> {
+        match self.next() {
+            Tok::Ident(n) => Ok(self.resolve_class(&n)),
+            _ => {
+                self.pos -= 1;
+                self.unexpected()
+            }
+        }
+    }
+
+    /// Comma-separated class names, resolved
+    fn class_list(&mut self) -> PResult<Vec<String>> {
+        let mut names = vec![self.resolved_class_name()?];
         while self.eat(&Tok::Op(",")) {
-            names.push(self.class_name()?);
+            names.push(self.resolved_class_name()?);
         }
         Ok(names)
     }
@@ -908,7 +1222,7 @@ impl Parser {
         }
         let vis = vis.unwrap_or(Visibility::Public);
         if self.eat_kw("use") {
-            let traits = self.name_list()?;
+            let traits = self.class_list()?;
             let mut rules = Vec::new();
             if self.eat(&Tok::Op("{")) {
                 while !self.eat(&Tok::Op("}")) {
@@ -1008,10 +1322,14 @@ impl Parser {
     /// One `A::m insteadof B;` or `[A::]m as [visibility] [alias];` adaptation
     fn trait_rule(&mut self) -> PResult<TraitRule> {
         let first = self.class_name()?;
-        let (trait_name, method) = if self.eat(&Tok::Op("::")) { (Some(first), self.class_name()?) } else { (None, first) };
+        let (trait_name, method) = if self.eat(&Tok::Op("::")) {
+            (Some(self.resolve_class(&first)), self.class_name()?)
+        } else {
+            (None, first)
+        };
         let rule = if self.eat_kw("insteadof") {
             let Some(trait_name) = trait_name else { return self.unexpected() };
-            TraitRule::Insteadof { trait_name, method, excluded: self.name_list()? }
+            TraitRule::Insteadof { trait_name, method, excluded: self.class_list()? }
         } else if self.eat_kw("as") {
             let vis = match self.peek() {
                 Tok::Ident(k) => match k.to_ascii_lowercase().as_str() {
@@ -1054,7 +1372,7 @@ impl Parser {
     fn class_ref(&mut self) -> PResult<ClassRef> {
         let line = self.line();
         match self.next() {
-            Tok::Ident(name) => Ok(ClassRef::from_name(&name)),
+            Tok::Ident(name) => Ok(self.class_ref_named(&name)),
             Tok::Variable(v) => {
                 let mut e = Expr::new(ExprKind::Var(v), line);
                 // `new $this->cls` uses a property as the class name
@@ -1089,7 +1407,7 @@ impl Parser {
                     self.pos -= 1;
                     return self.unexpected();
                 };
-                types.push(name.trim_start_matches('\\').to_string());
+                types.push(self.resolve_class(&name));
                 if !self.eat(&Tok::Op("|")) {
                     break;
                 }
@@ -1124,6 +1442,8 @@ impl Parser {
                 self.pos -= 1;
                 return self.unexpected();
             };
+            let lname = name.to_ascii_lowercase();
+            let name = if BUILTIN_TYPES.contains(&lname.as_str()) { name } else { self.resolve_class(&name) };
             display.push_str(&name);
             types.push(name.to_ascii_lowercase());
             if !self.eat(&Tok::Op("|")) {
@@ -1246,7 +1566,7 @@ impl Parser {
             "__CLASS__" if self.in_trait => ExprKind::Magic(Magic::Class),
             "__CLASS__" => s(class),
             "__TRAIT__" => s(if self.in_trait { class } else { "" }),
-            "__NAMESPACE__" => s(""),
+            "__NAMESPACE__" => s(&self.names.ns),
             "__FUNCTION__" | "__METHOD__" => match &self.func {
                 None => s(""),
                 Some(FuncCtx::Closure) => ExprKind::Magic(Magic::ClosureName),
@@ -1503,7 +1823,7 @@ impl Parser {
                 for part in parts {
                     exprs.push(match part {
                         StrPart::Lit(s) => Expr::new(ExprKind::Str(Rc::new(s)), line),
-                        StrPart::Code(tokens) => parse_embedded(tokens)?,
+                        StrPart::Code(tokens) => parse_embedded(self, tokens)?,
                     });
                 }
                 ExprKind::Interp(exprs)
@@ -1538,7 +1858,7 @@ impl Parser {
             }
             Tok::Ident(name) if self.at(&Tok::Op("::")) => {
                 self.next();
-                self.static_member(ClassRef::from_name(&name))?
+                self.static_member(self.class_ref_named(&name))?
             }
             Tok::Ident(name) => {
                 let lname = name.to_ascii_lowercase();
@@ -1567,13 +1887,23 @@ impl Parser {
                 }
                 if self.eat(&Tok::Op("(")) {
                     let args = self.call_args()?;
-                    return Ok(Expr::new(ExprKind::Call(name, args), line));
+                    let kind = match self.resolve_symbol(&name, UseKind::Function) {
+                        (name, None) => ExprKind::Call(name, args),
+                        (name, Some(global)) => ExprKind::NsCall(name, global, args),
+                    };
+                    return Ok(Expr::new(kind, line));
                 }
-                match name.to_ascii_lowercase().as_str() {
+                match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
                     "true" => ExprKind::Bool(true),
                     "false" => ExprKind::Bool(false),
                     "null" => ExprKind::Null,
-                    _ => self.magic_const(&name, line).unwrap_or(ExprKind::Const(name)),
+                    _ => match self.magic_const(&name, line) {
+                        Some(magic) => magic,
+                        None => match self.resolve_symbol(&name, UseKind::Const) {
+                            (name, None) => ExprKind::Const(name),
+                            (name, Some(global)) => ExprKind::NsConst(name, global),
+                        },
+                    },
                 }
             }
             _ => {
@@ -1642,6 +1972,7 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
         | ExprKind::Float(_)
         | ExprKind::Str(_)
         | ExprKind::Const(_)
+        | ExprKind::NsConst(..)
         | ExprKind::Hole
         | ExprKind::Magic(_) => {}
         ExprKind::Match(subject, arms) => {
@@ -1701,7 +2032,7 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
             }
             free_vars(f, out);
         }
-        ExprKind::Call(_, a) => args(a, out),
+        ExprKind::Call(_, a) | ExprKind::NsCall(_, _, a) => args(a, out),
         ExprKind::New(class, a) => {
             class_vars(class, out);
             args(a, out);

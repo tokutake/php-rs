@@ -1,0 +1,4 @@
+
+Fatal error: Cannot mix bracketed namespace declarations with unbracketed namespace declarations in namespace_fatal3.php on line 4
+Stack trace:
+#0 {main}

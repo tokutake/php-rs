@@ -20,6 +20,8 @@ pub enum ExprKind {
     Interp(Vec<Expr>),
     Var(String),
     Const(String),
+    /// An unqualified constant in a namespace, with the global name to fall back to
+    NsConst(String, String),
     Array(Vec<ArrayItem>),
     /// `$a[k]`, or `$a[]` (only valid as a write target) when the index is None
     Index(Box<Expr>, Option<Box<Expr>>),
@@ -34,6 +36,9 @@ pub enum ExprKind {
     Binary(&'static str, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Option<Box<Expr>>, Box<Expr>),
     Call(String, Vec<Arg>),
+    /// An unqualified call in a namespace: the namespaced function if it is
+    /// defined, else the global one
+    NsCall(String, String, Vec<Arg>),
     /// Calling the value of an expression: `$f(1)`, `(function () {})()`
     CallValue(Box<Expr>, Vec<Arg>),
     /// `function () use ($x) {}` and `fn () => ...`

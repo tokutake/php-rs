@@ -1,0 +1,4 @@
+
+Fatal error: Namespace declaration statement has to be the very first statement or after any declare call in the script in namespace_fatal1.php on line 3
+Stack trace:
+#0 {main}
