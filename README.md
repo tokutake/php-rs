@@ -60,8 +60,17 @@ Early stage. Implemented so far:
   enums), `json_decode()` (objects or arrays, big integers, depth limits),
   `json_validate()`, `json_last_error()` and `JSON_THROW_ON_ERROR`; the decoder keeps
   its own stack, so deeply nested input cannot overflow the native one
+- Regular expressions: the preg_* functions (`preg_match`, `preg_match_all`,
+  `preg_replace`, `preg_replace_callback(_array)`, `preg_split`, `preg_grep`,
+  `preg_quote`, ...) on a PCRE2-compatible engine of its own: PCRE2's syntax
+  (lookaround, atomic groups, possessive quantifiers, back references, named
+  groups, recursion, conditionals, `\K`, backtracking verbs), `/u` with Unicode
+  properties, scripts and caseless matching from PCRE2's tables, and PCRE2's
+  error messages. Backtracking runs on a heap stack with php-src's limits, so a
+  pathological pattern ends in `PREG_BACKTRACK_LIMIT_ERROR` and friends rather
+  than a hang or a crash
 
-Not yet: regular expressions, dates, writing files and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
+Not yet: dates, writing files and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage
 

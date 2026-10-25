@@ -7,6 +7,7 @@ mod format;
 mod json;
 mod signatures;
 mod math;
+mod preg;
 mod string;
 mod types;
 
@@ -18,7 +19,7 @@ pub fn out_param(lname: &str) -> Option<(usize, &'static str)> {
     match lname {
         "str_replace" | "str_ireplace" => Some((3, "count")),
         "similar_text" => Some((2, "percent")),
-        _ => None,
+        _ => preg::out_param(lname),
     }
 }
 pub use types::var_export;
@@ -31,6 +32,7 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| file::constant(name))
         .or_else(|| env::constant(name))
         .or_else(|| json::constant(name))
+        .or_else(|| preg::constant(name))
 }
 
 pub use format::{sprintf, vsprintf};
@@ -54,6 +56,10 @@ pub trait Runtime {
     fn call_method0(&mut self, obj: &Rc<Object>, name: &str) -> EResult<Value>;
     /// A fresh instance of a built-in class, without running a constructor
     fn new_object(&mut self, class: &str) -> Option<Rc<Object>>;
+    /// Checks a `callable` parameter: a TypeError naming argument `n` if it is not one
+    fn check_callback(&mut self, fname: &str, n: usize, cb: &Value) -> EResult<()>;
+    fn is_callable(&mut self, cb: &Value) -> bool;
+    fn call_callback(&mut self, cb: &Value, args: Vec<Value>) -> EResult<Value>;
 }
 
 /// Built-ins whose first parameter is by reference
@@ -109,6 +115,7 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (file::NAMES, file::call),
     (env::NAMES, env::call),
     (json::NAMES, json::call),
+    (preg::NAMES, preg::call),
 ];
 
 pub fn next_occupied() -> Fatal {
@@ -131,6 +138,24 @@ impl Runtime for NoRuntime {
     fn new_object(&mut self, _class: &str) -> Option<Rc<Object>> {
         None
     }
+
+    fn check_callback(&mut self, fname: &str, _n: usize, _cb: &Value) -> EResult<()> {
+        Err(Fatal::error(format!("{fname}() cannot call back from a by-reference built-in")))
+    }
+
+    fn is_callable(&mut self, _cb: &Value) -> bool {
+        false
+    }
+
+    fn call_callback(&mut self, _cb: &Value, _args: Vec<Value>) -> EResult<Value> {
+        Err(Fatal::error("Callbacks are not available here"))
+    }
+}
+
+/// A preg_* function with its by-reference parameter: the result, and the
+/// value for the parameter (None: left alone)
+pub fn call_out(rt: &mut dyn Runtime, lname: &str, vals: Vec<Value>) -> EResult<(Value, Option<Value>)> {
+    preg::call_out(rt, lname, lname, vals)
 }
 
 pub fn exists(lname: &str) -> bool {

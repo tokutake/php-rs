@@ -157,3 +157,33 @@ unset($v, $o, $a);"#;
         (0, "bool(true)\nbool(true)\nbool(true)\nbool(false)\nMaximum stack depth exceeded")
     );
 }
+
+#[test]
+fn pathological_regexes_are_bounded() {
+    // Catastrophic backtracking, deep recursion and nesting end in preg
+    // errors (or compile errors), not hangs or stack overflows
+    let src = r#"<?php
+var_dump(preg_match('/(a+)+$/', str_repeat('a', 40) . 'b'), preg_last_error_msg());
+var_dump(preg_match('/^(\w+\s?)*$/', str_repeat('word ', 30) . '!'), preg_last_error_msg());
+var_dump(preg_match('/a(?R)?b/', str_repeat('a', 200000) . str_repeat('b', 200000)), preg_last_error_msg());
+var_dump(preg_match('/((?=a(?1)?))/', str_repeat('a', 100000)), preg_last_error_msg());
+var_dump(preg_match('/(?R)/', 'a'), preg_last_error_msg());
+var_dump(preg_match('/(?:a|b)*$/', str_repeat('ab', 3000000)), preg_last_error_msg());
+var_dump(@preg_match('/' . str_repeat('(', 100000) . 'a' . str_repeat(')', 100000) . '/', 'a'));
+var_dump(@preg_match('/(?:(?:(?:ab){1000}){1000}){1000}/', 'a'));"#;
+    let (code, out) = run("regex", src);
+    assert_eq!(
+        (code, out.as_str()),
+        (
+            0,
+            "bool(false)\nstring(25) \"Backtrack limit exhausted\"\n\
+             bool(false)\nstring(25) \"Backtrack limit exhausted\"\n\
+             bool(false)\nstring(25) \"Recursion limit exhausted\"\n\
+             bool(false)\nstring(25) \"Recursion limit exhausted\"\n\
+             bool(false)\nstring(14) \"Internal error\"\n\
+             bool(false)\nstring(25) \"Backtrack limit exhausted\"\n\
+             bool(false)\n\
+             bool(false)\n"
+        )
+    );
+}

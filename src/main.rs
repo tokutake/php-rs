@@ -9,6 +9,7 @@ mod interp;
 mod lexer;
 mod object;
 mod parser;
+mod regex;
 mod value;
 
 use std::io::{BufWriter, Write};

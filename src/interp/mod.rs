@@ -329,6 +329,19 @@ impl<W: Write> Runtime for Interp<W> {
         self.call_named_method(obj, name)
     }
 
+    fn check_callback(&mut self, fname: &str, n: usize, cb: &Value) -> EResult<()> {
+        self.callback(fname, n, cb).map(|_| ())
+    }
+
+    fn is_callable(&mut self, cb: &Value) -> bool {
+        matches!(self.callable(cb), Ok(Some(_)))
+    }
+
+    fn call_callback(&mut self, cb: &Value, args: Vec<Value>) -> EResult<Value> {
+        let f = self.callback("call_user_func", 1, cb)?;
+        self.call_value(&f, args, diag::line())
+    }
+
     fn new_object(&mut self, class: &str) -> Option<Rc<Object>> {
         let class = self.classes.get(&class.to_ascii_lowercase())?.clone();
         Some(Object::new(class, crate::object::Internal::None))
@@ -1872,7 +1885,12 @@ impl<W: Write> Interp<W> {
             let shown = vals.clone();
             return self.internal_call(lname.clone(), None, shown, line, |this| {
                 let (v, out) = this.call_with_out(&lname, vals)?;
-                this.with_place(&path, false, true, |slot| set_slot(slot, out))?;
+                this.with_place(&path, false, true, |slot| {
+                    match out {
+                        Some(out) => set_slot(slot, out),
+                        None => Ok(()),
+                    }
+                })?;
                 Ok(v)
             });
         }
@@ -1885,14 +1903,17 @@ impl<W: Write> Interp<W> {
     }
 
     /// A built-in with an output parameter: its result and the value for the parameter
-    fn call_with_out(&mut self, lname: &str, vals: Vec<Value>) -> EResult<(Value, Value)> {
+    fn call_with_out(&mut self, lname: &str, vals: Vec<Value>) -> EResult<(Value, Option<Value>)> {
+        if lname.starts_with("preg_") {
+            return builtins::call_out(self, lname, vals);
+        }
         let mut vals = vals.into_iter();
         let mut next = || vals.next().unwrap_or(Value::Null);
         match lname {
             "str_replace" | "str_ireplace" => {
                 let (search, replace, subject) = (next(), next(), next());
                 let (v, count) = builtins::str_replace(self, lname, search, replace, subject)?;
-                Ok((v, Value::Int(count)))
+                Ok((v, Some(Value::Int(count))))
             }
             _ => {
                 let (a, b) = (next(), next());
@@ -1901,7 +1922,7 @@ impl<W: Write> Interp<W> {
                 let sim = builtins::similar_text(&a, &b);
                 let total = a.len() + b.len();
                 let percent = if total == 0 { 0.0 } else { sim as f64 * 2.0 * 100.0 / total as f64 };
-                Ok((Value::Int(sim as i64), Value::Float(percent)))
+                Ok((Value::Int(sim as i64), Some(Value::Float(percent))))
             }
         }
     }

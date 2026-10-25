@@ -1,0 +1,390 @@
+-- functions
+int(1)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+}
+int(0)
+array(0) {
+}
+int(1)
+array(1) {
+  [0]=>
+  string(1) "b"
+}
+int(1)
+array(1) {
+  [0]=>
+  string(1) "b"
+}
+bool(false)
+array(0) {
+}
+string(14) "Internal error"
+int(0)
+int(1)
+int(1)
+int(1)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+}
+int(1)
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  NULL
+  [3]=>
+  NULL
+}
+int(1)
+array(4) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+}
+int(1)
+array(5) {
+  [0]=>
+  string(1) "y"
+  ["a"]=>
+  string(0) ""
+  [1]=>
+  string(0) ""
+  ["b"]=>
+  string(1) "y"
+  [2]=>
+  string(1) "y"
+}
+int(1)
+array(5) {
+  [0]=>
+  string(0) ""
+  ["a"]=>
+  NULL
+  [1]=>
+  NULL
+  ["b"]=>
+  NULL
+  [2]=>
+  NULL
+}
+int(1)
+array(4) {
+  [0]=>
+  string(1) "b"
+  ["n"]=>
+  string(1) "b"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(1) "b"
+}
+preg_match(): Argument #4 ($flags) must be a PREG_* constant
+preg_match_all(): Argument #4 ($flags) must be a PREG_* constant
+
+Warning: preg_match(): Compilation failed: missing closing parenthesis at offset 1 in preg.php on line 22
+bool(false)
+string(9) "untouched"
+bool(false)
+array(0) {
+}
+int(4)
+string(56) "Malformed UTF-8 characters, possibly incorrectly encoded"
+bool(false)
+string(74) "The offset did not correspond to the beginning of a valid UTF-8 code point"
+int(1)
+array(1) {
+  [0]=>
+  string(1) "a"
+}
+int(3)
+array(3) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(2) "1b"
+    [1]=>
+    string(1) "2"
+    [2]=>
+    string(1) "3"
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(1) "2"
+    [2]=>
+    string(1) "3"
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+  }
+}
+int(2)
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(1) "2"
+  }
+  ["d"]=>
+  array(2) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(1) "2"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(1) "2"
+  }
+}
+int(2)
+array(2) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(1) "1"
+    ["d"]=>
+    string(1) "1"
+    [1]=>
+    string(1) "1"
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    string(1) "2"
+    ["d"]=>
+    string(1) "2"
+    [1]=>
+    string(1) "2"
+  }
+}
+int(2)
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "x"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      int(1)
+    }
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      int(1)
+    }
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "x"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+  }
+}
+int(2)
+array(2) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    NULL
+    [2]=>
+    string(1) "x"
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(1) "1"
+    [2]=>
+    NULL
+  }
+}
+int(0)
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+int(0)
+array(0) {
+}
+int(3)
+int(4)
+int(2)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+  }
+  ["MARK"]=>
+  array(2) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    string(1) "y"
+  }
+}
+int(2)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "a"
+  }
+}
+string(3) "bba"
+int(2)
+string(3) "aaa"
+int(0)
+string(2) "cc"
+string(2) "xx"
+string(1) "1"
+array(3) {
+  ["x"]=>
+  string(1) "b"
+  ["y"]=>
+  string(1) "c"
+  [5]=>
+  string(2) "bb"
+}
+int(3)
+array(2) {
+  ["x"]=>
+  string(1) "b"
+  [5]=>
+  string(2) "bb"
+}
+int(3)
+NULL
+string(1) "b"
+string(34) "[a|b|ax|\1|$1|||] [a||ax|\1|$1|||]"
+string(4) "a\b\"
+string(3) "a$b"
+string(4) "a${b"
+string(5) "a${1b"
+
+Warning: preg_replace(): Compilation failed: missing closing parenthesis at offset 1 in preg.php on line 50
+NULL
+int(1)
+
+Warning: preg_replace(): Compilation failed: missing closing parenthesis at offset 1 in preg.php on line 51
+NULL
+NULL
+int(4)
+string(5) "-a-b-"
+string(6) "-a--c-"
+string(5) "a-b-b"
+string(8) "-é-日-"
+preg_replace(): Argument #1 ($pattern) must be of type array when argument #2 ($replacement) is an array, string given
+string(3) "223"
+
+Deprecated: preg_replace(): Passing null to parameter #3 ($subject) of type array|string is deprecated in preg.php on line 57
+string(0) ""
+string(24) "["a1","a","1"] ["b","b"]"
+string(54) "[["a1",0],["a",0],["1",1]] [["b",3],["b",3],[null,-1]]"
+int(2)
+string(2) "Ab"
+int(1)
+string(4) "aabb"
+array(2) {
+  ["k"]=>
+  string(1) "5"
+  [0]=>
+  string(1) "b"
+}
+
+Fatal error: Uncaught TypeError: strtoupper(): Argument #1 ($string) must be of type string, array given in preg.php:64
+Stack trace:
+#0 [internal function]: strtoupper(Array)
+#1 preg.php(64): preg_replace_callback('/a/', 'strtoupper', 'abc')
+#2 {main}
+  thrown in preg.php on line 64
