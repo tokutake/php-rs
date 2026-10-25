@@ -19,11 +19,15 @@ def implemented():
     return names
 
 def split_params(s):
-    parts, depth, cur, quote = [], 0, '', None
+    parts, depth, cur, quote, escaped = [], 0, '', None, False
     for c in s:
         if quote:
             cur += c
-            if c == quote:
+            if escaped:
+                escaped = False
+            elif c == '\\':
+                escaped = True
+            elif c == quote:
                 quote = None
             continue
         if c in '"\'':

@@ -187,3 +187,18 @@ var_dump(@preg_match('/(?:(?:(?:ab){1000}){1000}){1000}/', 'a'));"#;
         )
     );
 }
+
+#[test]
+fn endless_streams_hit_the_memory_limit() {
+    // Reading an endless source stops at php-src's default memory_limit
+    // instead of growing until the process is killed
+    assert_php_error(
+        "dev_zero",
+        "<?php $z = fopen('/dev/zero', 'r'); echo strlen(fread($z, 10)), \"\\n\"; stream_get_contents($z);",
+        "Allowed memory size of 134217728 bytes exhausted",
+    );
+    assert_php_error("dev_zero_line", "<?php fgets(fopen('/dev/zero', 'r'));", "Allowed memory size");
+    // A huge length is not allocated up front
+    let (code, out) = run("fread_len", "<?php var_dump(strlen(fread(fopen(__FILE__, 'r'), PHP_INT_MAX)));");
+    assert_eq!((code, out.as_str()), (0, "int(65)\n"));
+}

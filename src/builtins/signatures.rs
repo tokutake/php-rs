@@ -202,6 +202,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("ceil", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
+    ("chmod", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "permissions", default: None, variadic: false, by_ref: false },
+    ]),
     ("chop", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
         Param { name: "characters", default: Some("\" \\n\\r\\t\\v\\0\""), variadic: false, by_ref: false },
@@ -222,12 +226,24 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "object_or_class", default: None, variadic: false, by_ref: false },
         Param { name: "autoload", default: Some("true"), variadic: false, by_ref: false },
     ]),
+    ("clearstatcache", &[
+        Param { name: "clear_realpath_cache", default: Some("false"), variadic: false, by_ref: false },
+        Param { name: "filename", default: Some("\"\""), variadic: false, by_ref: false },
+    ]),
+    ("closedir", &[
+        Param { name: "dir_handle", default: Some("null"), variadic: false, by_ref: false },
+    ]),
     ("compact", &[
         Param { name: "var_name", default: None, variadic: false, by_ref: false },
         Param { name: "var_names", default: None, variadic: true, by_ref: false },
     ]),
     ("constant", &[
         Param { name: "name", default: None, variadic: false, by_ref: false },
+    ]),
+    ("copy", &[
+        Param { name: "from", default: None, variadic: false, by_ref: false },
+        Param { name: "to", default: None, variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
     ]),
     ("cos", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
@@ -363,9 +379,40 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "flags", default: Some("EXTR_OVERWRITE"), variadic: false, by_ref: false },
         Param { name: "prefix", default: Some("\"\""), variadic: false, by_ref: false },
     ]),
+    ("fclose", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fdatasync", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
     ("fdiv", &[
         Param { name: "num1", default: None, variadic: false, by_ref: false },
         Param { name: "num2", default: None, variadic: false, by_ref: false },
+    ]),
+    ("feof", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fflush", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fgetc", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fgetcsv", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "separator", default: Some("\",\""), variadic: false, by_ref: false },
+        Param { name: "enclosure", default: Some("\"\\\"\""), variadic: false, by_ref: false },
+        Param { name: "escape", default: Some("\"\\\\\""), variadic: false, by_ref: false },
+    ]),
+    ("fgets", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("file", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
     ]),
     ("file_exists", &[
         Param { name: "filename", default: None, variadic: false, by_ref: false },
@@ -377,8 +424,46 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "offset", default: Some("0"), variadic: false, by_ref: false },
         Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
     ]),
+    ("file_put_contents", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "data", default: None, variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("fileatime", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("filectime", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("filegroup", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fileinode", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("filemtime", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fileowner", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fileperms", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("filesize", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("filetype", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
     ("floatval", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
+    ]),
+    ("flock", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "operation", default: None, variadic: false, by_ref: false },
+        Param { name: "would_block", default: Some("null"), variadic: false, by_ref: true },
     ]),
     ("floor", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
@@ -387,12 +472,71 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "num1", default: None, variadic: false, by_ref: false },
         Param { name: "num2", default: None, variadic: false, by_ref: false },
     ]),
+    ("fnmatch", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("fopen", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "mode", default: None, variadic: false, by_ref: false },
+        Param { name: "use_include_path", default: Some("false"), variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("fpassthru", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fprintf", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "values", default: None, variadic: true, by_ref: false },
+    ]),
+    ("fputcsv", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "fields", default: None, variadic: false, by_ref: false },
+        Param { name: "separator", default: Some("\",\""), variadic: false, by_ref: false },
+        Param { name: "enclosure", default: Some("\"\\\"\""), variadic: false, by_ref: false },
+        Param { name: "escape", default: Some("\"\\\\\""), variadic: false, by_ref: false },
+        Param { name: "eol", default: Some("\"\\n\""), variadic: false, by_ref: false },
+    ]),
+    ("fputs", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "data", default: None, variadic: false, by_ref: false },
+        Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("fread", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "length", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fseek", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "offset", default: None, variadic: false, by_ref: false },
+        Param { name: "whence", default: Some("SEEK_SET"), variadic: false, by_ref: false },
+    ]),
+    ("fstat", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fsync", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("ftell", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("ftruncate", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "size", default: None, variadic: false, by_ref: false },
+    ]),
     ("func_get_args", &[
     ]),
     ("func_num_args", &[
     ]),
     ("function_exists", &[
         Param { name: "function", default: None, variadic: false, by_ref: false },
+    ]),
+    ("fwrite", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "data", default: None, variadic: false, by_ref: false },
+        Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
     ]),
     ("generator::__debuginfo", &[
     ]),
@@ -428,6 +572,12 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("get_parent_class", &[
         Param { name: "object_or_class", default: Some("UNKNOWN"), variadic: false, by_ref: false },
     ]),
+    ("get_resource_id", &[
+        Param { name: "resource", default: None, variadic: false, by_ref: false },
+    ]),
+    ("get_resource_type", &[
+        Param { name: "resource", default: None, variadic: false, by_ref: false },
+    ]),
     ("getcwd", &[
     ]),
     ("getenv", &[
@@ -436,6 +586,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("gettype", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
+    ]),
+    ("glob", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
     ]),
     ("hex2bin", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
@@ -503,6 +657,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("is_double", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
     ]),
+    ("is_executable", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
     ("is_file", &[
         Param { name: "filename", default: None, variadic: false, by_ref: false },
     ]),
@@ -524,6 +681,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("is_iterable", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
     ]),
+    ("is_link", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
     ("is_long", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
     ]),
@@ -542,6 +702,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("is_readable", &[
         Param { name: "filename", default: None, variadic: false, by_ref: false },
     ]),
+    ("is_resource", &[
+        Param { name: "value", default: None, variadic: false, by_ref: false },
+    ]),
     ("is_scalar", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
     ]),
@@ -552,6 +715,12 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "object_or_class", default: None, variadic: false, by_ref: false },
         Param { name: "class", default: None, variadic: false, by_ref: false },
         Param { name: "allow_string", default: Some("true"), variadic: false, by_ref: false },
+    ]),
+    ("is_writable", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
+    ("is_writeable", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
     ]),
     ("iterator_count", &[
         Param { name: "iterator", default: None, variadic: false, by_ref: false },
@@ -608,6 +777,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("log1p", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
+    ("lstat", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
     ("ltrim", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
         Param { name: "characters", default: Some("\" \\n\\r\\t\\v\\0\""), variadic: false, by_ref: false },
@@ -624,6 +796,12 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
         Param { name: "values", default: None, variadic: true, by_ref: false },
     ]),
+    ("mkdir", &[
+        Param { name: "directory", default: None, variadic: false, by_ref: false },
+        Param { name: "permissions", default: Some("0777"), variadic: false, by_ref: false },
+        Param { name: "recursive", default: Some("false"), variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
     ("nl2br", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
         Param { name: "use_xhtml", default: Some("true"), variadic: false, by_ref: false },
@@ -636,6 +814,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("octdec", &[
         Param { name: "octal_string", default: None, variadic: false, by_ref: false },
+    ]),
+    ("opendir", &[
+        Param { name: "directory", default: None, variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
     ]),
     ("ord", &[
         Param { name: "character", default: None, variadic: false, by_ref: false },
@@ -743,8 +925,31 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "end", default: None, variadic: false, by_ref: false },
         Param { name: "step", default: Some("1"), variadic: false, by_ref: false },
     ]),
+    ("readdir", &[
+        Param { name: "dir_handle", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("readfile", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "use_include_path", default: Some("false"), variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
     ("realpath", &[
         Param { name: "path", default: None, variadic: false, by_ref: false },
+    ]),
+    ("rename", &[
+        Param { name: "from", default: None, variadic: false, by_ref: false },
+        Param { name: "to", default: None, variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("rewind", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("rewinddir", &[
+        Param { name: "dir_handle", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("rmdir", &[
+        Param { name: "directory", default: None, variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
     ]),
     ("round", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
@@ -758,6 +963,11 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("rtrim", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
         Param { name: "characters", default: Some("\" \\n\\r\\t\\v\\0\""), variadic: false, by_ref: false },
+    ]),
+    ("scandir", &[
+        Param { name: "directory", default: None, variadic: false, by_ref: false },
+        Param { name: "sorting_order", default: Some("SCANDIR_SORT_ASCENDING"), variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
     ]),
     ("similar_text", &[
         Param { name: "string1", default: None, variadic: false, by_ref: false },
@@ -791,6 +1001,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("sqrt", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
+    ("stat", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+    ]),
     ("str_contains", &[
         Param { name: "haystack", default: None, variadic: false, by_ref: false },
         Param { name: "needle", default: None, variadic: false, by_ref: false },
@@ -798,6 +1011,12 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("str_ends_with", &[
         Param { name: "haystack", default: None, variadic: false, by_ref: false },
         Param { name: "needle", default: None, variadic: false, by_ref: false },
+    ]),
+    ("str_getcsv", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
+        Param { name: "separator", default: Some("\",\""), variadic: false, by_ref: false },
+        Param { name: "enclosure", default: Some("\"\\\"\""), variadic: false, by_ref: false },
+        Param { name: "escape", default: Some("\"\\\\\""), variadic: false, by_ref: false },
     ]),
     ("str_ireplace", &[
         Param { name: "search", default: None, variadic: false, by_ref: false },
@@ -852,6 +1071,17 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "characters", default: None, variadic: false, by_ref: false },
         Param { name: "offset", default: Some("0"), variadic: false, by_ref: false },
         Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("stream_get_contents", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "offset", default: Some("-1"), variadic: false, by_ref: false },
+    ]),
+    ("stream_get_meta_data", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+    ]),
+    ("stream_is_local", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
     ]),
     ("stripos", &[
         Param { name: "haystack", default: None, variadic: false, by_ref: false },
@@ -956,11 +1186,24 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "offset", default: None, variadic: false, by_ref: false },
         Param { name: "length", default: Some("null"), variadic: false, by_ref: false },
     ]),
+    ("sys_get_temp_dir", &[
+    ]),
     ("tan", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
     ("tanh", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
+    ]),
+    ("tempnam", &[
+        Param { name: "directory", default: None, variadic: false, by_ref: false },
+        Param { name: "prefix", default: None, variadic: false, by_ref: false },
+    ]),
+    ("tmpfile", &[
+    ]),
+    ("touch", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "mtime", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "atime", default: Some("null"), variadic: false, by_ref: false },
     ]),
     ("trait_exists", &[
         Param { name: "trait", default: None, variadic: false, by_ref: false },
@@ -985,6 +1228,13 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "array", default: None, variadic: false, by_ref: true },
         Param { name: "callback", default: None, variadic: false, by_ref: false },
     ]),
+    ("umask", &[
+        Param { name: "mask", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("unlink", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
     ("usort", &[
         Param { name: "array", default: None, variadic: false, by_ref: true },
         Param { name: "callback", default: None, variadic: false, by_ref: false },
@@ -996,6 +1246,11 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("var_export", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
         Param { name: "return", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("vfprintf", &[
+        Param { name: "stream", default: None, variadic: false, by_ref: false },
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "values", default: None, variadic: false, by_ref: false },
     ]),
     ("vprintf", &[
         Param { name: "format", default: None, variadic: false, by_ref: false },

@@ -259,6 +259,8 @@ struct Frame {
 
 pub struct Interp<W: Write> {
     out: W,
+    /// Set by fclose(STDOUT)
+    stdout_closed: bool,
     /// The file of the code running: its path as diagnostics show it, and its strict_types
     file: Rc<SourceFile>,
     frames: Vec<Frame>,
@@ -329,6 +331,20 @@ impl<W: Write> Runtime for Interp<W> {
         self.call_named_method(obj, name)
     }
 
+    fn echo(&mut self, bytes: &[u8]) {
+        let _ = self.write(bytes);
+    }
+
+    fn flush_out(&mut self) {
+        self.flush_diags();
+        let _ = self.out.flush();
+    }
+
+    fn close_stdout(&mut self) {
+        self.flush_out();
+        self.stdout_closed = true;
+    }
+
     fn check_callback(&mut self, fname: &str, n: usize, cb: &Value) -> EResult<()> {
         self.callback(fname, n, cb).map(|_| ())
     }
@@ -361,6 +377,7 @@ impl<W: Write> Interp<W> {
         };
         Interp {
             out,
+            stdout_closed: false,
             file,
             frames: vec![main],
             functions: HashMap::new(),
@@ -718,7 +735,11 @@ impl<W: Write> Interp<W> {
     }
 
     fn flush_diags(&mut self) {
-        for d in diag::take() {
+        let diags = diag::take();
+        if self.stdout_closed {
+            return;
+        }
+        for d in diags {
             let msg = format!("\n{}: {} in {} on line {}\n", d.level.label(), d.msg, d.file, d.line);
             let _ = self.out.write_all(msg.as_bytes());
         }
@@ -726,6 +747,9 @@ impl<W: Write> Interp<W> {
 
     fn write(&mut self, bytes: &[u8]) -> EResult<()> {
         self.flush_diags();
+        if self.stdout_closed {
+            return Ok(());
+        }
         self.out.write_all(bytes).map_err(|e| Fatal::error(format!("write failed: {e}")))
     }
 
@@ -3180,6 +3204,7 @@ fn coerce(v: Value, ty: &TypeHint, ctx: &TypeCtx<'_>, strict: bool) -> Result<Va
         Value::Float(_) => "float",
         Value::Str(_) => "string",
         Value::Array(_) => "array",
+        Value::Resource(_) => "resource",
         Value::Object(_) | Value::Ref(_) => unreachable!("handled above or dereferenced before type checks"),
     };
     let callable = ty.allows("callable")
@@ -3270,6 +3295,10 @@ pub fn to_key(v: &Value, container: &str) -> EResult<Key> {
         }
         Value::Array(_) | Value::Object(_) => {
             return Err(Fatal::type_error(format!("Cannot access offset of type {} on {container}", v.type_name())));
+        }
+        Value::Resource(r) => {
+            diag::warning(format!("Resource ID#{} used as offset, casting to integer ({})", r.id, r.id));
+            Key::Int(r.id)
         }
         Value::Ref(r) => return value::with_deref(r, |v| to_key(v, container)),
     })
@@ -3445,6 +3474,7 @@ fn match_case(v: &Value) -> String {
             out
         }
         Value::Array(_) => "of type array".into(),
+        Value::Resource(_) => "of type resource".into(),
         Value::Object(o) => format!("of type {}", o.class.name),
         Value::Ref(r) => value::with_deref(r, match_case),
     }
@@ -3521,7 +3551,9 @@ fn increment(v: &Value) -> EResult<Value> {
                 if s.is_empty() { Value::str(b"1".to_vec()) } else { Value::str(str_increment(s)) }
             }
         },
-        Value::Array(_) | Value::Object(_) => return Err(Fatal::type_error(format!("Cannot increment {}", v.type_name()))),
+        Value::Array(_) | Value::Object(_) | Value::Resource(_) => {
+            return Err(Fatal::type_error(format!("Cannot increment {}", v.type_name())));
+        }
         Value::Ref(r) => return value::with_deref(r, increment),
     })
 }
@@ -3549,7 +3581,9 @@ fn decrement(v: &Value) -> EResult<Value> {
                 v.clone()
             }
         },
-        Value::Array(_) | Value::Object(_) => return Err(Fatal::type_error(format!("Cannot decrement {}", v.type_name()))),
+        Value::Array(_) | Value::Object(_) | Value::Resource(_) => {
+            return Err(Fatal::type_error(format!("Cannot decrement {}", v.type_name())));
+        }
         Value::Ref(r) => return value::with_deref(r, decrement),
     })
 }

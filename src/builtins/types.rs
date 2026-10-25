@@ -50,6 +50,13 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
                 Value::Str(_) => "string",
                 Value::Array(_) => "array",
                 Value::Object(o) => o.class.name,
+                Value::Resource(r) => {
+                    if r.is_open() {
+                        "resource (stream)"
+                    } else {
+                        "resource (closed)"
+                    }
+                }
                 Value::Ref(_) => unreachable!("arguments are dereferenced"),
             })
         }),
@@ -148,7 +155,8 @@ fn spaces(out: &mut Vec<u8>, n: usize) {
 fn var_export_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<usize>) {
     match v {
         Value::Ref(r) => with_deref(r, |inner| var_export_at(out, inner, level, visiting)),
-        Value::Null => out.extend_from_slice(b"NULL"),
+        // Resources have no literal form
+        Value::Null | Value::Resource(_) => out.extend_from_slice(b"NULL"),
         Value::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
         // PHP_INT_MIN as a literal would be a float
         Value::Int(i64::MIN) => out.extend_from_slice(b"-9223372036854775807-1"),

@@ -700,6 +700,7 @@ pub fn trace_arg(v: &Value) -> String {
         }
         Value::Array(_) => "Array".into(),
         Value::Object(o) => format!("Object({})", o.class.name),
+        Value::Resource(r) => format!("Resource id #{}", r.id),
         Value::Ref(r) => crate::value::with_deref(r, trace_arg),
     }
 }

@@ -23,6 +23,8 @@ pub enum Value {
     Array(Rc<PhpArray>),
     /// Objects are handles: copies share the same instance
     Object(Rc<Object>),
+    /// A resource (a stream): a handle like an object
+    Resource(Rc<crate::stream::Resource>),
     /// A PHP reference (`&$x`). Only ever stored in variable slots and array
     /// elements, never produced as the result of an expression, and never nested
     Ref(Rc<RefCell<Value>>),
@@ -79,6 +81,7 @@ impl PartialEq for Value {
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Object(a), Value::Object(b)) => Rc::ptr_eq(a, b),
+            (Value::Resource(a), Value::Resource(b)) => Rc::ptr_eq(a, b),
             (Value::Array(a), Value::Array(b)) => {
                 Rc::ptr_eq(a, b)
                     || a.len() == b.len()
@@ -300,6 +303,7 @@ impl Value {
             Value::Array(_) => "array",
             // PHP names the class in type errors ("..., Exception given")
             Value::Object(o) => o.class.name,
+            Value::Resource(_) => "resource",
             Value::Ref(r) => with_deref(r, Value::type_name),
         }
     }
@@ -338,7 +342,7 @@ impl Value {
             Value::Float(f) => *f != 0.0,
             Value::Str(s) => !(s.is_empty() || s.as_slice() == b"0"),
             Value::Array(a) => !a.is_empty(),
-            Value::Object(_) => true,
+            Value::Object(_) | Value::Resource(_) => true,
             Value::Ref(r) => with_deref(r, Value::to_bool),
         }
     }
@@ -354,6 +358,7 @@ impl Value {
             // Only Throwables are stringable so far; callers check that via interp::to_str
             Value::Object(o) if o.class.is_throwable => object::throwable_to_string(o),
             Value::Object(_) => Vec::new(),
+            Value::Resource(r) => format!("Resource id #{}", r.id).into_bytes(),
             Value::Ref(r) => with_deref(r, Value::to_bytes),
         }
     }
@@ -368,6 +373,7 @@ impl Value {
             Value::Str(s) => parse_numeric(s).0,
             Value::Array(a) => Num::Int(!a.is_empty() as i64),
             Value::Object(_) => Num::Int(1),
+            Value::Resource(r) => Num::Int(r.id),
             Value::Ref(r) => with_deref(r, Value::to_num),
         }
     }
@@ -486,7 +492,7 @@ pub enum ArithError {
 fn operand(v: &Value) -> Option<Num> {
     match v {
         Value::Ref(r) => with_deref(r, operand),
-        Value::Array(_) | Value::Object(_) => None,
+        Value::Array(_) | Value::Object(_) | Value::Resource(_) => None,
         Value::Str(s) => match parse_numeric(s) {
             (n, Numeric::Full) => Some(n),
             (n, Numeric::Leading) => {
