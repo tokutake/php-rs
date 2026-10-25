@@ -35,6 +35,7 @@ const NAMES: &[&str] = &[
     "is_subclass_of", "spl_object_id", "spl_object_hash", "strtoupper", "strtolower", "ucfirst", "lcfirst",
     "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
     "substr", "define", "defined", "constant", "trait_exists", "class_uses", "enum_exists",
+    "iterator_to_array", "iterator_count", "is_iterable",
 ];
 
 pub fn exists(lname: &str) -> bool {

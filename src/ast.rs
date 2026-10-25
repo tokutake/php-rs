@@ -64,6 +64,10 @@ pub enum ExprKind {
     Hole,
     /// A magic constant that is only known at runtime
     Magic(Magic),
+    /// `yield`, `yield $v`, `yield $k => $v`. Generator bodies are lowered so
+    /// that these only remain as Stmt::Yield
+    Yield { key: Option<Box<Expr>>, value: Option<Box<Expr>> },
+    YieldFrom(Box<Expr>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -182,6 +186,12 @@ pub enum Stmt {
     Const(Vec<(String, Expr)>),
     /// `declare(strict_types=1)`, which can only be the first statement
     StrictTypes(bool),
+    /// In a lowered generator body: a yield, whose result (the value sent in)
+    /// goes to the hidden variable `target`
+    Yield { key: Option<Expr>, value: Option<Expr>, target: Option<String> },
+    YieldFrom { source: Expr, target: Option<String> },
+    /// In a lowered generator body: a statement without yields, run as usual
+    Plain(Box<Stmt>),
 }
 
 #[derive(Debug)]
@@ -277,6 +287,9 @@ pub struct FuncDecl {
     pub ret: Option<TypeHint>,
     pub body: Vec<Stmt>,
     pub line: u32,
+    /// Contains `yield`: calling it creates a Generator, and the body is lowered
+    /// (see genlower)
+    pub is_generator: bool,
 }
 
 impl FuncDecl {

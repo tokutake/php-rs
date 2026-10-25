@@ -1,0 +1,60 @@
+a
+  b
+  c
+    d
+e
+0,9,36,81,144
+1:a 3:b 6:c 
+v=1
+finally runs
+from try
+0=1
+finally runs
+0=2
+from try + inner
+inner received hello
+inner caught oops
+outer got recovered
+after
+Array
+(
+    [0] => x
+    [1] => y
+)
+2
+at a
+at b
+branch two
+at c
+bool(false)
+at e
+at f
+int(7)
+at g
+at h
+string(1) "H"
+at w0
+loop p
+at w1
+loop q
+at w2
+at init
+for 0
+at step
+for 1
+at step
+cleanup tmp
+double => float
+boolean => bool
+NULL => null
+array => array
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in generators_more.php on line 130
+array(2) {
+  [1]=>
+  string(1) "b"
+  [""]=>
+  string(1) "c"
+}
+end
+cleanup kept

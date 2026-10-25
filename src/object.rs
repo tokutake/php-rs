@@ -127,6 +127,16 @@ pub enum Native {
     EnumCases,
     EnumFrom,
     EnumTryFrom,
+    GenCurrent,
+    GenKey,
+    GenNext,
+    GenValid,
+    GenRewind,
+    GenSend,
+    GenThrow,
+    GenGetReturn,
+    /// An interface method of a built-in interface, which classes implement
+    Abstract,
 }
 
 #[derive(Debug)]
@@ -227,6 +237,7 @@ pub struct Object {
 pub enum Internal {
     None,
     Closure(Closure),
+    Generator(Box<RefCell<crate::interp::generator::GenState>>),
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +302,33 @@ fn register_destructible(obj: &Rc<Object>) {
     });
 }
 
+fn alloc_id() -> u32 {
+    FREE_IDS.with(|f| f.borrow_mut().pop()).unwrap_or_else(|| {
+        NEXT_ID.with(|n| {
+            let id = n.get();
+            n.set(id + 1);
+            id
+        })
+    })
+}
+
+/// A handle number taken without an object of its own, like the iterator that
+/// php-src creates when a foreach starts on a Traversable. Holding it keeps the
+/// handle numbers of other objects as in PHP
+pub struct Handle(u32);
+
+impl Handle {
+    pub fn new() -> Handle {
+        Handle(alloc_id())
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        release_id(self.0);
+    }
+}
+
 /// The next released object whose `__destruct` is due (already marked as
 /// destructed), with the rest of the queue taken aside: what its destructor
 /// releases comes first, as php-src would release it right there
@@ -307,8 +345,15 @@ pub fn take_pending_destruct() -> Option<(Rc<Object>, VecDeque<Pending>)> {
 }
 
 /// Puts back what take_pending_destruct took aside, after anything queued since
-pub fn restore_pending(rest: VecDeque<Pending>) {
-    PENDING.with(|p| p.borrow_mut().extend(rest));
+pub fn restore_pending(mut rest: VecDeque<Pending>) {
+    PENDING.with(|p| {
+        let mut p = p.borrow_mut();
+        // What was queued meanwhile is usually short; the rest can be long
+        for item in std::mem::take(&mut *p).into_iter().rev() {
+            rest.push_front(item);
+        }
+        *p = rest;
+    });
 }
 
 /// Live objects whose destructor has not run, in handle order (for shutdown)
@@ -330,13 +375,7 @@ pub fn disable_destructors() {
 impl Object {
     /// A new object with the class's default property values
     pub fn new(class: Rc<ClassEntry>, internal: Internal) -> Rc<Object> {
-        let id = FREE_IDS.with(|f| f.borrow_mut().pop()).unwrap_or_else(|| {
-            NEXT_ID.with(|n| {
-                let id = n.get();
-                n.set(id + 1);
-                id
-            })
-        });
+        let id = alloc_id();
         let mut props = PhpArray::new();
         for p in &class.props {
             match (&p.default, &p.ty) {
@@ -346,7 +385,8 @@ impl Object {
                 (None, Some(_)) => {}
             }
         }
-        let has_destructor = class.find_method("__destruct").is_some();
+        // A suspended generator may still have finally blocks to run
+        let has_destructor = class.find_method("__destruct").is_some() || matches!(internal, Internal::Generator(_));
         let obj = Rc::new(Object { id, class, props: RefCell::new(props), internal, destructed: Cell::new(!has_destructor) });
         if has_destructor {
             register_destructible(&obj);
@@ -383,7 +423,7 @@ impl Object {
     pub fn closure(&self) -> Option<&Closure> {
         match &self.internal {
             Internal::Closure(c) => Some(c),
-            Internal::None => None,
+            Internal::None | Internal::Generator(_) => None,
         }
     }
 
@@ -420,6 +460,11 @@ impl Drop for Object {
 #[inline(never)]
 fn revive_for_destructor(obj: &mut Object) -> bool {
     if !DESTRUCTORS_ENABLED.try_with(Cell::get).unwrap_or(false) {
+        return false;
+    }
+    if let Internal::Generator(g) = &obj.internal
+        && !g.borrow().in_try()
+    {
         return false;
     }
     let revived = Rc::new(Object {
@@ -575,10 +620,50 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         ("UnderflowException", "RuntimeException"),
         ("UnexpectedValueException", "RuntimeException"),
         ("JsonException", "Exception"),
+        ("ClosedGeneratorException", "Exception"),
     ] {
         let c = put(plain_subclass(name, &by_name[parent]));
         by_name.insert(name, c);
     }
+    put(ClassEntry { name: "Traversable", is_interface: true, ..Default::default() });
+    let abstract_method = |name: &str, class: &'static str| {
+        let (key, m) = native(name, class, Native::Abstract, false);
+        let mut m = Rc::try_unwrap(m).expect("just created");
+        m.is_abstract = true;
+        (key, Rc::new(m))
+    };
+    let iterator_methods = ["current", "next", "key", "valid", "rewind"];
+    put(ClassEntry {
+        name: "Iterator",
+        is_interface: true,
+        interfaces: vec!["Traversable"],
+        methods: iterator_methods.iter().map(|m| abstract_method(m, "Iterator")).collect(),
+        ..Default::default()
+    });
+    put(ClassEntry {
+        name: "IteratorAggregate",
+        is_interface: true,
+        interfaces: vec!["Traversable"],
+        methods: [abstract_method("getIterator", "IteratorAggregate")].into_iter().collect(),
+        ..Default::default()
+    });
+    let generator_methods = [
+        ("current", Native::GenCurrent),
+        ("key", Native::GenKey),
+        ("next", Native::GenNext),
+        ("valid", Native::GenValid),
+        ("rewind", Native::GenRewind),
+        ("send", Native::GenSend),
+        ("throw", Native::GenThrow),
+        ("getReturn", Native::GenGetReturn),
+    ];
+    put(ClassEntry {
+        name: "Generator",
+        is_final: true,
+        interfaces: vec!["Iterator", "Traversable"],
+        methods: generator_methods.iter().map(|(m, n)| native(m, "Generator", *n, true)).collect(),
+        ..Default::default()
+    });
     let invoke = native("__invoke", "Closure", Native::ClosureInvoke, false);
     put(ClassEntry {
         name: "Closure",

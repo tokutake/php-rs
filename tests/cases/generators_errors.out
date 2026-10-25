@@ -1,0 +1,46 @@
+try
+1
+caught in gen: boom
+99
+finally
+3
+bool(false)
+-- uncaught in generator
+v=1
+caught outside: inside
+bool(false)
+Exception: Cannot get return value of a generator that hasn't returned
+-- throw into finished / unstarted
+g3 start
+g3 caught
+bool(false)
+g3 start
+late propagated
+-- finally on destroy
+cleanup
+after unset
+v=1
+cleanup
+after break
+unstarted dropped
+-- errors
+Exception: Cannot traverse an already closed generator
+Exception: Cannot rewind a generator that was already run
+rewind ok
+Error: The "Generator" class is reserved for internal use and cannot be manually instantiated
+Error: Trying to clone an uncloneable object of class Generator
+Error: Cannot resume an already running generator
+Exception: Cannot get return value of a generator that hasn't returned
+bool(false)
+int(5)
+object(Generator)#3 (0) {
+}
+TypeError at call: g8(): Argument #1 ($x) must be of type int, string given, called in generators_errors.php on line 82
+NULL
+-- trace
+#0 generators_errors.php(87): g10()
+#1 generators_errors.php(88): run10()
+#2 {main}
+#0 [internal function]: g10()
+#1 generators_errors.php(90): Generator->next()
+#2 {main}

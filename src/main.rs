@@ -4,6 +4,7 @@ mod array;
 mod ast;
 mod builtins;
 mod diag;
+mod genlower;
 mod interp;
 mod lexer;
 mod object;

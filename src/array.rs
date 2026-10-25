@@ -145,6 +145,13 @@ impl PhpArray {
         self.slots.iter().filter_map(|e| e.as_ref().map(|(k, v)| (k, v)))
     }
 
+    /// The first entry at or after storage position `pos`, with the position after
+    /// it, for iteration that has to pause. Positions stay valid while the array
+    /// is not modified
+    pub fn entry_from(&self, pos: usize) -> Option<(usize, &Key, &Value)> {
+        self.slots.iter().enumerate().skip(pos).find_map(|(i, e)| e.as_ref().map(|(k, v)| (i + 1, k, v)))
+    }
+
     pub fn keys(&self) -> impl Iterator<Item = &Key> {
         self.iter().map(|(k, _)| k)
     }

@@ -1,6 +1,7 @@
 //! Tree-walking interpreter that executes the AST directly.
 //! Class and object handling lives in the `oop` submodule.
 
+pub(crate) mod generator;
 mod oop;
 
 use std::cell::RefCell;
@@ -13,7 +14,7 @@ use crate::array::{Key, PhpArray};
 use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, ListItem, Magic, Name, Stmt, TypeHint};
 use crate::builtins::{self, Runtime};
 use crate::diag;
-use crate::object::{self, ClassEntry, Closure, Internal, Method, Object, TraceFrame};
+use crate::object::{self, ClassEntry, Closure, Internal, Method, Native, Object, TraceFrame};
 
 /// Built-ins that php-src compiles to dedicated opcodes when called directly
 /// with this many arguments, so they get no frame in stack traces
@@ -257,6 +258,8 @@ pub struct Interp<W: Write> {
     /// Destructor calls in progress. One running after a frame has gone does not
     /// add to the frame count, but still nests natively
     destructing: usize,
+    /// Generators being run, innermost last
+    gen_runs: Vec<generator::GenRun>,
 }
 
 fn undefined_constant(name: &str) -> Fatal {
@@ -304,6 +307,7 @@ impl<W: Write> Interp<W> {
             internal_calls: Vec::new(),
             in_shutdown: false,
             destructing: 0,
+            gen_runs: Vec::new(),
         }
     }
 
@@ -412,6 +416,9 @@ impl<W: Write> Interp<W> {
     }
 
     fn destruct(&mut self, obj: Rc<Object>) -> EResult<()> {
+        if matches!(obj.internal, Internal::Generator(_)) {
+            return self.gen_destroy(&obj);
+        }
         let Some(m) = obj.class.find_method("__destruct").cloned() else { return Ok(()) };
         let line = diag::line();
         self.destructing += 1;
@@ -590,12 +597,21 @@ impl<W: Write> Interp<W> {
                     }
                 }
             }
-            Stmt::Foreach { subject, key, value, by_ref: false, body } => {
-                let entries: Vec<(Value, Value)> = match self.expr(subject)? {
+            Stmt::Foreach { subject, key, value, by_ref, body } if !by_ref || !subject.is_lvalue() => {
+                let v = self.expr(subject)?;
+                // By reference over a temporary: nothing to write back to
+                if *by_ref && let Value::Object(o) = &v && matches!(o.internal, Internal::Generator(_)) {
+                    return Err(self.generator_by_ref(o));
+                }
+                let entries: Vec<(Value, Value)> = match v {
                     // Iterating our own Rc handle means writes to the variable inside the
                     // loop copy-on-write, so the loop sees the array as it was (PHP semantics)
                     Value::Array(arr) => {
                         return self.foreach_array(&arr, key.as_ref(), value, body);
+                    }
+                    Value::Object(o) if o.class.is_subclass_of("Traversable") => {
+                        let Some(it) = self.iter_start(Value::Object(o), false)? else { return Ok(Flow::Normal) };
+                        return self.foreach_iter(it, key.as_ref(), value, body);
                     }
                     Value::Object(o) => self.visible_props(&o),
                     other => {
@@ -613,7 +629,7 @@ impl<W: Write> Interp<W> {
                     }
                 }
             }
-            Stmt::Foreach { subject, key, value, by_ref: true, body } => {
+            Stmt::Foreach { subject, key, value, body, .. } => {
                 let path = self.path(subject)?;
                 let keys = self.with_place(&path, false, true, |slot| {
                     Ok(match slot {
@@ -628,6 +644,9 @@ impl<W: Write> Interp<W> {
                 })?;
                 let keys = match keys {
                     Ok(keys) => keys,
+                    Err(Value::Object(o)) if matches!(o.internal, Internal::Generator(_)) => {
+                        return Err(self.generator_by_ref(&o));
+                    }
                     Err(Value::Object(_)) => {
                         return Err(Fatal::error("Iterating objects by reference is not supported yet"));
                     }
@@ -684,6 +703,10 @@ impl<W: Write> Interp<W> {
                 }
             }
             Stmt::StrictTypes(_) => {}
+            Stmt::Plain(inner) => return self.stmt(inner),
+            Stmt::Yield { .. } | Stmt::YieldFrom { .. } => {
+                return Err(Fatal::error("yield outside the generator executor"));
+            }
             Stmt::Const(consts) => {
                 for (name, e) in consts {
                     let v = self.expr(e)?;
@@ -832,6 +855,9 @@ impl<W: Write> Interp<W> {
                 Some(v) => v,
                 None => self.lookup_const(global).ok_or_else(|| undefined_constant(name))?,
             },
+            ExprKind::Yield { .. } | ExprKind::YieldFrom(_) => {
+                return Err(Fatal::error("yield outside the generator executor"));
+            }
             ExprKind::Magic(Magic::File) => Value::str(self.file.as_bytes()),
             ExprKind::Magic(Magic::Dir) => {
                 let dir = std::path::Path::new(&self.file).parent().map_or(".".into(), |d| d.display().to_string());
@@ -1587,6 +1613,11 @@ impl<W: Write> Interp<W> {
                 }
             }
             "array_map" => self.array_map(vals, line),
+            "iterator_to_array" | "iterator_count" => self.iterator_builtin(lname, vals),
+            "is_iterable" => {
+                let [v] = <[Value; 1]>::try_from(vals).map_err(|v| builtins::arg_count(lname, 1, v.len()))?;
+                Ok(Value::Bool(self.is_traversable(&v)))
+            }
             "array_filter" => self.array_filter(vals, line),
             _ => {
                 if let Some(v) = self.object_builtin(lname, &vals)? {
@@ -1679,25 +1710,32 @@ impl<W: Write> Interp<W> {
         let by_builtin = self.internal_calls.last().is_some_and(|(depth, _)| *depth == self.frames.len());
         self.frames.push(Frame { vars, func: Some(f.clone()), ctx, call_line, args: shown, by_builtin });
         let result = self.invoke_inner(f, args, call_line);
-        // The trace is captured while the failing frames are still on the stack
-        // An internal error becomes its exception object here, while the failing
-        // frame is still on the stack: the trace is complete, and like php-src the
-        // object exists before the frame's own objects are released
-        let result = result.map_err(|mut e| {
-            if e.object.is_some() {
-                return e;
-            }
-            e.line = Some(e.line.unwrap_or_else(diag::line));
-            if e.trace.is_none() {
-                e.trace = Some(self.trace());
-            }
-            if e.uncatchable {
-                return e;
-            }
-            Fatal::thrown(self.exception_object(e))
-        });
+        if f.is_generator && result.is_ok() {
+            // The bound arguments wait in the generator until it is first resumed
+            let frame = self.frames.pop().expect("pushed above");
+            return Ok(self.make_generator(f, frame));
+        }
+        let result = result.map_err(|e| self.frame_error(e));
         self.frames.pop();
         self.with_destructors(result)
+    }
+
+    /// An error leaving a frame. An internal error becomes its exception object
+    /// here, while the failing frame is still on the stack: the trace is
+    /// complete, and like php-src the object exists before the frame's own
+    /// objects are released
+    fn frame_error(&mut self, mut e: Fatal) -> Fatal {
+        if e.object.is_some() {
+            return e;
+        }
+        e.line = Some(e.line.unwrap_or_else(diag::line));
+        if e.trace.is_none() {
+            e.trace = Some(self.trace());
+        }
+        if e.uncatchable {
+            return e;
+        }
+        Fatal::thrown(self.exception_object(e))
     }
 
     fn invoke_inner(&mut self, f: &FuncDecl, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
@@ -1773,18 +1811,21 @@ impl<W: Write> Interp<W> {
         if f.kind == FuncKind::Method && f.name.eq_ignore_ascii_case("__construct") {
             self.promote_params(f)?;
         }
+        if f.is_generator {
+            return Ok(Value::Null);
+        }
 
         let ret = match self.block(&f.body)? {
             Flow::Return(v) => Some(v),
             _ => None,
         };
         let Some(ty) = &f.ret else { return Ok(ret.unwrap_or(Value::Null)) };
-        if ty.allows("void") {
+        // `mixed` allows anything, but not falling off the end
+        if ty.types.iter().any(|t| t == "void") {
             return Ok(Value::Null);
         }
         let given = match ret {
             Some(v) => v,
-            None if ty.allows("null") => return Ok(Value::Null),
             None => {
                 return Err(Fatal::type_error(format!(
                     "{fname}(): Return value must be of type {}, none returned",
@@ -2217,7 +2258,7 @@ impl TypeCtx<'_> {
             "parent" => self.scope.and_then(|s| s.parent.as_deref()).is_some_and(|p| class.is_subclass_of(p.name)),
             "object" | "mixed" => true,
             "callable" => class.name == "Closure" || class.find_method("__invoke").is_some(),
-            "iterable" => false,
+            "iterable" => class.is_subclass_of("Traversable"),
             _ => class.is_subclass_of(ty),
         }
     }
