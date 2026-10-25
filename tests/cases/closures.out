@@ -43,9 +43,9 @@ int(4)
 TypeError
 object(Closure)#1 (4) {
   ["name"]=>
-  string(67) "{closure:closures.php:4}"
+  string(24) "{closure:closures.php:4}"
   ["file"]=>
-  string(55) "closures.php"
+  string(12) "closures.php"
   ["line"]=>
   int(4)
   ["static"]=>
@@ -56,9 +56,9 @@ object(Closure)#1 (4) {
 }
 object(Closure)#6 (5) {
   ["name"]=>
-  string(68) "{closure:closures.php:25}"
+  string(25) "{closure:closures.php:25}"
   ["file"]=>
-  string(55) "closures.php"
+  string(12) "closures.php"
   ["line"]=>
   int(25)
   ["static"]=>

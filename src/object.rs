@@ -86,11 +86,14 @@ pub struct StaticProp {
     pub cell: Rc<RefCell<Value>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ConstState {
     Unevaluated(Expr),
     Evaluating,
     Done(Value),
+    /// An enum case with its backing value expression. Its object is created on
+    /// first access, as php-src does, which decides its handle number
+    Case(Option<Expr>),
 }
 
 #[derive(Debug)]
@@ -113,6 +116,9 @@ pub enum Native {
     GetTraceAsString,
     ThrowableToString,
     ClosureInvoke,
+    EnumCases,
+    EnumFrom,
+    EnumTryFrom,
 }
 
 #[derive(Debug)]
@@ -141,9 +147,17 @@ pub struct ClassEntry {
     /// Every interface implemented, including inherited ones
     pub interfaces: Vec<&'static str>,
     pub is_interface: bool,
+    pub is_trait: bool,
+    pub is_enum: bool,
+    /// The backing type of an enum
+    pub backing: Option<TypeHint>,
+    /// Enum case names in declaration order
+    pub cases: Vec<String>,
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
+    /// Traits used directly by this class, for class_uses()
+    pub traits: Vec<&'static str>,
     /// Built-ins like Closure that `new` refuses
     pub internal_only: bool,
     pub is_throwable: bool,
@@ -207,6 +221,7 @@ pub enum Internal {
 
 #[derive(Debug, Clone)]
 pub struct TraceFrame {
+    /// Empty for a call made by a built-in function (`[internal function]`)
     pub file: String,
     pub line: u32,
     pub function: String,
@@ -317,6 +332,19 @@ impl Drop for Object {
     }
 }
 
+/// A natively implemented method of an enum: cases(), from(), tryFrom()
+pub fn enum_method(name: &str, class: &'static str, body: Native) -> Method {
+    Method {
+        name: name.to_string(),
+        class,
+        vis: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        body: MethodBody::Native(body),
+    }
+}
+
 fn native(name: &str, class: &'static str, body: Native, is_final: bool) -> (String, Rc<Method>) {
     let m = Method {
         name: name.to_string(),
@@ -400,6 +428,8 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     put(ClassEntry { name: "Stringable", is_interface: true, ..Default::default() });
     put(ClassEntry { name: "Throwable", is_interface: true, interfaces: vec!["Stringable"], ..Default::default() });
     put(ClassEntry { name: "stdClass", allow_dynamic: true, ..Default::default() });
+    put(ClassEntry { name: "UnitEnum", is_interface: true, ..Default::default() });
+    put(ClassEntry { name: "BackedEnum", is_interface: true, interfaces: vec!["UnitEnum"], ..Default::default() });
     let exception = put(throwable_base("Exception"));
     let error = put(throwable_base("Error"));
     let mut by_name: HashMap<&str, Rc<ClassEntry>> = HashMap::new();
@@ -467,7 +497,8 @@ pub fn trace_string(frames: &[TraceFrame]) -> String {
     for (i, f) in frames.iter().enumerate() {
         let args: Vec<String> = f.args.iter().map(trace_arg).collect();
         let class = f.class.as_ref().map_or(String::new(), |(c, t)| format!("{c}{t}"));
-        out.push_str(&format!("#{i} {}({}): {class}{}({})\n", f.file, f.line, f.function, args.join(", ")));
+        let place = if f.file.is_empty() { "[internal function]".to_string() } else { format!("{}({})", f.file, f.line) };
+        out.push_str(&format!("#{i} {place}: {class}{}({})\n", f.function, args.join(", ")));
     }
     out.push_str(&format!("#{} {{main}}", frames.len()));
     out
@@ -478,8 +509,10 @@ pub fn trace_array(frames: &[TraceFrame]) -> Value {
     let rows = frames.iter().map(|f| {
         let mut a = PhpArray::new();
         let mut put = |k: &str, v: Value| a.insert(Key::from_bytes(k.as_bytes()), v);
-        put("file", Value::str(f.file.clone()));
-        put("line", Value::Int(f.line as i64));
+        if !f.file.is_empty() {
+            put("file", Value::str(f.file.clone()));
+            put("line", Value::Int(f.line as i64));
+        }
         put("function", Value::str(f.function.clone()));
         if let Some((class, call)) = &f.class {
             put("class", Value::str(class.clone()));

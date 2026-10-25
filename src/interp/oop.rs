@@ -7,12 +7,12 @@ use std::rc::Rc;
 
 use super::{to_key, ArgVal, Base, CallCtx, Callable, EResult, Fatal, Interp, Path, RefCellValue, TypeCtx};
 use crate::array::Key;
-use crate::ast::{Arg, ClassDecl, ClassRef, Expr, FuncDecl, Member, TypeHint};
+use crate::ast::{Arg, ClassDecl, ClassRef, Expr, FuncDecl, Member, TraitRule, TypeHint};
 use crate::builtins;
 use crate::diag;
 use crate::object::{
-    self, mangle, unmangle, ClassConst, ClassEntry, ConstState, Internal, Method, MethodBody, Native, Object, PropInfo,
-    StaticProp, Visibility,
+    self, enum_method, mangle, unmangle, ClassConst, ClassEntry, ConstState, Internal, Method, MethodBody, Native, Object,
+    PropInfo, StaticProp, Visibility,
 };
 use crate::value::{self, Value};
 
@@ -36,7 +36,7 @@ impl<W: Write> Interp<W> {
 
     pub(super) fn declare_class(&mut self, decl: &Rc<ClassDecl>) -> EResult<()> {
         diag::set_line(decl.line);
-        let kind = if decl.is_interface { "interface" } else { "class" };
+        let kind = decl.kind();
         if self.classes.contains_key(&decl.name.to_ascii_lowercase()) {
             return Err(Fatal::compile(format!(
                 "Cannot declare {kind} {}, because the name is already in use",
@@ -68,11 +68,15 @@ impl<W: Write> Interp<W> {
         // Private constants stay with the class that declares them
         entry.consts.retain(|_, c| c.vis != Visibility::Private);
         entry.is_interface = decl.is_interface;
+        entry.is_trait = decl.is_trait;
         entry.is_abstract = decl.is_abstract;
         entry.is_final = decl.is_final;
         entry.is_readonly = decl.is_readonly;
         // A readonly class cannot get dynamic properties at all
         entry.allow_dynamic &= !decl.is_readonly;
+        if decl.is_enum {
+            self.enum_entry(&mut entry, decl);
+        }
 
         for iname in &decl.interfaces {
             let ie = self.classes.get(&iname.to_ascii_lowercase()).cloned().ok_or_else(|| {
@@ -146,7 +150,7 @@ impl<W: Write> Interp<W> {
                             func.name
                         )));
                     }
-                    if *is_abstract && !decl.is_abstract && !decl.is_interface {
+                    if *is_abstract && !decl.is_abstract && !decl.is_interface && !decl.is_trait {
                         return Err(Fatal::compile(format!(
                             "Class {name} contains abstract method {} and must therefore be declared abstract",
                             func.name
@@ -178,10 +182,17 @@ impl<W: Write> Interp<W> {
                     };
                     add_method(&mut entry, method)?;
                 }
+                Member::Use { .. } => {}
+                Member::Case { name: cname, value } => {
+                    let state = RefCell::new(ConstState::Case(value.clone()));
+                    entry.consts.insert(cname.clone(), Rc::new(ClassConst { vis: Visibility::Public, class: name, state }));
+                    entry.cases.push(cname.clone());
+                }
             }
         }
+        self.use_traits(&mut entry, decl)?;
 
-        if !decl.is_abstract && !decl.is_interface {
+        if !decl.is_abstract && !decl.is_interface && !decl.is_trait {
             let mut missing: Vec<String> =
                 entry.methods.values().filter(|m| m.is_abstract).map(|m| format!("{}::{}", m.class, m.name)).collect();
             if !missing.is_empty() {
@@ -218,6 +229,204 @@ impl<W: Write> Interp<W> {
             Ok(())
         })?;
         self.classes.insert(lname, Rc::new(entry));
+        Ok(())
+    }
+
+    /// What every enum has: final, the UnitEnum/BackedEnum interfaces, the
+    /// readonly `name` (and `value`) properties and the static methods
+    fn enum_entry(&mut self, entry: &mut ClassEntry, decl: &ClassDecl) {
+        let name = entry.name;
+        entry.is_enum = true;
+        entry.is_final = true;
+        // No dynamic properties
+        entry.is_readonly = true;
+        entry.allow_dynamic = false;
+        entry.interfaces.push("UnitEnum");
+        let mut props = vec![("name", TypeHint { types: vec!["string".into()], display: "string".into() })];
+        if let Some(ty) = &decl.backing {
+            entry.interfaces.push("BackedEnum");
+            entry.backing = Some(ty.clone());
+            props.push(("value", ty.clone()));
+        }
+        for (pname, ty) in props {
+            let key = mangle(pname, Visibility::Public, name);
+            let info = PropInfo { name: pname.into(), key, vis: Visibility::Public, class: name, ty: Some(ty), default: None, readonly: true };
+            entry.props.push(info);
+        }
+        let mut methods = vec![enum_method("cases", name, Native::EnumCases)];
+        if decl.backing.is_some() {
+            methods.push(enum_method("from", name, Native::EnumFrom));
+            methods.push(enum_method("tryFrom", name, Native::EnumTryFrom));
+        }
+        for m in methods {
+            entry.methods.insert(m.name.to_ascii_lowercase(), Rc::new(m));
+        }
+    }
+
+    /// The object of an enum case, created on first access
+    fn enum_case(&mut self, class: Rc<ClassEntry>, case: &str, value: Option<&Expr>) -> EResult<Value> {
+        let v = match value {
+            Some(e) => Some(self.with_scope(class.clone(), |this| this.expr(e))?),
+            None => None,
+        };
+        let obj = Object::new(class, Internal::None);
+        obj.set("name", Value::str(case));
+        if let Some(v) = v {
+            obj.set("value", v);
+        }
+        Ok(Value::Object(obj))
+    }
+
+    /// Enum::cases(), from() and tryFrom()
+    fn enum_native(&mut self, n: Native, method: &Method, vals: Vec<Value>) -> EResult<Value> {
+        let class = self.classes[&method.class.to_ascii_lowercase()].clone();
+        let fname = format!("{}::{}", method.class, method.name);
+        let expected = usize::from(n != Native::EnumCases);
+        if vals.len() != expected {
+            let s = if expected == 1 { "" } else { "s" };
+            return Err(Fatal::new(
+                "ArgumentCountError",
+                format!("{fname}() expects exactly {expected} argument{s}, {} given", vals.len()),
+            ));
+        }
+        let mut cases = Vec::with_capacity(class.cases.len());
+        for case in &class.cases {
+            cases.push(self.class_const(&ClassRef::Named(class.name.to_string()), case)?);
+        }
+        if n == Native::EnumCases {
+            return Ok(super::list(cases));
+        }
+        let ty = class.backing.clone().expect("only backed enums have from()");
+        let err = |v: &Value, _: &str| {
+            Fatal::type_error(format!("{fname}(): Argument #1 ($value) must be of type {}, {} given", ty.display, v.value_name()))
+        };
+        let v = self.check_param(vals.into_iter().next().unwrap(), Some(&ty), &err)?;
+        for case in cases {
+            if let Value::Object(o) = &case
+                && o.get("value").strict_eq(&v)
+            {
+                return Ok(case);
+            }
+        }
+        if n == Native::EnumTryFrom {
+            return Ok(Value::Null);
+        }
+        let shown = match &v {
+            Value::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s)),
+            other => String::from_utf8_lossy(&other.to_bytes()).into_owned(),
+        };
+        Err(Fatal::value_error(format!("{shown} is not a valid backing value for enum {}", class.name)))
+    }
+
+    /// Copies the members of the traits a class uses into it, as if declared there:
+    /// `self` and private members then refer to the using class. The class's own
+    /// methods win over trait methods, which win over inherited ones
+    fn use_traits(&mut self, entry: &mut ClassEntry, decl: &ClassDecl) -> EResult<()> {
+        let name = entry.name;
+        let mut used = Vec::new();
+        let mut rules: Vec<&TraitRule> = Vec::new();
+        for m in &decl.members {
+            let Member::Use { traits, rules: r } = m else { continue };
+            for t in traits {
+                let te = self
+                    .classes
+                    .get(&t.to_ascii_lowercase())
+                    .cloned()
+                    .ok_or_else(|| Fatal::compile(format!("Trait \"{t}\" not found")))?;
+                if !te.is_trait {
+                    return Err(Fatal::compile(format!("{name} cannot use {} - it is not a trait", te.name)));
+                }
+                used.push(te);
+            }
+            rules.extend(r);
+        }
+        for r in &rules {
+            let named = match r {
+                TraitRule::Insteadof { trait_name, excluded, .. } => std::iter::once(trait_name).chain(excluded).collect(),
+                TraitRule::Alias { trait_name, .. } => trait_name.iter().collect::<Vec<_>>(),
+            };
+            for t in named {
+                if !self.classes.contains_key(&t.to_ascii_lowercase()) {
+                    return Err(Fatal::compile(format!("Could not find trait {t}")));
+                }
+                if !used.iter().any(|u| u.name.eq_ignore_ascii_case(t)) {
+                    return Err(Fatal::compile(format!("Required Trait {t} wasn't added to {name}")));
+                }
+            }
+        }
+        let matches = |method: &str, t: &str, rule_trait: Option<&String>, rule_method: &str| {
+            rule_method.eq_ignore_ascii_case(method) && rule_trait.is_none_or(|rt| rt.eq_ignore_ascii_case(t))
+        };
+        let own: Vec<String> = entry.methods.iter().filter(|(_, m)| m.class == name).map(|(k, _)| k.clone()).collect();
+        // Which trait each imported method came from, for collision messages
+        let mut imported: Vec<(String, &'static str)> = Vec::new();
+        for t in &used {
+            let mut methods: Vec<&Rc<Method>> = t.methods.values().collect();
+            methods.sort_by(|a, b| a.name.cmp(&b.name));
+            for m in methods {
+                let copy = |mname: &str, vis: Visibility| Method {
+                    name: mname.to_string(),
+                    class: name,
+                    vis,
+                    is_static: m.is_static,
+                    is_abstract: m.is_abstract,
+                    is_final: m.is_final,
+                    body: match &m.body {
+                        MethodBody::User(f) => MethodBody::User(f.clone()),
+                        MethodBody::Native(n) => MethodBody::Native(*n),
+                    },
+                };
+                let mut vis = m.vis;
+                for r in &rules {
+                    if let TraitRule::Alias { trait_name, method, vis: v, alias } = r
+                        && matches(&m.name, t.name, trait_name.as_ref(), method)
+                    {
+                        match alias {
+                            Some(alias) => add_method(entry, copy(alias, v.unwrap_or(m.vis)))?,
+                            None => vis = v.unwrap_or(vis),
+                        }
+                    }
+                }
+                let excluded = rules.iter().any(|r| {
+                    matches!(r, TraitRule::Insteadof { method, excluded, .. }
+                        if method.eq_ignore_ascii_case(&m.name) && excluded.iter().any(|e| e.eq_ignore_ascii_case(t.name)))
+                });
+                let key = m.name.to_ascii_lowercase();
+                if excluded || own.contains(&key) {
+                    continue;
+                }
+                if let Some((_, other)) = imported.iter().find(|(k, _)| *k == key)
+                    && !m.is_abstract
+                    && !entry.methods[&key].is_abstract
+                {
+                    return Err(Fatal::compile(format!(
+                        "Trait method {}::{} has not been applied as {name}::{}, because of collision with {other}::{}",
+                        t.name, m.name, m.name, m.name
+                    )));
+                }
+                imported.push((key, t.name));
+                add_method(entry, copy(&m.name, vis))?;
+            }
+        }
+        for t in &used {
+            for p in &t.props {
+                if entry.props.iter().any(|own| own.name == p.name && own.class == name) {
+                    continue;
+                }
+                let info = PropInfo { key: mangle(&p.name, p.vis, name), class: name, ..p.clone() };
+                add_prop(entry, info)?;
+            }
+            // Each using class gets its own static properties
+            for (pname, sp) in &t.static_props {
+                let cell = Rc::new(RefCell::new(sp.cell.borrow().clone()));
+                entry.static_props.entry(pname.clone()).or_insert(StaticProp { class: name, cell, ..sp.clone() });
+            }
+            for (cname, c) in &t.consts {
+                let state = RefCell::new(c.state.borrow().clone());
+                entry.consts.entry(cname.clone()).or_insert_with(|| Rc::new(ClassConst { vis: c.vis, class: name, state }));
+            }
+        }
+        entry.traits = used.iter().map(|t| t.name).collect();
         Ok(())
     }
 
@@ -324,6 +533,12 @@ impl<W: Write> Interp<W> {
         if class.is_interface {
             return Err(Fatal::error(format!("Cannot instantiate interface {}", class.name)));
         }
+        if class.is_trait {
+            return Err(Fatal::error(format!("Cannot instantiate trait {}", class.name)));
+        }
+        if class.is_enum {
+            return Err(Fatal::error(format!("Cannot instantiate enum {}", class.name)));
+        }
         if class.is_abstract {
             return Err(Fatal::error(format!("Cannot instantiate abstract class {}", class.name)));
         }
@@ -372,7 +587,7 @@ impl<W: Write> Interp<W> {
         let Value::Object(o) = v else {
             return Err(Fatal::error("__clone method called on non-object"));
         };
-        if o.class.is_throwable {
+        if o.class.is_throwable || o.class.is_enum {
             return Err(Fatal::error(format!("Trying to clone an uncloneable object of class {}", o.class.name)));
         }
         let internal = match &o.internal {
@@ -456,14 +671,18 @@ impl<W: Write> Interp<W> {
     ) -> EResult<Value> {
         let func = match &method.body {
             MethodBody::Native(n) => {
-                let vals = args
+                let vals: Vec<Value> = args
                     .into_iter()
                     .map(|a| match a {
                         ArgVal::Val(v) => v,
                         ArgVal::Ref(r) => value::with_deref(&r, Value::clone),
                     })
                     .collect();
-                return self.native_method(*n, method, this, vals, line);
+                let class = Some((method.class.to_string(), if this.is_some() && !method.is_static { "->" } else { "::" }));
+                let shown = vals.clone();
+                return self.internal_call(method.name.clone(), class, shown, line, |this_| {
+                    this_.native_method(*n, method, this, vals, line)
+                });
             }
             MethodBody::User(f) => f.clone(),
         };
@@ -563,6 +782,9 @@ impl<W: Write> Interp<W> {
         vals: Vec<Value>,
         line: u32,
     ) -> EResult<Value> {
+        if matches!(n, Native::EnumCases | Native::EnumFrom | Native::EnumTryFrom) {
+            return self.enum_native(n, method, vals);
+        }
         let Some(this) = this else {
             return Err(Fatal::error(format!("Non-static method {}::{}() cannot be called statically", method.class, method.name)));
         };
@@ -588,7 +810,7 @@ impl<W: Write> Interp<W> {
                 Some(other) => {
                     return Err(Fatal::type_error(format!(
                         "{fname}(): Argument #3 ($previous) must be of type ?Throwable, {} given",
-                        other.type_name()
+                        other.value_name()
                     )))
                 }
             }
@@ -616,7 +838,11 @@ impl<W: Write> Interp<W> {
                 Value::str(object::trace_string(&frames))
             }
             Native::ThrowableToString => Value::str(object::throwable_to_string(&this)),
-            Native::ThrowableConstruct | Native::ClosureInvoke => unreachable!("handled above"),
+            Native::ThrowableConstruct
+            | Native::ClosureInvoke
+            | Native::EnumCases
+            | Native::EnumFrom
+            | Native::EnumTryFrom => unreachable!("handled above"),
         })
     }
 
@@ -771,7 +997,7 @@ impl<W: Write> Interp<W> {
         let err = |v: &Value, _: &str| {
             Fatal::type_error(format!(
                 "Cannot assign {} to property {}::${} of type {}",
-                v.type_name(),
+                v.value_name(),
                 p.class,
                 p.name,
                 ty.display
@@ -922,6 +1148,16 @@ impl<W: Write> Interp<W> {
                     return Err(Fatal::error(format!("Cannot declare self-referencing constant {}::{name}", c.class)));
                 }
                 ConstState::Unevaluated(e) => e,
+                ConstState::Case(value) => {
+                    drop(state);
+                    let scope = self.classes.get(&c.class.to_ascii_lowercase()).cloned().unwrap_or(class);
+                    let result = self.enum_case(scope, name, value.as_ref());
+                    *c.state.borrow_mut() = match &result {
+                        Ok(v) => ConstState::Done(v.clone()),
+                        Err(_) => ConstState::Case(value),
+                    };
+                    return result;
+                }
             }
         };
         // Constants are evaluated lazily, in the scope of the class declaring them
@@ -1028,7 +1264,7 @@ impl<W: Write> Interp<W> {
                 Some(other) => {
                     return Err(Fatal::type_error(format!(
                         "get_class(): Argument #1 ($object) must be of type object, {} given",
-                        other.type_name()
+                        other.value_name()
                     )))
                 }
             },
@@ -1058,7 +1294,13 @@ impl<W: Write> Interp<W> {
                 let dynamic = matches!(vals.first(), Some(Value::Object(o)) if Self::stored(o, &Key::Str(name.as_bytes().into())).is_some());
                 Value::Bool(declared || dynamic)
             }
-            "class_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| !c.is_interface)),
+            "class_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| !c.is_interface && !c.is_trait)),
+            "trait_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| c.is_trait)),
+            "enum_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| c.is_enum)),
+            "class_uses" => match class_arg(self, vals.first()) {
+                Some(c) => Value::Array(Rc::new(c.traits.iter().map(|t| (Key::from_bytes(t.as_bytes()), Value::str(*t))).collect())),
+                None => Value::Bool(false),
+            },
             "interface_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| c.is_interface)),
             "is_a" | "is_subclass_of" => {
                 let allow_string = lname == "is_subclass_of" || vals.get(2).is_some_and(Value::to_bool);

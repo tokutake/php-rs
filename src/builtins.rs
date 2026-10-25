@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::array::{Key, PhpArray};
 use crate::diag;
 use crate::object::{unmangle, Internal, Object, Visibility};
-use crate::interp::{to_key, EResult, Fatal};
+use crate::interp::{strict_types, to_key, EResult, Fatal};
 use crate::value::{
     float_fits_int, float_to_int_implicit, format_float_repr, loose_cmp, parse_numeric, with_deref, Num, Numeric, Value,
 };
@@ -34,7 +34,7 @@ const NAMES: &[&str] = &[
     "get_object_vars", "method_exists", "property_exists", "class_exists", "interface_exists", "is_a",
     "is_subclass_of", "spl_object_id", "spl_object_hash", "strtoupper", "strtolower", "ucfirst", "lcfirst",
     "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
-    "substr",
+    "substr", "define", "defined", "constant", "trait_exists", "class_uses", "enum_exists",
 ];
 
 pub fn exists(lname: &str) -> bool {
@@ -75,21 +75,28 @@ fn expect_array(fname: &str, n: usize, param: &str, v: &Value) -> EResult<Rc<Php
         Value::Array(a) => Ok(a.clone()),
         other => Err(Fatal::type_error(format!(
             "{fname}(): Argument #{n} (${param}) must be of type array, {} given",
-            other.type_name()
+            other.value_name()
         ))),
     }
 }
 
 fn param_type_error(fname: &str, n: usize, param: &str, ty: &str, v: &Value) -> Fatal {
-    Fatal::type_error(format!("{fname}(): Argument #{n} (${param}) must be of type {ty}, {} given", v.type_name()))
+    Fatal::type_error(format!("{fname}(): Argument #{n} (${param}) must be of type {ty}, {} given", v.value_name()))
 }
 
 fn null_param(fname: &str, n: usize, param: &str, ty: &str) {
     diag::deprecated(format!("{fname}(): Passing null to parameter #{n} (${param}) of type {ty} is deprecated"));
 }
 
-/// Coerces an argument to an `int` parameter (non-strict mode rules)
+/// Coerces an argument to an `int` parameter (strict_types only accepts ints)
 pub fn arg_int(fname: &str, n: usize, param: &str, v: &Value) -> EResult<i64> {
+    if strict_types() {
+        return match v {
+            Value::Int(i) => Ok(*i),
+            Value::Ref(r) => with_deref(r, |inner| arg_int(fname, n, param, inner)),
+            other => Err(param_type_error(fname, n, param, "int", other)),
+        };
+    }
     let float = |f: f64| {
         if f.is_finite() && float_fits_int(f) {
             Ok(float_to_int_implicit(f, v))
@@ -118,6 +125,16 @@ pub fn arg_int(fname: &str, n: usize, param: &str, v: &Value) -> EResult<i64> {
 
 /// Coerces an argument to a `string` parameter
 pub fn arg_str(rt: &mut dyn Runtime, fname: &str, n: usize, param: &str, v: &Value) -> EResult<Vec<u8>> {
+    if strict_types() {
+        return match v {
+            Value::Str(s) => Ok(s.to_vec()),
+            Value::Ref(r) => {
+                let inner = with_deref(r, Value::clone);
+                arg_str(rt, fname, n, param, &inner)
+            }
+            other => Err(param_type_error(fname, n, param, "string", other)),
+        };
+    }
     match v {
         Value::Null => {
             null_param(fname, n, param, "string");
@@ -136,6 +153,13 @@ pub fn arg_str(rt: &mut dyn Runtime, fname: &str, n: usize, param: &str, v: &Val
 
 /// Coerces an argument to a `bool` parameter
 fn arg_bool(fname: &str, n: usize, param: &str, v: &Value) -> EResult<bool> {
+    if strict_types() {
+        return match v {
+            Value::Bool(b) => Ok(*b),
+            Value::Ref(r) => with_deref(r, |inner| arg_bool(fname, n, param, inner)),
+            other => Err(param_type_error(fname, n, param, "bool", other)),
+        };
+    }
     match v {
         Value::Null => {
             null_param(fname, n, param, "bool");
@@ -253,7 +277,7 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
                 Value::Array(a) => Ok(Value::Int(a.len() as i64)),
                 other => Err(Fatal::type_error(format!(
                     "{lname}(): Argument #1 ($value) must be of type Countable|array, {} given",
-                    other.type_name()
+                    other.value_name()
                 ))),
             }
         }
@@ -292,7 +316,7 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
                 (_, Some(other)) => {
                     return Err(Fatal::type_error(format!(
                         "{lname}(): Argument #2 ($array) must be of type ?array, {} given",
-                        other.type_name()
+                        other.value_name()
                     )))
                 }
             };
@@ -421,7 +445,7 @@ pub fn call_by_ref(lname: &str, target: &mut Value, vals: Vec<Value>) -> EResult
     let Value::Array(arr) = target else {
         return Err(Fatal::type_error(format!(
             "{lname}(): Argument #1 ($array) must be of type array, {} given",
-            target.type_name()
+            target.value_name()
         )));
     };
     match lname {
@@ -692,6 +716,10 @@ fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<us
             out.extend_from_slice(pad.as_bytes());
             out.extend_from_slice(b"}\n");
         }
+        Value::Object(o) if o.class.is_enum => {
+            let case = String::from_utf8_lossy(&o.get("name").to_bytes()).into_owned();
+            out.extend_from_slice(format!("enum({}::{case})\n", o.class.name).as_bytes());
+        }
         Value::Object(o) => {
             let props = debug_props(o);
             let count = props.iter().filter(|p| p.value.is_some()).count();
@@ -747,7 +775,12 @@ fn print_r_at(out: &mut Vec<u8>, v: &Value, indent: usize, visiting: &mut Vec<us
                 .collect()
         }
         Value::Object(o) => {
-            out.extend_from_slice(format!("{} Object\n", o.class.name).as_bytes());
+            let kind = match &o.class.backing {
+                _ if !o.class.is_enum => "Object".to_string(),
+                Some(ty) => format!("Enum:{}", ty.display),
+                None => "Enum".to_string(),
+            };
+            out.extend_from_slice(format!("{} {kind}\n", o.class.name).as_bytes());
             debug_props(o)
                 .into_iter()
                 .filter_map(|p| {

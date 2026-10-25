@@ -50,6 +50,40 @@ pub enum ExprKind {
     Throw(Box<Expr>),
     Isset(Vec<Expr>),
     Empty(Box<Expr>),
+    /// `match (subject) { ... }`
+    Match(Box<Expr>, Vec<MatchArm>),
+    /// `[$a, 'k' => $b] = ...` / `list(...)`: only valid as an assignment target.
+    /// Skipped positions (`[, $b]`) are None
+    List(Vec<Option<ListItem>>),
+    /// A skipped element in `[...]` that may still turn out to be a list pattern
+    Hole,
+    /// A magic constant that is only known at runtime
+    Magic(Magic),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Magic {
+    File,
+    Dir,
+    /// `__FUNCTION__` / `__METHOD__` inside a closure
+    ClosureName,
+    /// `__CLASS__` inside a trait: the class using it
+    Class,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    /// None for `default`
+    pub conds: Option<Vec<Expr>>,
+    pub body: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListItem {
+    pub key: Option<Expr>,
+    /// A variable, offset, property or nested List
+    pub target: Expr,
+    pub by_ref: bool,
 }
 
 /// A member name after `->`: literal, or `$name` / `{expr}` evaluated at runtime
@@ -92,6 +126,8 @@ pub struct Arg {
 pub struct ArrayItem {
     pub key: Option<Expr>,
     pub value: Expr,
+    /// `[&$a]`: the element is a reference to the variable
+    pub by_ref: bool,
 }
 
 impl Expr {
@@ -135,12 +171,22 @@ pub enum Stmt {
     StaticVar(Vec<(String, Option<Expr>)>),
     Try { body: Vec<Stmt>, catches: Vec<Catch>, finally: Option<Vec<Stmt>> },
     Class(Rc<ClassDecl>),
+    /// Cases in order with their bodies; `default` has no condition
+    Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
+    /// `const A = 1, B = 2;` at the top level
+    Const(Vec<(String, Expr)>),
+    /// `declare(strict_types=1)`, which can only be the first statement
+    StrictTypes(bool),
 }
 
 #[derive(Debug)]
 pub struct ClassDecl {
     pub name: String,
     pub is_interface: bool,
+    pub is_trait: bool,
+    pub is_enum: bool,
+    /// The backing type of an enum (`enum E: string`)
+    pub backing: Option<TypeHint>,
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
@@ -157,6 +203,44 @@ pub enum Member {
     Const { name: String, value: Expr, vis: Visibility },
     Prop { name: String, ty: Option<TypeHint>, default: Option<Expr>, vis: Visibility, is_static: bool, readonly: bool },
     Method { func: Rc<FuncDecl>, vis: Visibility, is_static: bool, is_abstract: bool, is_final: bool },
+    /// `use A, B { ... }` inside a class body
+    Use { traits: Vec<String>, rules: Vec<TraitRule> },
+    /// `case Name = value;` in an enum
+    Case { name: String, value: Option<Expr> },
+}
+
+impl ClassDecl {
+    /// Classes, interfaces and traits that must exist before this one can be declared
+    pub fn dependencies(&self) -> Vec<&str> {
+        let mut deps: Vec<&str> = self.parent.iter().chain(&self.interfaces).map(String::as_str).collect();
+        for m in &self.members {
+            if let Member::Use { traits, .. } = m {
+                deps.extend(traits.iter().map(String::as_str));
+            }
+        }
+        deps
+    }
+
+    pub fn kind(&self) -> &'static str {
+        if self.is_interface {
+            "interface"
+        } else if self.is_trait {
+            "trait"
+        } else if self.is_enum {
+            "enum"
+        } else {
+            "class"
+        }
+    }
+}
+
+/// The adaptations in `use T { ... }`
+#[derive(Debug)]
+pub enum TraitRule {
+    /// `A::m insteadof B, C`: m comes from A, not from B or C
+    Insteadof { trait_name: String, method: String, excluded: Vec<String> },
+    /// `[A::]m as [visibility] [alias]`
+    Alias { trait_name: Option<String>, method: String, vis: Option<Visibility>, alias: Option<String> },
 }
 
 #[derive(Debug, Clone)]

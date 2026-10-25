@@ -1,0 +1,79 @@
+enum(Suit::Hearts)
+enum(Status::Active)
+array(1) {
+  [0]=>
+  enum(Suit::Spades)
+}
+Suit Enum:string
+(
+    [name] => Hearts
+    [value] => H
+)
+
+Status Enum
+(
+    [name] => Active
+)
+
+string(6) "Hearts"
+string(1) "H"
+string(3) "Red"
+enum(Suit::Spades)
+array(2) {
+  [0]=>
+  enum(Suit::Hearts)
+  [1]=>
+  enum(Suit::Spades)
+}
+enum(Suit::Spades)
+NULL
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+object(stdClass)#5 (0) {
+}
+array(2) {
+  ["name"]=>
+  string(6) "Hearts"
+  ["value"]=>
+  string(1) "H"
+}
+string(6) "Status"
+string(6) "object"
+ValueError: "X" is not a valid backing value for enum Suit
+Error: Cannot modify readonly property Suit::$name
+Error: Cannot instantiate enum Status
+Error: Trying to clone an uncloneable object of class Status
+bool(false)
+bool(true)
+Error: Object of class Status could not be converted to string
+Error: Call to undefined method Status::from()
+enum(IntE::Two)
+NULL
+TypeError: IntE::from(): Argument #1 ($value) must be of type int, string given
+string(4) "none"
+
+string(5) "Large"
+bool(true)
+string(5) "LARGE"
+enum(Size::Small)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+Large
+sizeName(): Argument #1 ($s) must be of type Size, Suit given, called in enums.php on line 47
+Cannot create dynamic property Size::$extra
+S
+array(2) {
+  [0]=>
+  enum(Size::Small)
+  [1]=>
+  enum(Size::Large)
+}

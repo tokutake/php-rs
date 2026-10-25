@@ -17,7 +17,12 @@ Early stage. Implemented so far:
 
 - Scalars, strings (byte strings), arrays (ordered hash map, copy-on-write)
 - Operators with PHP 8 type juggling and comparison rules
-- Control flow: `if`, `while`, `do`, `for`, `foreach` (incl. by reference), `break`/`continue N`
+- Control flow: `if`, `while`, `do`, `for`, `foreach` (incl. by reference), `switch`,
+  `match`, `break`/`continue N`, and the alternative syntax (`if (...): ... endif;`)
+- `declare(strict_types=1)` for user functions, typed properties and built-ins
+- Destructuring with `[...]` / `list()` (keyed, nested, by reference, in `foreach`)
+- Heredoc and nowdoc strings, `"$obj->prop"` interpolation
+- Constants: `const`, `define()`, `constant()`, magic constants (`__LINE__`, `__CLASS__`, ...)
 - User functions: type declarations, defaults, variadics, by-reference parameters,
   `static`, `global`, references
 - Exceptions: `try`/`catch`/`finally`, `throw` (also as an expression), the
@@ -28,10 +33,12 @@ Early stage. Implemented so far:
   readonly properties, constructor promotion, static members, constants,
   `self`/`parent`/`static` (late static binding), magic methods (`__get`,
   `__set`, `__call`, `__toString`, `__invoke`, ...), `clone`, user exceptions
+- Traits (`insteadof`/`as` adaptations, static and abstract members, traits using traits)
+- Enums: pure and backed, `cases()`/`from()`/`tryFrom()`, methods, constants, interfaces
 - Warnings, deprecations and uncaught errors in PHP's format, with line numbers and stack traces
 - A small set of built-in functions (`count`, `implode`, `explode`, `usort`, `array_map`, ...)
 
-Not yet: traits, enums, `__destruct`, namespaces, generators, `match`, most of
+Not yet: `__destruct`, namespaces, generators, most of
 the standard library. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage

@@ -10,11 +10,39 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::array::{Key, PhpArray};
-use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, Name, Stmt, TypeHint};
+use crate::ast::{Arg, ClassDecl, Expr, ExprKind, FuncDecl, FuncKind, ListItem, Magic, Name, Stmt, TypeHint};
 use crate::builtins::{self, Runtime};
 use crate::diag;
 use crate::object::{self, ClassEntry, Closure, Internal, Method, Object, TraceFrame};
+
+/// Built-ins that php-src compiles to dedicated opcodes when called directly
+/// with this many arguments, so they get no frame in stack traces
+fn compiled_inline(lname: &str, args: &[Arg]) -> bool {
+    if args.iter().any(|a| a.spread) {
+        return false;
+    }
+    match lname {
+        "strlen" | "is_null" | "is_bool" | "is_long" | "is_int" | "is_integer" | "is_float" | "is_double"
+        | "is_string" | "is_array" | "is_object" | "is_resource" | "is_scalar" | "boolval" | "intval" | "floatval"
+        | "doubleval" | "strval" | "defined" | "chr" | "ord" | "count" | "sizeof" | "gettype" => args.len() == 1,
+        "get_class" => args.len() <= 1,
+        "get_called_class" | "func_num_args" | "func_get_args" => args.is_empty(),
+        "array_key_exists" | "call_user_func_array" => args.len() == 2,
+        "call_user_func" => !args.is_empty(),
+        _ => false,
+    }
+}
 use crate::value::{self, float_fits_int, float_to_int_implicit, loose_cmp, parse_numeric, ArithError, Num, Numeric, Value};
+
+thread_local! {
+    static STRICT_TYPES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the script declared strict_types=1: scalar arguments, return values
+/// and typed properties are then not coerced (except int to float)
+pub fn strict_types() -> bool {
+    STRICT_TYPES.with(|s| s.get())
+}
 
 /// PHP code recursing deeper than this gets an Error instead of overflowing the
 /// native stack. The interpreter thread is given a stack large enough for it
@@ -199,6 +227,9 @@ struct Frame {
     func: Option<Rc<FuncDecl>>,
     ctx: CallCtx,
     call_line: u32,
+    /// Called back by a built-in function: its arguments come from internal
+    /// code, which passes them in coercive mode even under strict_types
+    by_builtin: bool,
 }
 
 pub struct Interp<W: Write> {
@@ -207,14 +238,20 @@ pub struct Interp<W: Write> {
     file: String,
     frames: Vec<Frame>,
     functions: HashMap<String, Rc<FuncDecl>>,
-    /// `static` variables, keyed by the declaring function (null for the main script)
-    statics: HashMap<*const FuncDecl, HashMap<String, RefCellValue>>,
+    /// Constants from `const` and define()
+    constants: HashMap<String, Value>,
+    /// `static` variables, keyed by the declaring function (null for the main script) and the class
+    /// scope, since each class using a trait gets its own copy of the method
+    statics: HashMap<(*const FuncDecl, &'static str), HashMap<String, RefCellValue>>,
     classes: HashMap<String, Rc<ClassEntry>>,
     /// Class declarations already executed (hoisted ones are seen twice)
     declared: HashSet<*const ClassDecl>,
     /// Magic accessors running per (object id, property, kind), so that
     /// `$this->x` inside `__get('x')` reads the property instead of recursing
     magic_guard: HashSet<(u32, String, u8)>,
+    /// Built-in calls in progress, with the number of PHP frames when each was
+    /// made, so stack traces can show them between the PHP frames
+    internal_calls: Vec<(usize, TraceFrame)>,
 }
 
 fn recursive_reference() -> Fatal {
@@ -229,16 +266,25 @@ impl<W: Write> Runtime for Interp<W> {
 
 impl<W: Write> Interp<W> {
     pub fn new(out: W, file: String) -> Self {
-        let main = Frame { vars: Vars::default(), func: None, ctx: CallCtx::default(), call_line: 0, args: Vec::new() };
+        let main = Frame {
+            vars: Vars::default(),
+            func: None,
+            ctx: CallCtx::default(),
+            call_line: 0,
+            args: Vec::new(),
+            by_builtin: false,
+        };
         Interp {
             out,
             file,
             frames: vec![main],
             functions: HashMap::new(),
+            constants: HashMap::new(),
             statics: HashMap::new(),
             classes: object::builtin_classes(),
             declared: HashSet::new(),
             magic_guard: HashSet::new(),
+            internal_calls: Vec::new(),
         }
     }
 
@@ -248,6 +294,7 @@ impl<W: Write> Interp<W> {
 
     /// Runs a script. An uncaught error is reported the way PHP does; returns false then
     pub fn run(&mut self, stmts: &[Stmt]) -> bool {
+        STRICT_TYPES.with(|s| s.set(matches!(stmts.first(), Some(Stmt::StrictTypes(true)))));
         let result = self.hoist(stmts).and_then(|_| self.block(stmts));
         self.flush_diags();
         let Err(e) = result else { return true };
@@ -286,7 +333,8 @@ impl<W: Write> Interp<W> {
             let mut rest = Vec::new();
             for c in pending {
                 let lname = c.name.to_ascii_lowercase();
-                let deps_known = c.parent.iter().chain(&c.interfaces).all(|d| self.classes.contains_key(&d.to_ascii_lowercase()));
+                let deps_known =
+                    c.dependencies().iter().all(|d| self.classes.contains_key(&d.to_ascii_lowercase()));
                 if deps_known && !self.classes.contains_key(&lname) {
                     if self.declare_class(c).is_ok() {
                         continue;
@@ -482,6 +530,40 @@ impl<W: Write> Interp<W> {
                     }
                 }
             }
+            Stmt::Switch(subject, cases) => {
+                let v = self.expr(subject)?;
+                let mut start = None;
+                for (i, (cond, _)) in cases.iter().enumerate() {
+                    if let Some(c) = cond {
+                        let cv = self.expr(c)?;
+                        if binary("==", &v, &cv)?.to_bool() {
+                            start = Some(i);
+                            break;
+                        }
+                    }
+                }
+                let Some(start) = start.or_else(|| cases.iter().position(|(c, _)| c.is_none())) else {
+                    return Ok(Flow::Normal);
+                };
+                // Execution falls through the following cases until a break.
+                // A switch counts as a loop level for break and continue
+                for (_, body) in &cases[start..] {
+                    match self.block(body)? {
+                        Flow::Normal => {}
+                        Flow::Break(1) | Flow::Continue(1) => break,
+                        Flow::Break(n) => return Ok(Flow::Break(n - 1)),
+                        Flow::Continue(n) => return Ok(Flow::Continue(n - 1)),
+                        ret @ Flow::Return(_) => return Ok(ret),
+                    }
+                }
+            }
+            Stmt::StrictTypes(_) => {}
+            Stmt::Const(consts) => {
+                for (name, e) in consts {
+                    let v = self.expr(e)?;
+                    self.define_const(name, v);
+                }
+            }
             Stmt::Break(n) => return Ok(Flow::Break(*n)),
             Stmt::Continue(n) => return Ok(Flow::Continue(*n)),
             Stmt::Unset(targets) => {
@@ -550,7 +632,8 @@ impl<W: Write> Interp<W> {
                 }
             }
             Stmt::StaticVar(vars) => {
-                let key = self.frame().func.as_ref().map_or(std::ptr::null(), Rc::as_ptr);
+                let func = self.frame().func.as_ref().map_or(std::ptr::null(), Rc::as_ptr);
+                let key = (func, self.ctx().scope.as_ref().map_or("", |c| c.name));
                 for (name, init) in vars {
                     let existing = self.statics.get(&key).and_then(|m| m.get(name)).cloned();
                     let r = match existing {
@@ -618,8 +701,32 @@ impl<W: Write> Interp<W> {
                 Value::str(s)
             }
             ExprKind::Var(name) => self.lookup(name),
-            ExprKind::Const(name) => {
-                constant(name).ok_or_else(|| Fatal::error(format!("Undefined constant \"{name}\"")))?
+            ExprKind::Const(name) => self.constant(name.trim_start_matches('\\'))?,
+            ExprKind::Magic(Magic::File) => Value::str(self.file.as_bytes()),
+            ExprKind::Magic(Magic::Dir) => {
+                let dir = std::path::Path::new(&self.file).parent().map_or(".".into(), |d| d.display().to_string());
+                Value::str(dir.into_bytes())
+            }
+            ExprKind::Magic(Magic::ClosureName) => Value::str(self.ctx().name.as_bytes()),
+            ExprKind::Magic(Magic::Class) => Value::str(self.ctx().scope.as_ref().map_or("", |c| c.name)),
+            ExprKind::Hole => return Err(Fatal::compile("Cannot use empty array elements in arrays")),
+            ExprKind::List(_) => return Err(Fatal::compile("Cannot use list() outside of an assignment")),
+            ExprKind::Match(subject, arms) => {
+                let v = self.expr(subject)?;
+                for arm in arms {
+                    for c in arm.conds.iter().flatten() {
+                        if v.strict_eq(&self.expr(c)?) {
+                            return self.expr(&arm.body);
+                        }
+                    }
+                }
+                match arms.iter().find(|a| a.conds.is_none()) {
+                    Some(arm) => self.expr(&arm.body)?,
+                    None => {
+                        diag::set_line(e.line);
+                        return Err(Fatal::new("UnhandledMatchError", format!("Unhandled match case {}", match_case(&v))));
+                    }
+                }
             }
             ExprKind::Array(items) => {
                 let mut arr = PhpArray::new();
@@ -628,7 +735,12 @@ impl<W: Write> Interp<W> {
                         Some(k) => Some(to_key(&self.expr(k)?, "array")?),
                         None => None,
                     };
-                    let v = self.expr(&item.value)?;
+                    let v = if item.by_ref {
+                        let path = self.path(&item.value)?;
+                        Value::Ref(self.make_ref(&path)?)
+                    } else {
+                        self.expr(&item.value)?
+                    };
                     match key {
                         Some(k) => arr.insert(k, v),
                         None => {
@@ -644,11 +756,21 @@ impl<W: Write> Interp<W> {
                 let i = self.expr(index)?;
                 read_dim(&b, &i)?
             }
-            ExprKind::Assign(target, rhs) => {
-                let v = self.expr(rhs)?;
-                self.assign(target, v.clone())?;
-                v
-            }
+            ExprKind::Assign(target, rhs) => match &target.kind {
+                ExprKind::List(items) if has_ref(items) => {
+                    if !rhs.is_lvalue() {
+                        return Err(Fatal::compile("Cannot assign reference to non referenceable value"));
+                    }
+                    let path = self.path(rhs)?;
+                    self.destructure_ref(items, &path)?;
+                    self.expr(rhs)?
+                }
+                _ => {
+                    let v = self.expr(rhs)?;
+                    self.assign(target, v.clone())?;
+                    v
+                }
+            },
             ExprKind::AssignRef(target, source) => {
                 let path = self.path(source)?;
                 let r = self.make_ref(&path)?;
@@ -992,6 +1114,9 @@ impl<W: Write> Interp<W> {
     }
 
     fn assign(&mut self, target: &Expr, v: Value) -> EResult<()> {
+        if let ExprKind::List(items) = &target.kind {
+            return self.destructure(items, v);
+        }
         let mut path = self.path(target)?;
         if let (Base::Prop(obj, name), true) = (&path.base, path.dims.is_empty()) {
             return self.write_prop(obj, name, v);
@@ -1000,7 +1125,7 @@ impl<W: Write> Interp<W> {
             let v = match ty {
                 Some((ty, label)) => {
                     let err = |v: &Value, _: &str| {
-                        Fatal::type_error(format!("Cannot assign {} to property {label} of type {}", v.type_name(), ty.display))
+                        Fatal::type_error(format!("Cannot assign {} to property {label} of type {}", v.value_name(), ty.display))
                     };
                     self.check_param(v, Some(ty), &err)?
                 }
@@ -1028,6 +1153,83 @@ impl<W: Write> Interp<W> {
             *slot = v;
             Ok(())
         })
+    }
+
+    /// `[$a, 'k' => $b] = $v`. Elements missing from an array warn like reads;
+    /// a non-array assigns null to every target
+    fn destructure(&mut self, items: &[Option<ListItem>], v: Value) -> EResult<()> {
+        let mut next = 0;
+        for item in items {
+            let Some(item) = item else {
+                next += 1;
+                continue;
+            };
+            let key = self.list_key(item, &mut next)?;
+            let elem = match &v {
+                Value::Array(_) => read_dim(&v, &key)?,
+                _ => Value::Null,
+            };
+            self.assign(&item.target, elem)?;
+        }
+        Ok(())
+    }
+
+    /// Destructuring with `&` targets, which bind to the elements of the source variable
+    fn destructure_ref(&mut self, items: &[Option<ListItem>], source: &Path<'_>) -> EResult<()> {
+        let mut next = 0;
+        for item in items {
+            let Some(item) = item else {
+                next += 1;
+                continue;
+            };
+            let key = self.list_key(item, &mut next)?;
+            let mut elem = source.clone();
+            elem.dims.push(Some(key.clone()));
+            match &item.target.kind {
+                _ if item.by_ref => {
+                    let r = self.make_ref(&elem)?;
+                    self.bind_ref(&item.target, r)?;
+                }
+                ExprKind::List(inner) if has_ref(inner) => self.destructure_ref(inner, &elem)?,
+                _ => {
+                    let container = self.with_place(source, false, true, |slot| Ok(slot.clone()))?;
+                    let v = match &container {
+                        Value::Array(_) => read_dim(&container, &key)?,
+                        _ => Value::Null,
+                    };
+                    self.assign(&item.target, v)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The key a list item reads: its own, or the next position
+    fn list_key(&mut self, item: &ListItem, next: &mut i64) -> EResult<Value> {
+        Ok(match &item.key {
+            Some(k) => self.expr(k)?,
+            None => {
+                *next += 1;
+                Value::Int(*next - 1)
+            }
+        })
+    }
+
+    fn constant(&mut self, name: &str) -> EResult<Value> {
+        if let Some(v) = self.constants.get(name) {
+            return Ok(v.clone());
+        }
+        constant(name).ok_or_else(|| Fatal::error(format!("Undefined constant \"{name}\"")))
+    }
+
+    /// Defines a global constant; false (with a warning) if it already exists
+    fn define_const(&mut self, name: &str, v: Value) -> bool {
+        if self.constants.contains_key(name) || constant(name).is_some() {
+            diag::warning(format!("Constant {name} already defined"));
+            return false;
+        }
+        self.constants.insert(name.to_string(), v);
+        true
     }
 
     fn unset(&mut self, target: &Expr) -> EResult<()> {
@@ -1089,7 +1291,7 @@ impl<W: Write> Interp<W> {
             other => Err(Fatal::type_error(format!(
                 "{}::__toString(): Return value must be of type string, {} returned",
                 m.class,
-                other.type_name()
+                other.value_name()
             ))),
         }
     }
@@ -1112,14 +1314,45 @@ impl<W: Write> Interp<W> {
             }
             let path = self.path(&first.value)?;
             let vals = self.eval_args(rest)?;
-            if lname.starts_with('u') {
-                return self.user_sort(&lname, &path, vals, line);
-            }
-            return self.with_place(&path, false, true, |place| builtins::call_by_ref(&lname, place, vals));
+            let mut shown = vec![self.with_place(&path, false, true, |slot| Ok(slot.clone()))?];
+            shown.extend(vals.iter().cloned());
+            return self.internal_call(lname.clone(), None, shown, line, |this| {
+                if lname.starts_with('u') {
+                    return this.user_sort(&lname, &path, vals, line);
+                }
+                this.with_place(&path, false, true, |place| builtins::call_by_ref(&lname, place, vals))
+            });
         }
 
         let vals = self.eval_args(args)?;
-        self.call_builtin(name, &lname, vals, line)
+        if compiled_inline(&lname, args) || lname == "print" || !builtins::exists(&lname) {
+            return self.call_builtin(name, &lname, vals, line);
+        }
+        self.internal_call(lname.clone(), None, vals.clone(), line, |this| this.call_builtin(name, &lname, vals, line))
+    }
+
+    /// Runs a built-in as php-src's internal call frame: an error the built-in
+    /// raises itself gets a stack trace starting with that frame
+    fn internal_call<T>(
+        &mut self,
+        function: String,
+        class: Option<(String, &'static str)>,
+        args: Vec<Value>,
+        line: u32,
+        f: impl FnOnce(&mut Self) -> EResult<T>,
+    ) -> EResult<T> {
+        let frame = TraceFrame { file: self.file.clone(), line, function, class, args };
+        self.internal_calls.push((self.frames.len(), frame));
+        let result = f(self).map_err(|mut e| {
+            if e.object.is_none() && e.trace.is_none() && !e.uncatchable {
+                // The error belongs to the line of the call
+                e.line = Some(e.line.unwrap_or(line));
+                e.trace = Some(self.trace());
+            }
+            e
+        });
+        self.internal_calls.pop();
+        result
     }
 
     /// Built-ins called with evaluated arguments
@@ -1174,10 +1407,37 @@ impl<W: Write> Interp<W> {
                 let Value::Array(arr) = args else {
                     return Err(Fatal::type_error(format!(
                         "call_user_func_array(): Argument #2 ($args) must be of type array, {} given",
-                        args.type_name()
+                        args.value_name()
                     )));
                 };
                 self.call_value(&f, arr.values().map(Value::copy_out).collect(), line)
+            }
+            "define" => {
+                let [name, value] = <[Value; 2]>::try_from(vals).map_err(|v| builtins::arg_count(lname, 2, v.len()))?;
+                let name = String::from_utf8_lossy(&self.stringify(&name)?).into_owned();
+                if name.contains("::") {
+                    return Err(Fatal::value_error("define(): Argument #1 ($constant_name) cannot be a class constant"));
+                }
+                Ok(Value::Bool(self.define_const(&name, value)))
+            }
+            "defined" | "constant" => {
+                let [name] = <[Value; 1]>::try_from(vals).map_err(|v| builtins::arg_count(lname, 1, v.len()))?;
+                let name = String::from_utf8_lossy(&self.stringify(&name)?).trim_start_matches('\\').to_string();
+                let found = match name.split_once("::") {
+                    Some((class, cname)) => {
+                        let class = crate::ast::ClassRef::from_name(class);
+                        if lname == "defined" {
+                            let c = self.resolve_class_quiet(&class)?;
+                            return Ok(Value::Bool(c.is_some_and(|c| c.consts.contains_key(cname))));
+                        }
+                        self.class_const(&class, cname)
+                    }
+                    None => self.constant(&name),
+                };
+                match (lname, found) {
+                    ("defined", r) => Ok(Value::Bool(r.is_ok())),
+                    (_, r) => r,
+                }
             }
             "array_map" => self.array_map(vals, line),
             "array_filter" => self.array_filter(vals, line),
@@ -1269,7 +1529,8 @@ impl<W: Write> Interp<W> {
             })
             .collect();
         let vars = bound.into_iter().collect();
-        self.frames.push(Frame { vars, func: Some(f.clone()), ctx, call_line, args: shown });
+        let by_builtin = self.internal_calls.last().is_some_and(|(depth, _)| *depth == self.frames.len());
+        self.frames.push(Frame { vars, func: Some(f.clone()), ctx, call_line, args: shown, by_builtin });
         let result = self.invoke_inner(f, args, call_line);
         // The trace is captured while the failing frames are still on the stack
         // An internal error becomes its exception object here, while the failing
@@ -1308,6 +1569,7 @@ impl<W: Write> Interp<W> {
                 ),
             ));
         }
+        let strict = strict_types() && !self.frame().by_builtin;
         let mut args = args.into_iter();
         for (i, p) in f.params.iter().enumerate() {
             let type_error = |v: &Value, file: &str| {
@@ -1316,7 +1578,7 @@ impl<W: Write> Interp<W> {
                     i + 1,
                     p.name,
                     p.ty.as_ref().map_or("mixed", |t| t.display.as_str()),
-                    v.type_name()
+                    v.value_name()
                 ))
             };
             if p.variadic {
@@ -1324,8 +1586,11 @@ impl<W: Write> Interp<W> {
                 for a in args.by_ref() {
                     let elem = match a {
                         ArgVal::Ref(r) if p.by_ref => Value::Ref(r),
-                        ArgVal::Ref(r) => self.check_param(value::with_deref(&r, Value::clone), p.ty.as_ref(), &type_error)?,
-                        ArgVal::Val(v) => self.check_param(v, p.ty.as_ref(), &type_error)?,
+                        ArgVal::Ref(r) => {
+                            let v = value::with_deref(&r, Value::clone);
+                            self.check_type(v, p.ty.as_ref(), &type_error, strict)?
+                        }
+                        ArgVal::Val(v) => self.check_type(v, p.ty.as_ref(), &type_error, strict)?,
                     };
                     rest.push(elem).map_err(|_| next_element_occupied())?;
                 }
@@ -1336,7 +1601,7 @@ impl<W: Write> Interp<W> {
                 Some(ArgVal::Ref(r)) => {
                     if p.ty.is_some() {
                         let v = value::with_deref(&r, Value::clone);
-                        let v = self.check_param(v, p.ty.as_ref(), &type_error)?;
+                        let v = self.check_type(v, p.ty.as_ref(), &type_error, strict)?;
                         *r.try_borrow_mut().map_err(|_| recursive_reference())? = v;
                     }
                     Value::Ref(r)
@@ -1349,7 +1614,7 @@ impl<W: Write> Interp<W> {
                             p.name
                         ));
                     }
-                    self.check_param(v, p.ty.as_ref(), &type_error)?
+                    self.check_type(v, p.ty.as_ref(), &type_error, strict)?
                 }
                 None => match &p.default {
                     Some(d) => self.expr(d)?,
@@ -1384,20 +1649,34 @@ impl<W: Write> Interp<W> {
             Fatal::type_error(format!(
                 "{fname}(): Return value must be of type {}, {} returned",
                 ty.display,
-                v.type_name()
+                v.value_name()
             ))
         };
         self.check_param(given, Some(ty), &type_error)
     }
 
-    /// Type-checks (and in non-strict mode coerces) a value for a declared type
+    /// Type-checks (and unless strict_types is on, coerces) a value for a declared type
     fn check_param(&mut self, v: Value, ty: Option<&TypeHint>, err: &dyn Fn(&Value, &str) -> Fatal) -> EResult<Value> {
+        self.check_type(v, ty, err, strict_types())
+    }
+
+    fn check_type(
+        &mut self,
+        v: Value,
+        ty: Option<&TypeHint>,
+        err: &dyn Fn(&Value, &str) -> Fatal,
+        strict: bool,
+    ) -> EResult<Value> {
         let Some(ty) = ty else { return Ok(v) };
         // Stringable objects pass for `string` by calling __toString
         if let Value::Object(o) = &v
-            && !self.object_matches(o, ty) && ty.allows("string") && o.class.find_method("__tostring").is_some() {
-                return Ok(Value::str(self.stringify(&v)?));
-            }
+            && !strict
+            && !self.object_matches(o, ty)
+            && ty.allows("string")
+            && o.class.find_method("__tostring").is_some()
+        {
+            return Ok(Value::str(self.stringify(&v)?));
+        }
         let ctx = self.ctx();
         let tc = TypeCtx {
             functions: &self.functions,
@@ -1405,23 +1684,46 @@ impl<W: Write> Interp<W> {
             scope: ctx.scope.as_deref(),
             static_class: ctx.static_class.as_deref(),
         };
-        coerce(v, ty, &tc).map_err(|v| err(&v, &self.file))
+        coerce(v, ty, &tc, strict).map_err(|v| err(&v, &self.file))
     }
 
-    /// The stack trace of the current call frames, innermost first
+    /// The stack trace of the current call frames, innermost first. Built-in
+    /// calls in progress sit between the frames; anything a built-in calls
+    /// shows as called from `[internal function]`
     fn trace(&self) -> Vec<TraceFrame> {
-        self.frames
-            .iter()
-            .skip(1)
-            .rev()
-            .map(|f| TraceFrame {
-                file: self.file.clone(),
+        let calls = &self.internal_calls;
+        // Whether something at this depth was called by one of the first `n` built-in calls
+        let by_builtin = |depth: usize, n: usize| calls[..n].iter().any(|(d, _)| *d == depth);
+        let builtin_frame = |i: usize| {
+            let (depth, f) = &calls[i];
+            let mut f = f.clone();
+            if by_builtin(*depth, i) {
+                f.file.clear();
+            }
+            f
+        };
+        let mut out = Vec::new();
+        let mut pending = calls.len();
+        for i in (1..self.frames.len()).rev() {
+            while pending > 0 && calls[pending - 1].0 > i {
+                pending -= 1;
+                out.push(builtin_frame(pending));
+            }
+            let f = &self.frames[i];
+            let internal = by_builtin(i, pending);
+            out.push(TraceFrame {
+                file: if internal { String::new() } else { self.file.clone() },
                 line: f.call_line,
                 function: f.ctx.trace_fn.clone(),
                 class: f.ctx.trace_class.clone(),
                 args: f.args.clone(),
-            })
-            .collect()
+            });
+        }
+        while pending > 0 {
+            pending -= 1;
+            out.push(builtin_frame(pending));
+        }
+        out
     }
 
     fn callback(&mut self, fname: &str, n: usize, v: &Value) -> EResult<Callable> {
@@ -1455,7 +1757,9 @@ impl<W: Write> Interp<W> {
                 diag::warning(format!("{name}(): Argument #1 ($array) must be passed by reference, value given"));
                 builtins::call_by_ref(name, &mut target, args.collect())?
             }
-            Callable::Builtin(name) => self.call_builtin(name, name, args.clone(), line)?,
+            Callable::Builtin(name) => {
+                self.internal_call(name.clone(), None, args.clone(), line, |this| this.call_builtin(name, name, args, line))?
+            }
         };
         diag::set_line(line);
         Ok(v)
@@ -1498,7 +1802,7 @@ impl<W: Write> Interp<W> {
         let Value::Array(arr) = current else {
             return Err(Fatal::type_error(format!(
                 "{lname}(): Argument #1 ($array) must be of type array, {} given",
-                current.type_name()
+                current.value_name()
             )));
         };
         let mut entries: Vec<(Key, Value)> = arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -1534,7 +1838,7 @@ impl<W: Write> Interp<W> {
                     "array_map(): Argument #{} (${}) must be of type array, {} given",
                     i + 2,
                     if i == 0 { "array" } else { "arrays" },
-                    a.type_name()
+                    a.value_name()
                 )));
             }
         }
@@ -1575,7 +1879,7 @@ impl<W: Write> Interp<W> {
             Some(other) => {
                 return Err(Fatal::type_error(format!(
                     "array_filter(): Argument #1 ($array) must be of type array, {} given",
-                    other.type_name()
+                    other.value_name()
                 )))
             }
             None => return Err(builtins::arg_count("array_filter", 1, 0)),
@@ -1645,7 +1949,7 @@ fn spread(v: Value) -> EResult<Vec<Value>> {
         }
         other => Err(Fatal::type_error(format!(
             "Only arrays and Traversables can be unpacked, {} given",
-            other.type_name()
+            other.value_name()
         ))),
     }
 }
@@ -1666,7 +1970,7 @@ fn cast_array(v: Value) -> Value {
 }
 
 fn foreach_type_warning(v: &Value) {
-    diag::warning(format!("foreach() argument must be of type array|object, {} given", v.type_name()));
+    diag::warning(format!("foreach() argument must be of type array|object, {} given", v.value_name()));
 }
 
 /// Walks `dims` from `slot`, following references, then runs `f` on the final storage
@@ -1781,9 +2085,9 @@ impl TypeCtx<'_> {
     }
 }
 
-/// Non-strict-mode coercion of a value to a declared parameter or return type.
-/// Err hands the value back for the error message
-fn coerce(v: Value, ty: &TypeHint, ctx: &TypeCtx<'_>) -> Result<Value, Value> {
+/// Coercion of a value to a declared parameter or return type; in strict mode
+/// only int to float. Err hands the value back for the error message
+fn coerce(v: Value, ty: &TypeHint, ctx: &TypeCtx<'_>, strict: bool) -> Result<Value, Value> {
     if let Value::Object(o) = &v {
         if ty.types.iter().any(|t| ctx.class_matches(&o.class, t)) {
             return Ok(v);
@@ -1818,7 +2122,7 @@ fn coerce(v: Value, ty: &TypeHint, ctx: &TypeCtx<'_>) -> Result<Value, Value> {
         && ty.allows("float") {
             return Ok(Value::Float(i as f64));
         }
-    if matches!(v, Value::Null | Value::Array(_)) {
+    if strict || matches!(v, Value::Null | Value::Array(_)) {
         return Err(v);
     }
     // Scalar juggling, in PHP's order of preference: int, float, string, bool
@@ -2026,6 +2330,48 @@ fn write_dim<'a>(cur: &'a mut Value, dim: Option<&Value>, read: bool) -> EResult
 }
 
 /// Given the result of a loop body, returns the Flow to propagate outward if the loop should exit
+fn has_ref(items: &[Option<ListItem>]) -> bool {
+    items.iter().flatten().any(|i| i.by_ref || matches!(&i.target.kind, ExprKind::List(inner) if has_ref(inner)))
+}
+
+/// The subject as shown in "Unhandled match case ...": scalars as literals, strings
+/// escaped and cut at 15 bytes, anything else by type
+fn match_case(v: &Value) -> String {
+    match v {
+        Value::Null => "NULL".into(),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => {
+            let s = value::format_float(*f);
+            if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') { s + ".0" } else { s }
+        }
+        Value::Str(s) => {
+            let mut out = String::from("'");
+            for &c in &s[..s.len().min(15)] {
+                match c {
+                    b'\n' => out.push_str("\\n"),
+                    b'\r' => out.push_str("\\r"),
+                    b'\t' => out.push_str("\\t"),
+                    0x0c => out.push_str("\\f"),
+                    0x0b => out.push_str("\\v"),
+                    b'\\' => out.push_str("\\\\"),
+                    0x1b => out.push_str("\\e"),
+                    c if !(32..=126).contains(&c) => out.push_str(&format!("\\x{c:02X}")),
+                    c => out.push(c as char),
+                }
+            }
+            if s.len() > 15 {
+                out.push_str("...");
+            }
+            out.push('\'');
+            out
+        }
+        Value::Array(_) => "of type array".into(),
+        Value::Object(o) => format!("of type {}", o.class.name),
+        Value::Ref(r) => value::with_deref(r, match_case),
+    }
+}
+
 fn loop_flow(flow: Flow) -> Option<Flow> {
     match flow {
         Flow::Normal | Flow::Continue(1) => None,
@@ -2170,6 +2516,28 @@ fn constant(name: &str) -> Option<Value> {
         "INF" => Value::Float(f64::INFINITY),
         "ARRAY_FILTER_USE_KEY" => Value::Int(builtins::ARRAY_FILTER_USE_KEY),
         "ARRAY_FILTER_USE_BOTH" => Value::Int(builtins::ARRAY_FILTER_USE_BOTH),
+        "PHP_VERSION" => Value::str(b"8.5.0".to_vec()),
+        "PHP_MAJOR_VERSION" => Value::Int(8),
+        "PHP_MINOR_VERSION" => Value::Int(5),
+        "PHP_RELEASE_VERSION" => Value::Int(0),
+        "PHP_VERSION_ID" => Value::Int(80500),
+        "PHP_OS" | "PHP_OS_FAMILY" => Value::str(b"Linux".to_vec()),
+        "DIRECTORY_SEPARATOR" => Value::str(b"/".to_vec()),
+        "PATH_SEPARATOR" => Value::str(b":".to_vec()),
+        "PHP_FLOAT_DIG" => Value::Int(15),
+        "M_PI" => Value::Float(std::f64::consts::PI),
+        "M_E" => Value::Float(std::f64::consts::E),
+        "M_SQRT2" => Value::Float(std::f64::consts::SQRT_2),
+        "E_ERROR" => Value::Int(1),
+        "E_WARNING" => Value::Int(2),
+        "E_PARSE" => Value::Int(4),
+        "E_NOTICE" => Value::Int(8),
+        "E_USER_ERROR" => Value::Int(256),
+        "E_USER_WARNING" => Value::Int(512),
+        "E_USER_NOTICE" => Value::Int(1024),
+        "E_DEPRECATED" => Value::Int(8192),
+        "E_USER_DEPRECATED" => Value::Int(16384),
+        "E_ALL" => Value::Int(32767),
         _ => return None,
     })
 }

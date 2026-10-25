@@ -1,0 +1,34 @@
+TypeError: strlen(): Argument #1 ($string) must be of type string, array given @3
+#0 internal_frames.php(8): f(Array)
+#1 {main}
+ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0 @9
+#0 internal_frames.php(9): str_repeat('x', -1)
+#1 {main}
+DivisionByZeroError: Division by zero @10
+#0 internal_frames.php(10): intdiv(1, 0)
+#1 {main}
+TypeError: Exception::__construct(): Argument #1 ($message) must be of type string, array given @11
+#0 internal_frames.php(11): Exception->__construct(Array)
+#1 {main}
+ValueError: 2 is not a valid backing value for enum E @13
+#0 internal_frames.php(13): E::from(2)
+#1 {main}
+TypeError: E::from(): Argument #1 ($value) must be of type int, string given @14
+#0 internal_frames.php(14): E::from('x')
+#1 {main}
+LogicException: in callback @15
+#0 [internal function]: thrower(1)
+#1 internal_frames.php(16): array_map('thrower', Array)
+#2 {main}
+TypeError: usort(): Argument #1 ($array) must be of type array, null given @17
+#0 internal_frames.php(17): usort(NULL, Object(Closure))
+#1 {main}
+ArgumentCountError: Exception::getMessage() expects exactly 0 arguments, 1 given @19
+#0 internal_frames.php(19): Exception->getMessage(1)
+#1 {main}
+
+Fatal error: Uncaught ArgumentCountError: strlen() expects exactly 1 argument, 2 given in internal_frames.php:20
+Stack trace:
+#0 internal_frames.php(20): strlen(1, 2)
+#1 {main}
+  thrown in internal_frames.php on line 20

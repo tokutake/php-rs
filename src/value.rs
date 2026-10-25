@@ -304,6 +304,16 @@ impl Value {
         }
     }
 
+    /// Like type_name, but true and false by value, as type errors name them
+    pub fn value_name(&self) -> &'static str {
+        match self {
+            Value::Bool(true) => "true",
+            Value::Bool(false) => "false",
+            Value::Ref(r) => with_deref(r, Value::value_name),
+            other => other.type_name(),
+        }
+    }
+
     /// The value to store elsewhere when reading a slot: references are followed
     pub fn copy_out(&self) -> Value {
         match self {
@@ -433,6 +443,8 @@ pub fn loose_cmp(a: &Value, b: &Value) -> Option<Ordering> {
         (Str(_), Int(_) | Float(_)) => loose_cmp(b, a).map(Ordering::reverse),
         (Array(x), Array(y)) => nested(|| cmp_arrays(x, y)).flatten(),
         (Object(x), Object(y)) if Rc::ptr_eq(x, y) => Some(Ordering::Equal),
+        // Enum cases are singletons: only identical ones are equal
+        (Object(x), Object(y)) if x.class.is_enum || y.class.is_enum => None,
         // Objects of the same class compare by their properties; anything else is uncomparable
         (Object(x), Object(y)) if Rc::ptr_eq(&x.class, &y.class) && x.closure().is_none() => {
             let px: PhpArray = x.ordered_props().into_iter().collect();

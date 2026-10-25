@@ -1,0 +1,4 @@
+
+Fatal error: Case A of backed enum E must have a value in enum_fatal.php on line 4
+Stack trace:
+#0 {main}

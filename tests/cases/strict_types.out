@@ -1,0 +1,26 @@
+int(5)
+takesInt(): Argument #1 ($x) must be of type int, string given, called in strict_types.php on line 21
+takesInt(): Argument #1 ($x) must be of type int, float given, called in strict_types.php on line 22
+takesInt(): Argument #1 ($x) must be of type int, true given, called in strict_types.php on line 23
+float(5)
+takesFloat(): Argument #1 ($x) must be of type float, string given, called in strict_types.php on line 25
+takesString(): Argument #1 ($s) must be of type string, int given, called in strict_types.php on line 26
+takesString(): Argument #1 ($s) must be of type string, S given, called in strict_types.php on line 27
+takesBool(): Argument #1 ($b) must be of type bool, int given, called in strict_types.php on line 28
+NULL
+returnsInt(): Return value must be of type int, string returned
+int(7)
+Cannot assign string to property P::$n of type int
+int(3)
+float(2)
+str_repeat(): Argument #2 ($times) must be of type int, string given
+str_repeat(): Argument #1 ($string) must be of type string, int given
+strtoupper(): Argument #1 ($string) must be of type string, int given
+string(3) "xxx"
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(4)
+}
+usort(): Argument #1 ($array) must be of type array, null given

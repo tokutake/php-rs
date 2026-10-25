@@ -1,0 +1,27 @@
+int(8)
+multi X end
+one
+NULL
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+loose
+02
+Unhandled match case 2
+x
+Unhandled match case 'a very long str...'
+Unhandled match case '\x01\xC3\xA9'
+Unhandled match case 0.3
+Unhandled match case 2.0
+
+Warning: Constant A already defined in language_edge.php on line 26
+1
+bool(true)
+int(1)
+int(5)
+bool(true)
+bool(false)
+12

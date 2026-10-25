@@ -43,12 +43,16 @@ fn main() -> ExitCode {
 
 fn run(src: &[u8], file: String) -> bool {
     let parsed = lexer::lex(src)
-        .map_err(|e| (e.msg, e.line))
-        .and_then(|tokens| parser::parse(tokens).map_err(|e| (e.msg, e.line)));
+        .map_err(|e| ("Parse error", e.msg, e.line))
+        .and_then(|tokens| parser::parse(tokens).map_err(|e| (e.label(), e.msg, e.line)));
     let program = match parsed {
         Ok(p) => p,
-        Err((msg, line)) => {
-            println!("\nParse error: {msg} in {file} on line {line}");
+        Err((label, msg, line)) => {
+            println!("\n{label}: {msg} in {file} on line {line}");
+            // PHP 8.5 prints a backtrace for fatal errors, empty while compiling
+            if label == "Fatal error" {
+                println!("Stack trace:\n#0 {{main}}");
+            }
             return false;
         }
     };

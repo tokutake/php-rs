@@ -1,0 +1,37 @@
+small
+small
+three
+small
+nullish
+nullish
+nullish
+other
+zero default 
+default 
+default 
+three 
+default 
+n=1
+n=3
+eval
+two
+semicolon case
+mid
+b
+string(6) "string"
+arm 1
+arm 2
+y
+UnhandledMatchError: Unhandled match case 5
+UnhandledMatchError: Unhandled match case 'str'
+UnhandledMatchError: Unhandled match case 1.5
+UnhandledMatchError: Unhandled match case NULL
+UnhandledMatchError: Unhandled match case true
+UnhandledMatchError: Unhandled match case of type array
+UnhandledMatchError: Unhandled match case of type stdClass
+Unhandled match case 'it's a "quote"\n'
+
+Fatal error: Uncaught LogicException: thrown from arm in switch_match.php:88
+Stack trace:
+#0 {main}
+  thrown in switch_match.php on line 88
