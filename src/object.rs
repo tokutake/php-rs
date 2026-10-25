@@ -401,35 +401,50 @@ impl Object {
 }
 
 impl Drop for Object {
+    // Freeing nested objects recurses through here, so the frame is kept small:
+    // the rarer work happens out of line
     fn drop(&mut self) {
-        if !self.destructed.get() && DESTRUCTORS_ENABLED.try_with(Cell::get).unwrap_or(false) {
-            // Revived under the same handle for its destructor; the handle stays taken
-            let revived = Rc::new(Object {
-                id: self.id,
-                class: self.class.clone(),
-                props: RefCell::new(std::mem::take(self.props.get_mut())),
-                internal: std::mem::replace(&mut self.internal, Internal::None),
-                destructed: Cell::new(true),
-            });
-            let _ = PENDING.try_with(|p| p.borrow_mut().push_back(Pending::Destruct(revived)));
+        if !self.destructed.get() && revive_for_destructor(self) {
             return;
         }
         // Like php-src, the object's contents are released before its handle is,
         // so handles of objects it held are recycled first
         drop(std::mem::take(self.props.get_mut()));
         drop(std::mem::replace(&mut self.internal, Internal::None));
-        let id = self.id;
-        let queued = PENDING.try_with(|p| {
-            let mut p = p.borrow_mut();
-            if p.is_empty() {
-                return false;
-            }
-            p.push_back(Pending::FreeId(id));
-            true
-        });
-        if queued != Ok(true) {
-            free_id(id);
+        release_id(self.id);
+    }
+}
+
+/// Moves a dying object into a fresh Rc under the same handle (which stays
+/// taken) and queues it for its destructor. False once destructors are off
+#[inline(never)]
+fn revive_for_destructor(obj: &mut Object) -> bool {
+    if !DESTRUCTORS_ENABLED.try_with(Cell::get).unwrap_or(false) {
+        return false;
+    }
+    let revived = Rc::new(Object {
+        id: obj.id,
+        class: obj.class.clone(),
+        props: RefCell::new(std::mem::take(obj.props.get_mut())),
+        internal: std::mem::replace(&mut obj.internal, Internal::None),
+        destructed: Cell::new(true),
+    });
+    let _ = PENDING.try_with(|p| p.borrow_mut().push_back(Pending::Destruct(revived)));
+    true
+}
+
+#[inline(never)]
+fn release_id(id: u32) {
+    let queued = PENDING.try_with(|p| {
+        let mut p = p.borrow_mut();
+        if p.is_empty() {
+            return false;
         }
+        p.push_back(Pending::FreeId(id));
+        true
+    });
+    if queued != Ok(true) {
+        free_id(id);
     }
 }
 
