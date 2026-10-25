@@ -1,0 +1,12 @@
+finally
+dtor 2
+caught
+Exception dtor ex prev=orig
+dtor 5
+dtor 5
+x
+resurrect
+after
+object(R)#2 (0) {
+}
+end

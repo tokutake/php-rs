@@ -252,6 +252,11 @@ pub struct Interp<W: Write> {
     /// Built-in calls in progress, with the number of PHP frames when each was
     /// made, so stack traces can show them between the PHP frames
     internal_calls: Vec<(usize, TraceFrame)>,
+    /// Destructors called at the end of the script show as called internally
+    in_shutdown: bool,
+    /// Destructor calls in progress. One running after a frame has gone does not
+    /// add to the frame count, but still nests natively
+    destructing: usize,
 }
 
 fn recursive_reference() -> Fatal {
@@ -285,6 +290,8 @@ impl<W: Write> Interp<W> {
             declared: HashSet::new(),
             magic_guard: HashSet::new(),
             internal_calls: Vec::new(),
+            in_shutdown: false,
+            destructing: 0,
         }
     }
 
@@ -296,8 +303,59 @@ impl<W: Write> Interp<W> {
     pub fn run(&mut self, stmts: &[Stmt]) -> bool {
         STRICT_TYPES.with(|s| s.set(matches!(stmts.first(), Some(Stmt::StrictTypes(true)))));
         let result = self.hoist(stmts).and_then(|_| self.block(stmts));
+        let mut ok = true;
+        if let Err(e) = result {
+            ok = false;
+            let fatal = e.uncatchable;
+            self.report(e);
+            // A fatal error ends the script without destructors, an uncaught exception does not
+            if fatal {
+                object::disable_destructors();
+                return false;
+            }
+        }
+        if let Err(e) = self.shutdown() {
+            ok = false;
+            self.report(e);
+        }
+        object::disable_destructors();
         self.flush_diags();
-        let Err(e) = result else { return true };
+        ok
+    }
+
+    /// Destroys what is left at the end of the script like php-src: global
+    /// variables holding the only handle to an object, last first (repeated while
+    /// that frees any), then all remaining objects in handle order
+    fn shutdown(&mut self) -> EResult<()> {
+        self.in_shutdown = true;
+        self.run_destructors()?;
+        loop {
+            let live = |vars: &Vars| vars.slots.iter().flatten().count();
+            let before = live(&self.frames[0].vars);
+            for i in (0..self.frames[0].vars.slots.len()).rev() {
+                let name = match &self.frames[0].vars.slots[i] {
+                    Some((name, Value::Object(o))) if Rc::strong_count(o) == 1 => name.clone(),
+                    _ => continue,
+                };
+                self.frames[0].vars.remove(&name);
+                self.run_destructors()?;
+            }
+            if live(&self.frames[0].vars) == before {
+                break;
+            }
+        }
+        for obj in object::destructible_objects() {
+            if !obj.destructed.replace(true) {
+                self.destruct(obj)?;
+                self.run_destructors()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Prints an uncaught error the way PHP does
+    fn report(&mut self, e: Fatal) {
+        self.flush_diags();
         let msg = if e.uncatchable {
             let line = e.line.unwrap_or_else(diag::line);
             let trace = object::trace_string(&e.trace.unwrap_or_default());
@@ -315,7 +373,60 @@ impl<W: Write> Interp<W> {
             format!("\nFatal error: Uncaught {}\n  thrown in {file} on line {line}\n", String::from_utf8_lossy(&text))
         };
         let _ = self.out.write_all(msg.as_bytes());
-        false
+    }
+
+    /// Calls the destructors of the objects released since the last call
+    fn run_destructors(&mut self) -> EResult<()> {
+        // Depth first, and without native recursion: long chains of objects are
+        // released one link at a time
+        let mut stack = Vec::new();
+        loop {
+            match object::take_pending_destruct() {
+                Some((obj, rest)) => {
+                    stack.push(rest);
+                    if let Err(e) = self.destruct(obj) {
+                        while let Some(rest) = stack.pop() {
+                            object::restore_pending(rest);
+                        }
+                        return Err(e);
+                    }
+                }
+                None => match stack.pop() {
+                    Some(rest) => object::restore_pending(rest),
+                    None => return Ok(()),
+                },
+            }
+        }
+    }
+
+    fn destruct(&mut self, obj: Rc<Object>) -> EResult<()> {
+        let Some(m) = obj.class.find_method("__destruct").cloned() else { return Ok(()) };
+        let line = diag::line();
+        self.destructing += 1;
+        let result = self.call_method(Some(obj.clone()), &m, Vec::new(), line, obj.class.clone());
+        self.destructing -= 1;
+        diag::set_line(line);
+        result.map(drop)
+    }
+
+    /// Runs the destructors due once `result` is in. One that throws while an
+    /// exception is on its way out gets that exception as its previous one
+    fn with_destructors<T>(&mut self, result: EResult<T>) -> EResult<T> {
+        let pending = match result {
+            Ok(v) => return self.run_destructors().map(|_| v),
+            Err(e) if e.uncatchable => return Err(e),
+            Err(e) => e,
+        };
+        match self.run_destructors() {
+            Ok(()) => Err(pending),
+            Err(e) if e.uncatchable => Err(e),
+            Err(e) => {
+                let ex = self.exception_object(e);
+                let previous = self.exception_object(pending);
+                object::chain_previous(&ex, previous);
+                Err(Fatal::thrown(ex))
+            }
+        }
     }
 
     /// Unconditional top-level functions and classes exist before any code runs.
@@ -397,9 +508,10 @@ impl<W: Write> Interp<W> {
 
     fn block(&mut self, stmts: &[Stmt]) -> EResult<Flow> {
         for s in stmts {
-            match self.stmt(s)? {
-                Flow::Normal => {}
-                flow => return Ok(flow),
+            let flow = self.stmt(s)?;
+            self.run_destructors()?;
+            if !matches!(flow, Flow::Normal) {
+                return Ok(flow);
             }
         }
         Ok(Flow::Normal)
@@ -410,6 +522,8 @@ impl<W: Write> Interp<W> {
             Stmt::Echo(exprs) => {
                 for e in exprs {
                     let v = self.expr(e)?;
+                    // Temporaries die before the output is written
+                    self.run_destructors()?;
                     let bytes = self.stringify(&v)?;
                     self.write(&bytes)?;
                 }
@@ -1515,7 +1629,7 @@ impl<W: Write> Interp<W> {
         args: Vec<ArgVal>,
         call_line: u32,
     ) -> EResult<Value> {
-        if self.frames.len() > MAX_CALL_DEPTH {
+        if self.frames.len() + self.destructing > MAX_CALL_DEPTH {
             // php-src measures the native stack; its default limit reads like this
             return Err(Fatal::error(
                 "Maximum call stack size of 8355840 bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?",
@@ -1550,7 +1664,7 @@ impl<W: Write> Interp<W> {
             Fatal::thrown(self.exception_object(e))
         });
         self.frames.pop();
-        result
+        self.with_destructors(result)
     }
 
     fn invoke_inner(&mut self, f: &FuncDecl, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
@@ -1710,7 +1824,7 @@ impl<W: Write> Interp<W> {
                 out.push(builtin_frame(pending));
             }
             let f = &self.frames[i];
-            let internal = by_builtin(i, pending);
+            let internal = by_builtin(i, pending) || (i == 1 && self.in_shutdown);
             out.push(TraceFrame {
                 file: if internal { String::new() } else { self.file.clone() },
                 line: f.call_line,

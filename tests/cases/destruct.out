@@ -1,0 +1,72 @@
+-- unset and reassign
+ctor a
+dtor a
+after unset
+ctor b1
+ctor b2
+dtor b1
+after reassign
+dtor b2
+after null
+-- temporaries
+ctor temp
+dtor temp
+after temp
+ctor local
+in make
+dtor local
+after make
+ctor returned
+dtor returned
+returned
+after ret
+-- shared
+ctor c
+still alive
+dtor c
+-- arrays
+ctor e0
+ctor e1
+dtor e1
+popped
+dtor e0
+cleared
+-- nested
+ctor child of h
+dtor holder h
+dtor child of h
+-- this in destructor
+live: 1
+object(Counter)#2 (0) {
+}
+-- exception from destructor
+caught: from dtor
+-- explicit call
+ctor explicit
+dtor explicit
+-- inheritance
+ctor child
+dtor child
+ctor child2
+child2 first
+dtor child2
+-- cycle
+ctor cyc1
+ctor cyc2
+
+Deprecated: Creation of dynamic property D::$other is deprecated in destruct.php on line 78
+
+Deprecated: Creation of dynamic property D::$other is deprecated in destruct.php on line 78
+-- end
+ctor g1
+ctor g2
+ctor g3
+dtor g3
+dtor g1
+dtor explicit
+live: 0
+object(Counter)#1 (0) {
+}
+dtor cyc1
+dtor cyc2
+dtor g2

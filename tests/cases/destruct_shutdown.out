@@ -1,0 +1,8 @@
+dtor 2
+T
+
+Fatal error: Uncaught Exception: t in destruct_shutdown.php:3
+Stack trace:
+#0 [internal function]: T->__destruct()
+#1 {main}
+  thrown in destruct_shutdown.php on line 3

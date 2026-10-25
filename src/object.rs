@@ -5,6 +5,13 @@
 //! var_dump) are recycled like php-src's object store: a freed number is handed
 //! out again before a new one is allocated.
 //!
+//! `__destruct` runs when the last handle goes away. Drop cannot call into the
+//! interpreter, so it moves the object's contents into a fresh Rc under the same
+//! handle and queues that; the interpreter calls the queued destructors at its
+//! next safe point (see `take_pending_destruct`). An object is destructed at most
+//! once, and objects still alive at shutdown are reached through a registry of
+//! the live objects that have a destructor.
+//!
 //! Properties are stored under php-src's mangled names: `"\0A\0x"` for a
 //! private `$x` declared in class A, `"\0*\0x"` for a protected one and `"x"`
 //! for public and dynamic ones. A parent's private property and a child's
@@ -13,7 +20,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::collections::VecDeque;
+use std::rc::{Rc, Weak};
 
 use crate::array::{Key, PhpArray};
 use crate::ast::{Expr, FuncDecl, TypeHint};
@@ -212,6 +220,8 @@ pub struct Object {
     pub class: Rc<ClassEntry>,
     pub props: RefCell<PhpArray>,
     pub internal: Internal,
+    /// No `__destruct` (left) to call: the class has none, or it already ran
+    pub destructed: Cell<bool>,
 }
 
 pub enum Internal {
@@ -250,6 +260,71 @@ impl std::fmt::Debug for Object {
 thread_local! {
     static NEXT_ID: Cell<u32> = const { Cell::new(1) };
     static FREE_IDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    /// Live objects with a pending destructor, indexed by handle
+    static DESTRUCTIBLE: RefCell<Vec<Weak<Object>>> = const { RefCell::new(Vec::new()) };
+    /// Released objects whose destructor is still to be called
+    static PENDING: RefCell<VecDeque<Pending>> = const { RefCell::new(VecDeque::new()) };
+    /// Cleared after a fatal error: php-src then calls no more destructors
+    static DESTRUCTORS_ENABLED: Cell<bool> = const { Cell::new(true) };
+}
+
+pub enum Pending {
+    Destruct(Rc<Object>),
+    /// A handle freed after the destructors queued before it, as php-src runs
+    /// them while releasing the object's contents, before the handle is free
+    FreeId(u32),
+}
+
+fn free_id(id: u32) {
+    // try_with: during thread teardown the free list may already be gone
+    let _ = FREE_IDS.try_with(|f| f.borrow_mut().push(id));
+}
+
+fn register_destructible(obj: &Rc<Object>) {
+    let _ = DESTRUCTIBLE.try_with(|d| {
+        let mut d = d.borrow_mut();
+        let i = obj.id as usize;
+        if d.len() <= i {
+            d.resize_with(i + 1, Weak::new);
+        }
+        d[i] = Rc::downgrade(obj);
+    });
+}
+
+/// The next released object whose `__destruct` is due (already marked as
+/// destructed), with the rest of the queue taken aside: what its destructor
+/// releases comes first, as php-src would release it right there
+pub fn take_pending_destruct() -> Option<(Rc<Object>, VecDeque<Pending>)> {
+    PENDING.with(|p| {
+        let mut p = p.borrow_mut();
+        loop {
+            match p.pop_front()? {
+                Pending::Destruct(obj) => return Some((obj, std::mem::take(&mut *p))),
+                Pending::FreeId(id) => free_id(id),
+            }
+        }
+    })
+}
+
+/// Puts back what take_pending_destruct took aside, after anything queued since
+pub fn restore_pending(rest: VecDeque<Pending>) {
+    PENDING.with(|p| p.borrow_mut().extend(rest));
+}
+
+/// Live objects whose destructor has not run, in handle order (for shutdown)
+pub fn destructible_objects() -> Vec<Rc<Object>> {
+    DESTRUCTIBLE.with(|d| d.borrow().iter().filter_map(Weak::upgrade).filter(|o| !o.destructed.get()).collect())
+}
+
+/// After a fatal error no destructor runs any more
+pub fn disable_destructors() {
+    DESTRUCTORS_ENABLED.with(|e| e.set(false));
+    let pending = PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    for p in pending {
+        if let Pending::FreeId(id) = p {
+            free_id(id);
+        }
+    }
 }
 
 impl Object {
@@ -271,7 +346,12 @@ impl Object {
                 (None, Some(_)) => {}
             }
         }
-        Rc::new(Object { id, class, props: RefCell::new(props), internal })
+        let has_destructor = class.find_method("__destruct").is_some();
+        let obj = Rc::new(Object { id, class, props: RefCell::new(props), internal, destructed: Cell::new(!has_destructor) });
+        if has_destructor {
+            register_destructible(&obj);
+        }
+        obj
     }
 
     /// A property by storage key, for native code
@@ -322,13 +402,34 @@ impl Object {
 
 impl Drop for Object {
     fn drop(&mut self) {
+        if !self.destructed.get() && DESTRUCTORS_ENABLED.try_with(Cell::get).unwrap_or(false) {
+            // Revived under the same handle for its destructor; the handle stays taken
+            let revived = Rc::new(Object {
+                id: self.id,
+                class: self.class.clone(),
+                props: RefCell::new(std::mem::take(self.props.get_mut())),
+                internal: std::mem::replace(&mut self.internal, Internal::None),
+                destructed: Cell::new(true),
+            });
+            let _ = PENDING.try_with(|p| p.borrow_mut().push_back(Pending::Destruct(revived)));
+            return;
+        }
         // Like php-src, the object's contents are released before its handle is,
         // so handles of objects it held are recycled first
         drop(std::mem::take(self.props.get_mut()));
         drop(std::mem::replace(&mut self.internal, Internal::None));
         let id = self.id;
-        // try_with: during thread teardown the free list may already be gone
-        let _ = FREE_IDS.try_with(|f| f.borrow_mut().push(id));
+        let queued = PENDING.try_with(|p| {
+            let mut p = p.borrow_mut();
+            if p.is_empty() {
+                return false;
+            }
+            p.push_back(Pending::FreeId(id));
+            true
+        });
+        if queued != Ok(true) {
+            free_id(id);
+        }
     }
 }
 

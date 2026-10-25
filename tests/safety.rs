@@ -96,3 +96,23 @@ fn self_referencing_objects_are_handled() {
     assert_eq!(code, 0);
     assert!(out.contains("*RECURSION*"), "{out}");
 }
+
+#[test]
+fn destructors_do_not_overflow_the_stack() {
+    // Each node's destructor is due when the previous one is gone; php-src recurses here
+    let src = r#"<?php
+        class Node { public $next; public static $n = 0; function __destruct() { self::$n++; } }
+        $head = null;
+        for ($i = 0; $i < 1000000; $i++) { $n = new Node; $n->next = $head; $head = $n; }
+        $head = $n = null;
+        echo Node::$n;
+    "#;
+    assert_eq!(run("destruct_list", src), (0, "1000000".to_string()));
+    // A destructor whose local dies with a fresh object in it: each one runs
+    // after the previous frame is gone, but still nests
+    assert_php_error(
+        "destruct_chain",
+        "<?php class R { function __destruct() { $keep = new R; } } new R;",
+        "Maximum call stack size of",
+    );
+}
