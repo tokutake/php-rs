@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{
+use crate::ast::{IncludeKind, Program, SourceFile, 
     Arg, ArrayItem, Catch, ClassDecl, ClassRef, Expr, ExprKind, FuncDecl, FuncKind, ListItem, Magic, MatchArm, Member, Name,
     Param, Stmt, TraitRule, TypeHint,
 };
@@ -131,7 +131,7 @@ fn cast_op(name: &str) -> Option<&'static str> {
 fn parse_embedded(outer: &Parser, mut tokens: Vec<Token>) -> PResult<Expr> {
     let line = tokens.last().map_or(0, |t| t.line);
     tokens.push(Token { tok: Tok::Eof, line });
-    let mut p = Parser::new(tokens);
+    let mut p = Parser::new(tokens, outer.file.clone());
     p.class = outer.class.clone();
     p.in_trait = outer.in_trait;
     p.func = outer.func.clone();
@@ -150,7 +150,7 @@ pub fn parse_expr(src: &[u8]) -> PResult<Expr> {
     code.extend_from_slice(src);
     code.push(b';');
     let tokens = crate::lexer::lex(&code).map_err(|e| ParseError { msg: e.msg, line: e.line })?;
-    let mut p = Parser::new(tokens);
+    let mut p = Parser::new(tokens, Rc::new(SourceFile { path: "".into(), strict: false }));
     let e = p.expr()?;
     if !p.at(&Tok::Semicolon) {
         return p.unexpected();
@@ -161,8 +161,8 @@ pub fn parse_expr(src: &[u8]) -> PResult<Expr> {
 /// Parses a script. Names are resolved against the namespace and imports here,
 /// as php-src does while compiling; the statements of braced namespaces are
 /// flattened into the top level
-pub fn parse(tokens: Vec<Token>) -> PResult<Vec<Stmt>> {
-    let mut p = Parser::new(tokens);
+pub fn parse(tokens: Vec<Token>, path: &str) -> PResult<Program> {
+    let mut p = Parser::new(tokens, Rc::new(SourceFile { path: path.into(), strict: false }));
     let mut stmts = Vec::new();
     while !p.at(&Tok::Eof) {
         if p.at_namespace_decl() {
@@ -173,11 +173,11 @@ pub fn parse(tokens: Vec<Token>) -> PResult<Vec<Stmt>> {
             return Err(ParseError { msg: "No code may exist outside of namespace {}".into(), line: p.line() });
         }
         let s = p.statement()?;
-        p.seen_code |= !matches!(s, Stmt::StrictTypes(_) | Stmt::Block(_));
+        p.seen_code |= !matches!(s, Stmt::StrictTypes | Stmt::Block(_));
         stmts.push(s);
         p.seen_stmt = true;
     }
-    Ok(stmts)
+    Ok(Program { stmts, file: p.file })
 }
 
 /// The current namespace and its `use` imports. Class and function aliases are
@@ -253,6 +253,7 @@ struct Parser {
     names: Names,
     /// The line of the first `yield` in the function being parsed
     yield_line: Option<u32>,
+    file: Rc<SourceFile>,
 }
 
 /// What kind of declaration a class member belongs to
@@ -271,7 +272,7 @@ enum FuncCtx {
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
+    fn new(tokens: Vec<Token>, file: Rc<SourceFile>) -> Self {
         Parser {
             tokens,
             pos: 0,
@@ -285,6 +286,7 @@ impl Parser {
             braced_ns: None,
             names: Names::default(),
             yield_line: None,
+            file,
         }
     }
 
@@ -510,7 +512,8 @@ impl Parser {
         line: u32,
     ) -> PResult<Rc<FuncDecl>> {
         let Some(yield_line) = self.yield_line else {
-            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false }));
+            let file = self.file.clone();
+            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, file }));
         };
         if let Some(ty) = &ret {
             let ok = ty.types.iter().any(|t| {
@@ -522,7 +525,8 @@ impl Parser {
             }
         }
         let body = crate::genlower::lower(body)?;
-        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true }))
+        let file = self.file.clone();
+        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true, file }))
     }
 
     fn peek(&self) -> &Tok {
@@ -927,7 +931,11 @@ impl Parser {
                 return Err(ParseError { msg, line });
             }
             self.next();
-            return Ok(Stmt::StrictTypes(strict));
+            // Nothing has been declared yet, so only the file record changes
+            if strict {
+                self.file = Rc::new(SourceFile { path: self.file.path.clone(), strict: true });
+            }
+            return Ok(Stmt::StrictTypes);
         }
         if self.eat(&Tok::Op(":")) {
             let body = self.alt_block(&["enddeclare"])?;
@@ -1881,6 +1889,33 @@ impl Parser {
                     }
                 }
             }
+            Tok::Ident(kw)
+                if matches!(kw.to_ascii_lowercase().as_str(), "include" | "include_once" | "require" | "require_once") =>
+            {
+                self.next();
+                let kind = match kw.to_ascii_lowercase().as_str() {
+                    "include" => IncludeKind::Include,
+                    "include_once" => IncludeKind::IncludeOnce,
+                    "require" => IncludeKind::Require,
+                    _ => IncludeKind::RequireOnce,
+                };
+                ExprKind::Include(kind, Box::new(self.expr_bp(P_ASSIGN)?))
+            }
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("exit") || kw.eq_ignore_ascii_case("die") => {
+                self.next();
+                let arg = if self.eat(&Tok::Op("(")) {
+                    if self.eat(&Tok::Op(")")) {
+                        None
+                    } else {
+                        let e = self.expr()?;
+                        self.expect(Tok::Op(")"))?;
+                        Some(Box::new(e))
+                    }
+                } else {
+                    None
+                };
+                ExprKind::Exit(arg)
+            }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("print") => {
                 self.next();
                 ExprKind::Call("print".into(), vec![Arg { value: self.expr_bp(P_ASSIGN)?, spread: false, name: None }])
@@ -2095,7 +2130,9 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
         | ExprKind::Empty(x)
         | ExprKind::Throw(x)
         | ExprKind::Clone(x)
-        | ExprKind::Silence(x) => free_vars(x, out),
+        | ExprKind::Silence(x)
+        | ExprKind::Include(_, x) => free_vars(x, out),
+        ExprKind::Exit(x) => x.iter().for_each(|x| free_vars(x, out)),
         ExprKind::InstanceOf(x, class) => {
             free_vars(x, out);
             class_vars(class, out);

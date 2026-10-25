@@ -1,6 +1,7 @@
 //! Built-in functions.
 
 mod array;
+mod file;
 mod format;
 mod signatures;
 mod math;
@@ -22,7 +23,10 @@ pub use types::var_export;
 
 /// Constants defined by built-in function groups
 pub fn constant(name: &str) -> Option<Value> {
-    string::constant(name).or_else(|| math::constant(name)).or_else(|| array::constant(name))
+    string::constant(name)
+        .or_else(|| math::constant(name))
+        .or_else(|| array::constant(name))
+        .or_else(|| file::constant(name))
 }
 
 pub use format::{sprintf, vsprintf};
@@ -94,6 +98,7 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (math::NAMES, math::call),
     (format::NAMES, format::call),
     (array::NAMES, array::call),
+    (file::NAMES, file::call),
 ];
 
 pub fn next_occupied() -> Fatal {

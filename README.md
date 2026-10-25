@@ -43,6 +43,8 @@ Early stage. Implemented so far:
   when a suspended generator is destroyed
 - `Iterator`, `IteratorAggregate` and `Traversable` in foreach, `iterator_to_array()`,
   `iterator_count()`
+- `include` / `require` (and `_once`), with each file's own namespace, strict_types,
+  `__FILE__` and locations in diagnostics and traces; `exit` / `die`; `$GLOBALS`
 - Destructors: `__destruct` when the last reference goes away, and at the end of
   the script in php-src's order (also after an uncaught exception)
 - Traits (`insteadof`/`as` adaptations, static and abstract members, traits using traits)
@@ -54,7 +56,7 @@ Early stage. Implemented so far:
   `array_splice`, `array_column`, `array_unique`, the sort functions with flags,
   `array_walk`, `compact`/`extract`, ...), and the `@` operator
 
-Not yet: regular expressions, JSON, dates, files and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
+Not yet: regular expressions, JSON, dates, writing files and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage
 

@@ -1,0 +1,14 @@
+string(4) "dflt"
+
+Warning: Undefined global variable $nope in globals.php on line 4
+int(50)
+array(1) {
+  ["k"]=>
+  int(1)
+}
+int(50)
+found a=50
+int(50)
+bool(false)
+bool(true)
+bool(true)

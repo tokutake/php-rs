@@ -484,7 +484,7 @@ pub fn stmt_has_yield(s: &Stmt) -> bool {
         | Stmt::Global(_)
         | Stmt::StaticVar(_)
         | Stmt::Const(_)
-        | Stmt::StrictTypes(_)
+        | Stmt::StrictTypes
         | Stmt::Plain(_) => false,
     }
 }
@@ -539,7 +539,13 @@ fn each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         | ExprKind::Throw(x)
         | ExprKind::Clone(x)
         | ExprKind::Silence(x)
+        | ExprKind::Include(_, x)
         | ExprKind::YieldFrom(x) => f(x),
+        ExprKind::Exit(x) => {
+            if let Some(x) = x {
+                f(x);
+            }
+        }
         ExprKind::Ternary(c, t, o) => {
             f(c);
             if let Some(t) = t {
@@ -645,7 +651,13 @@ fn each_child_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         | ExprKind::Throw(x)
         | ExprKind::Clone(x)
         | ExprKind::Silence(x)
+        | ExprKind::Include(_, x)
         | ExprKind::YieldFrom(x) => f(x),
+        ExprKind::Exit(x) => {
+            if let Some(x) = x {
+                f(x);
+            }
+        }
         ExprKind::Ternary(c, t, o) => {
             f(c);
             if let Some(t) = t {

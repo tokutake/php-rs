@@ -5,6 +5,7 @@
 //! drains the queue before every write, so they appear in the same order as in PHP.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Level {
@@ -28,10 +29,13 @@ pub struct Diag {
     pub level: Level,
     pub msg: String,
     pub line: u32,
+    pub file: Rc<str>,
 }
 
 thread_local! {
     static LINE: Cell<u32> = const { Cell::new(0) };
+    /// The file of the code running, for the location of diagnostics
+    static FILE: RefCell<Rc<str>> = RefCell::new(Rc::from(""));
     static PENDING: RefCell<Vec<Diag>> = const { RefCell::new(Vec::new()) };
     /// Nesting of `@` operators being evaluated
     static SILENCED: Cell<u32> = const { Cell::new(0) };
@@ -53,12 +57,21 @@ pub fn line() -> u32 {
     LINE.with(Cell::get)
 }
 
+pub fn set_file(file: Rc<str>) {
+    FILE.with(|f| *f.borrow_mut() = file);
+}
+
+pub fn file() -> Rc<str> {
+    FILE.with(|f| f.borrow().clone())
+}
+
 fn push(level: Level, msg: String) {
     if SILENCED.with(Cell::get) > 0 {
         return;
     }
     let line = line();
-    PENDING.with(|p| p.borrow_mut().push(Diag { level, msg, line }));
+    let file = file();
+    PENDING.with(|p| p.borrow_mut().push(Diag { level, msg, line, file }));
 }
 
 pub fn warning(msg: impl Into<String>) {

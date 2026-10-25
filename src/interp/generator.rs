@@ -178,7 +178,7 @@ impl<W: Write> Interp<W> {
             st.at_first_yield = false;
             (st.func.clone(), frame, std::mem::take(&mut st.saved))
         };
-        if self.frames.len() + self.destructing > MAX_CALL_DEPTH {
+        if self.frames.len() + self.nesting > MAX_CALL_DEPTH {
             let mut st = cell.borrow_mut();
             st.running = false;
             st.frame = Some(frame);
@@ -190,13 +190,20 @@ impl<W: Write> Interp<W> {
         // In traces the generator shows as called from where it is resumed
         let line = diag::line();
         frame.call_line = line;
-        frame.by_builtin = self.internal_calls.last().is_some_and(|(depth, _)| *depth == self.frames.len());
+        frame.by_builtin =
+            self.internal_calls.last().is_some_and(|(depth, _, include)| !include && *depth == self.frames.len());
+        let caller_file = self.enter_file(&func.file);
+        frame.call_file = caller_file.path.clone();
         self.frames.push(frame);
         self.gen_runs.push(GenRun { obj: obj.clone(), saved, input: Some(input) });
+        // Resuming nests deeper natively than a call, so it counts twice towards the limit
+        self.nesting += 1;
         let result = self.gblock(&func.body);
+        self.nesting -= 1;
         let result = result.map_err(|e| self.frame_error(e));
         let run = self.gen_runs.pop().expect("pushed above");
         let frame = self.frames.pop().expect("pushed above");
+        self.enter_file(&caller_file);
         diag::set_line(line);
         let mut st = cell.borrow_mut();
         st.running = false;

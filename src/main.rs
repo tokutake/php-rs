@@ -37,15 +37,16 @@ fn main() -> ExitCode {
     // run it on a thread whose stack fits interp::MAX_CALL_DEPTH nested calls
     let runner = std::thread::Builder::new().stack_size(INTERP_STACK_SIZE).spawn(move || run(&src, file));
     match runner.map(|t| t.join()) {
-        Ok(Ok(true)) => ExitCode::SUCCESS,
+        Ok(Ok(status)) => ExitCode::from(status),
         _ => ExitCode::from(255),
     }
 }
 
-fn run(src: &[u8], file: String) -> bool {
+/// Runs a script; the exit status
+fn run(src: &[u8], file: String) -> u8 {
     let parsed = lexer::lex(src)
         .map_err(|e| ("Parse error", e.msg, e.line))
-        .and_then(|tokens| parser::parse(tokens).map_err(|e| (e.label(), e.msg, e.line)));
+        .and_then(|tokens| parser::parse(tokens, &file).map_err(|e| (e.label(), e.msg, e.line)));
     let program = match parsed {
         Ok(p) => p,
         Err((label, msg, line)) => {
@@ -54,12 +55,12 @@ fn run(src: &[u8], file: String) -> bool {
             if label == "Fatal error" {
                 println!("Stack trace:\n#0 {{main}}");
             }
-            return false;
+            return 255;
         }
     };
     let stdout = std::io::stdout().lock();
-    let mut interp = interp::Interp::new(BufWriter::new(stdout), file);
-    let ok = interp.run(&program);
+    let mut interp = interp::Interp::new(BufWriter::new(stdout), program.file.clone());
+    let status = interp.run(&program);
     let _ = interp.into_output().flush();
-    ok
+    status
 }
