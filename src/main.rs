@@ -35,7 +35,9 @@ fn main() -> ExitCode {
 
     // PHP recursion maps onto native recursion in this tree-walking interpreter, so
     // run it on a thread whose stack fits interp::MAX_CALL_DEPTH nested calls
-    let runner = std::thread::Builder::new().stack_size(INTERP_STACK_SIZE).spawn(move || run(&src, file));
+    // $argv: the script as given, then its arguments
+    let argv = args[1..].to_vec();
+    let runner = std::thread::Builder::new().stack_size(INTERP_STACK_SIZE).spawn(move || run(&src, file, argv));
     match runner.map(|t| t.join()) {
         Ok(Ok(status)) => ExitCode::from(status),
         _ => ExitCode::from(255),
@@ -43,7 +45,7 @@ fn main() -> ExitCode {
 }
 
 /// Runs a script; the exit status
-fn run(src: &[u8], file: String) -> u8 {
+fn run(src: &[u8], file: String, argv: Vec<String>) -> u8 {
     let parsed = lexer::lex(src)
         .map_err(|e| ("Parse error", e.msg, e.line))
         .and_then(|tokens| parser::parse(tokens, &file).map_err(|e| (e.label(), e.msg, e.line)));
@@ -60,6 +62,7 @@ fn run(src: &[u8], file: String) -> u8 {
     };
     let stdout = std::io::stdout().lock();
     let mut interp = interp::Interp::new(BufWriter::new(stdout), program.file.clone());
+    interp.set_globals(&argv);
     let status = interp.run(&program);
     let _ = interp.into_output().flush();
     status

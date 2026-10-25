@@ -44,7 +44,8 @@ Early stage. Implemented so far:
 - `Iterator`, `IteratorAggregate` and `Traversable` in foreach, `iterator_to_array()`,
   `iterator_count()`
 - `include` / `require` (and `_once`), with each file's own namespace, strict_types,
-  `__FILE__` and locations in diagnostics and traces; `exit` / `die`; `$GLOBALS`
+  `__FILE__` and locations in diagnostics and traces; `exit` / `die`; `$GLOBALS`,
+  `$argv` / `$argc` and the superglobals (`$_SERVER`, `$_ENV`, `$_GET`, ...)
 - Destructors: `__destruct` when the last reference goes away, and at the end of
   the script in php-src's order (also after an uncaught exception)
 - Traits (`insteadof`/`as` adaptations, static and abstract members, traits using traits)

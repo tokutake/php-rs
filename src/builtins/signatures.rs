@@ -430,6 +430,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("getcwd", &[
     ]),
+    ("getenv", &[
+        Param { name: "name", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "local_only", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("gettype", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
     ]),
@@ -620,6 +624,14 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "path", default: None, variadic: false, by_ref: false },
         Param { name: "flags", default: Some("PATHINFO_ALL"), variadic: false, by_ref: false },
     ]),
+    ("php_sapi_name", &[
+    ]),
+    ("php_uname", &[
+        Param { name: "mode", default: Some("\"a\""), variadic: false, by_ref: false },
+    ]),
+    ("phpversion", &[
+        Param { name: "extension", default: Some("null"), variadic: false, by_ref: false },
+    ]),
     ("pi", &[
     ]),
     ("pow", &[
@@ -637,6 +649,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("property_exists", &[
         Param { name: "object_or_class", default: None, variadic: false, by_ref: false },
         Param { name: "property", default: None, variadic: false, by_ref: false },
+    ]),
+    ("putenv", &[
+        Param { name: "assignment", default: None, variadic: false, by_ref: false },
     ]),
     ("rad2deg", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },

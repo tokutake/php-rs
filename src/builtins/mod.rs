@@ -1,6 +1,7 @@
 //! Built-in functions.
 
 mod array;
+mod env;
 mod file;
 mod format;
 mod signatures;
@@ -27,6 +28,7 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| math::constant(name))
         .or_else(|| array::constant(name))
         .or_else(|| file::constant(name))
+        .or_else(|| env::constant(name))
 }
 
 pub use format::{sprintf, vsprintf};
@@ -99,6 +101,7 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (format::NAMES, format::call),
     (array::NAMES, array::call),
     (file::NAMES, file::call),
+    (env::NAMES, env::call),
 ];
 
 pub fn next_occupied() -> Fatal {

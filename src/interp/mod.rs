@@ -304,6 +304,16 @@ fn const_key(name: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// The process environment as an array, as $_ENV and $_SERVER start with it
+fn env_array() -> PhpArray {
+    use std::os::unix::ffi::OsStrExt;
+    let mut arr = PhpArray::new();
+    for (k, v) in std::env::vars_os() {
+        arr.insert(Key::from_bytes(k.as_bytes()), Value::str(v.as_bytes().to_vec()));
+    }
+    arr
+}
+
 fn recursive_reference() -> Fatal {
     Fatal::error("Cannot modify a value through a reference to itself")
 }
@@ -1000,6 +1010,10 @@ impl<W: Write> Interp<W> {
             && let Some(this) = &self.ctx().this {
                 return Value::Object(this.clone());
             }
+        if Self::is_superglobal(name) {
+            let name = self.superglobal(name);
+            return self.frames[0].vars.get(&name).map_or(Value::Null, Value::copy_out);
+        }
         match self.frame().vars.get(name) {
             Some(v) => v.copy_out(),
             None if name == "GLOBALS" => self.globals_array(),
@@ -1008,6 +1022,52 @@ impl<W: Write> Interp<W> {
                 Value::Null
             }
         }
+    }
+
+    /// Variables that every scope sees as the global ones
+    fn is_superglobal(name: &str) -> bool {
+        name.starts_with('_')
+            && matches!(name, "_SERVER" | "_GET" | "_POST" | "_COOKIE" | "_FILES" | "_ENV" | "_REQUEST")
+    }
+
+    /// A superglobal's slot name, creating $_ENV and $_REQUEST on first use as
+    /// php-src does (they are "just in time" globals)
+    fn superglobal(&mut self, name: &str) -> String {
+        if !self.frames[0].vars.contains_key(name) {
+            let v = match name {
+                "_ENV" => Value::Array(Rc::new(env_array())),
+                _ => Value::Array(Rc::new(PhpArray::new())),
+            };
+            self.frames[0].vars.insert(name.to_string(), v);
+        }
+        name.to_string()
+    }
+
+    /// The globals php-cli starts a script with: $_GET and friends (empty),
+    /// $argv / $argc, and $_SERVER with the environment and script details
+    pub fn set_globals(&mut self, argv: &[String]) {
+        let empty = || Value::Array(Rc::new(PhpArray::new()));
+        let args = Value::Array(Rc::new(PhpArray::from_values(argv.iter().map(|a| Value::str(a.as_str())))));
+        let argc = Value::Int(argv.len() as i64);
+        let script = Value::str(argv.first().cloned().unwrap_or_default());
+        let mut server = env_array();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let mut put = |k: &str, v: Value| server.insert(Key::Str(k.as_bytes().into()), v);
+        for k in ["PHP_SELF", "SCRIPT_NAME", "SCRIPT_FILENAME", "PATH_TRANSLATED"] {
+            put(k, script.clone());
+        }
+        put("DOCUMENT_ROOT", Value::str(""));
+        put("REQUEST_TIME_FLOAT", Value::Float(now.as_secs_f64()));
+        put("REQUEST_TIME", Value::Int(now.as_secs() as i64));
+        put("argv", args.clone());
+        put("argc", argc.clone());
+        let vars = &mut self.frames[0].vars;
+        for k in ["_GET", "_POST", "_COOKIE", "_FILES"] {
+            vars.insert(k.to_string(), empty());
+        }
+        vars.insert("argv".into(), args);
+        vars.insert("argc".into(), argc);
+        vars.insert("_SERVER".into(), Value::Array(Rc::new(server)));
     }
 
     /// `$GLOBALS` read as a whole: a copy of the global variables
@@ -1383,6 +1443,10 @@ impl<W: Write> Interp<W> {
         match &e.kind {
             ExprKind::Var(name) if name == "this" => Ok(self.ctx().this.clone().map(Value::Object)),
             ExprKind::Var(name) if name == "GLOBALS" && !self.frame().vars.contains_key(name) => Ok(Some(self.globals_array())),
+            ExprKind::Var(name) if Self::is_superglobal(name) => {
+                let name = self.superglobal(name);
+                Ok(self.frames[0].vars.get(&name).map(Value::copy_out))
+            }
             ExprKind::Var(name) => Ok(self.frame().vars.get(name).map(Value::copy_out)),
             ExprKind::Index(base, Some(index)) if self.is_globals(base) => {
                 let name = self.expr(index)?;
@@ -1430,6 +1494,9 @@ impl<W: Write> Interp<W> {
     fn path<'e>(&mut self, target: &'e Expr) -> EResult<Path<'e>> {
         diag::set_line(target.line);
         match &target.kind {
+            ExprKind::Var(name) if Self::is_superglobal(name) => {
+                Ok(Path { base: Base::Global(self.superglobal(name)), dims: Vec::new() })
+            }
             ExprKind::Var(name) => Ok(Path::var(name)),
             ExprKind::Index(base, Some(index)) if self.is_globals(base) => {
                 let name = self.expr(index)?;
