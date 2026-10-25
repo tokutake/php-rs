@@ -1,0 +1,4 @@
+
+Fatal error: Cannot create Closure for new expression in callable_fatal2.php on line 3
+Stack trace:
+#0 {main}

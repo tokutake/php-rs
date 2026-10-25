@@ -2,6 +2,7 @@
 //! Class and object handling lives in the `oop` submodule.
 
 pub(crate) mod generator;
+mod closure;
 mod oop;
 
 use std::cell::RefCell;
@@ -1410,6 +1411,7 @@ impl<W: Write> Interp<W> {
                 v
             }
             ExprKind::Closure(f) => self.make_closure(f)?,
+            ExprKind::CallableFrom(call) => self.callable_from(call)?,
             ExprKind::New(class, args) => {
                 let class = self.resolve_class(class)?;
                 let v = self.instantiate(&class, args, e.line)?;
@@ -2552,6 +2554,9 @@ impl<W: Write> Interp<W> {
     }
 
     fn invoke_closure(&mut self, closure: &Closure, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
+        if let Some(f) = &closure.forward {
+            return self.call_forward(closure, f, args, call_line);
+        }
         let ctx = CallCtx {
             name: closure.name.clone(),
             trace_fn: closure.name.clone(),
@@ -2824,11 +2829,7 @@ impl<W: Write> Interp<W> {
         if let Some(c) = self.callable(v)? {
             return Ok(c);
         }
-        let detail = match v {
-            Value::Str(s) => format!("function \"{}\" not found or invalid function name", String::from_utf8_lossy(s)),
-            Value::Array(_) => "array callback must have exactly two members".to_string(),
-            _ => "no array or string given".to_string(),
-        };
+        let detail = self.not_callable_reason(v)?;
         Err(Fatal::type_error(format!("{fname}(): Argument #{n} ($callback) must be a valid callback, {detail}")))
     }
 
@@ -2940,8 +2941,14 @@ impl<W: Write> Interp<W> {
         match &f {
             Value::Object(o) => {
                 if let Some(c) = o.closure() {
+                    if let Some(fw) = &c.forward {
+                        return self.call_forward_ast(c, fw, args, line);
+                    }
                     let bound = self.bind_args(&c.func, &c.name, args)?;
                     return self.invoke_closure(c, bound, line);
+                }
+                if o.class.find_method("__invoke").is_none() {
+                    return Err(Fatal::error(format!("Object of type {} is not callable", o.class.name)));
                 }
                 self.method_call(f.clone(), "__invoke", args, line)
             }
@@ -2958,7 +2965,7 @@ impl<W: Write> Interp<W> {
                 let vals = self.eval_args(args)?;
                 self.call_value(&c, vals, line)
             }
-            _ => Err(Fatal::error("Value not callable")),
+            _ => Err(Fatal::error(format!("Value of type {} is not callable", f.type_name()))),
         }
     }
 
@@ -3097,7 +3104,7 @@ impl<W: Write> Interp<W> {
         let name = format!("{{closure:{}:{}}}", self.file.path, f.line);
         // Closures created in a method keep its $this and class scope
         let (this, scope) = (self.ctx().this.clone(), self.ctx().scope.clone());
-        let closure = Closure { func: f.clone(), bound, name, file: self.file.path.to_string(), this, scope };
+        let closure = Closure { func: f.clone(), bound, name, file: self.file.path.to_string(), this, scope, forward: None };
         Ok(Value::Object(Object::new(self.classes["closure"].clone(), Internal::Closure(closure))))
     }
 }

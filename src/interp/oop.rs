@@ -520,7 +520,7 @@ impl<W: Write> Interp<W> {
     // ---- Visibility ----
 
     /// Whether a member declared in `class` with `vis` is visible from the current scope
-    fn can_access(&self, vis: Visibility, class: &str) -> bool {
+    pub(super) fn can_access(&self, vis: Visibility, class: &str) -> bool {
         let scope = self.ctx().scope.as_deref();
         match vis {
             Visibility::Public => true,
@@ -532,7 +532,7 @@ impl<W: Write> Interp<W> {
         }
     }
 
-    fn scope_desc(&self) -> String {
+    pub(super) fn scope_desc(&self) -> String {
         match &self.ctx().scope {
             Some(s) => format!("scope {}", s.name),
             None => "global scope".to_string(),
@@ -622,6 +622,7 @@ impl<W: Write> Interp<W> {
                 file: c.file.clone(),
                 this: c.this.clone(),
                 scope: c.scope.clone(),
+                forward: c.forward.clone(),
             }),
             Internal::None | Internal::Generator(_) => Internal::None,
         };
@@ -670,7 +671,7 @@ impl<W: Write> Interp<W> {
     // ---- Methods ----
 
     /// Calls a method with arguments still to be evaluated (so by-reference parameters work)
-    fn call_method_ast(
+    pub(super) fn call_method_ast(
         &mut self,
         this: Option<Rc<Object>>,
         method: &Rc<Method>,
@@ -733,7 +734,7 @@ impl<W: Write> Interp<W> {
     }
 
     /// The argument array for __call / __callStatic: named arguments keep their names
-    fn magic_call_args(&mut self, args: &[Arg]) -> EResult<Value> {
+    pub(super) fn magic_call_args(&mut self, args: &[Arg]) -> EResult<Value> {
         if !args.iter().any(|a| a.name.is_some()) {
             return Ok(super::list(self.eval_args(args)?));
         }
@@ -756,6 +757,20 @@ impl<W: Write> Interp<W> {
         };
         if let Some(c) = obj.closure()
             && name.eq_ignore_ascii_case("__invoke") {
+                // Closure::__invoke() shows in traces between the caller and the
+                // closure, but like an include it calls the closure from the caller's line
+                if !args.iter().any(|a| a.name.is_some()) {
+                    let vals = self.eval_args(args)?;
+                    let class = Some(("Closure".to_string(), "->"));
+                    let frame = object::TraceFrame { file: self.file.path.to_string(), line, function: "__invoke".into(), class, args: vals.clone() };
+                    self.internal_calls.push((self.frames.len(), frame, true));
+                    let result = self.invoke_closure(c, vals.into_iter().map(ArgVal::Val).collect(), line);
+                    self.internal_calls.pop();
+                    return result;
+                }
+                if let Some(f) = &c.forward {
+                    return self.call_forward_ast(c, f, args, line);
+                }
                 let bound = self.bind_args(&c.func, &c.name, args)?;
                 return self.invoke_closure(c, bound, line);
             }
@@ -830,6 +845,9 @@ impl<W: Write> Interp<W> {
     ) -> EResult<Value> {
         if matches!(n, Native::EnumCases | Native::EnumFrom | Native::EnumTryFrom) {
             return self.enum_native(n, method, vals);
+        }
+        if n == Native::ClosureFromCallable {
+            return self.closure_from_callable(vals);
         }
         let Some(this) = this else {
             return Err(Fatal::error(format!("Non-static method {}::{}() cannot be called statically", method.class, method.name)));
@@ -1363,6 +1381,48 @@ impl<W: Write> Interp<W> {
             return Ok(None);
         }
         Ok(Some(Callable::Method { this, method: m, class }))
+    }
+
+    /// Why a value is not a valid callback, as php-src words it
+    pub(super) fn not_callable_reason(&mut self, v: &Value) -> EResult<String> {
+        let (target, method) = match v {
+            Value::Str(s) => {
+                let name = String::from_utf8_lossy(s).into_owned();
+                match name.split_once("::") {
+                    Some((class, method)) => (Value::str(class), method.to_string()),
+                    None => return Ok(format!("function \"{name}\" not found or invalid function name")),
+                }
+            }
+            Value::Array(a) if a.len() == 2 => {
+                let target = a.get(&Key::Int(0)).map(Value::copy_out);
+                let method = a.get(&Key::Int(1)).map(Value::copy_out);
+                match (target, method) {
+                    (Some(t @ (Value::Object(_) | Value::Str(_))), Some(Value::Str(m))) => (t, String::from_utf8_lossy(&m).into_owned()),
+                    (Some(Value::Object(_) | Value::Str(_)), _) => return Ok("second array member is not a valid method".into()),
+                    _ => return Ok("first array member is not a valid class name or object".into()),
+                }
+            }
+            Value::Array(_) => return Ok("array callback must have exactly two members".into()),
+            _ => return Ok("no array or string given".into()),
+        };
+        let class = match &target {
+            Value::Object(o) => o.class.clone(),
+            other => {
+                let name = String::from_utf8_lossy(&other.to_bytes()).into_owned();
+                match name.to_ascii_lowercase().as_str() {
+                    "self" | "static" | "parent" => self.resolve_class(&ClassRef::from_name(&name))?,
+                    lname => match self.classes.get(lname.trim_start_matches('\\')) {
+                        Some(c) => c.clone(),
+                        None => return Ok(format!("class \"{name}\" not found")),
+                    },
+                }
+            }
+        };
+        Ok(match class.find_method(&method) {
+            None => format!("class {} does not have a method \"{method}\"", class.name),
+            Some(m) if !self.can_access(m.vis, m.class) => format!("cannot access {} method {}::{}()", m.vis.name(), m.class, m.name),
+            Some(m) => format!("non-static method {}::{}() cannot be called statically", m.class, m.name),
+        })
     }
 
     pub(super) fn object_matches(&self, o: &Object, ty: &TypeHint) -> bool {

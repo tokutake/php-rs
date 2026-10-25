@@ -124,6 +124,7 @@ pub enum Native {
     GetTraceAsString,
     ThrowableToString,
     ClosureInvoke,
+    ClosureFromCallable,
     EnumCases,
     EnumFrom,
     EnumTryFrom,
@@ -260,6 +261,21 @@ pub struct Closure {
     pub file: String,
     pub this: Option<Rc<Object>>,
     pub scope: Option<Rc<ClassEntry>>,
+    /// For a closure made from a callable (`strlen(...)`, Closure::fromCallable),
+    /// what it calls. `func` then only describes the parameters
+    pub forward: Option<Forward>,
+}
+
+/// What a closure made from a callable calls
+#[derive(Debug, Clone)]
+pub enum Forward {
+    /// A user or built-in function, by name
+    Function(String),
+    /// A method, with the class `static` refers to in it. The object is the closure's `this`
+    Method(Rc<Method>, Rc<ClassEntry>),
+    /// A method that is missing or not accessible, so `__call` (with `this`) or
+    /// `__callStatic` of the class gets its name
+    Magic(String, Rc<ClassEntry>),
 }
 
 impl std::fmt::Debug for Object {
@@ -525,6 +541,13 @@ fn native(name: &str, class: &'static str, body: Native, is_final: bool) -> (Str
     (name.to_ascii_lowercase(), Rc::new(m))
 }
 
+fn static_native(name: &str, class: &'static str, body: Native) -> (String, Rc<Method>) {
+    let (key, m) = native(name, class, body, false);
+    let mut m = Rc::try_unwrap(m).expect("just created");
+    m.is_static = true;
+    (key, Rc::new(m))
+}
+
 /// The Throwable base classes, Exception and Error, with their properties and methods
 fn throwable_base(name: &'static str) -> ClassEntry {
     use Visibility::*;
@@ -692,11 +715,12 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         ..Default::default()
     });
     let invoke = native("__invoke", "Closure", Native::ClosureInvoke, false);
+    let from_callable = static_native("fromCallable", "Closure", Native::ClosureFromCallable);
     put(ClassEntry {
         name: "Closure",
         is_final: true,
         internal_only: true,
-        methods: [invoke].into_iter().collect(),
+        methods: [invoke, from_callable].into_iter().collect(),
         ..Default::default()
     });
     map

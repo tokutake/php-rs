@@ -540,6 +540,7 @@ fn each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         | ExprKind::Clone(x)
         | ExprKind::Silence(x)
         | ExprKind::Include(_, x)
+        | ExprKind::CallableFrom(x)
         | ExprKind::YieldFrom(x) => f(x),
         ExprKind::Exit(x) => {
             if let Some(x) = x {
@@ -652,6 +653,7 @@ fn each_child_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         | ExprKind::Clone(x)
         | ExprKind::Silence(x)
         | ExprKind::Include(_, x)
+        | ExprKind::CallableFrom(x)
         | ExprKind::YieldFrom(x) => f(x),
         ExprKind::Exit(x) => {
             if let Some(x) = x {

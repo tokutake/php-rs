@@ -31,6 +31,8 @@ Early stage. Implemented so far:
   built-in Throwable hierarchy, chained previous exceptions
 - Closures and arrow functions (`use`, by-reference captures, auto-capture),
   callables, `?->`, `instanceof`
+- First-class callable syntax (`strlen(...)`, `$obj->method(...)`, `A::method(...)`,
+  `$f(...)`, through `__call`/`__callStatic` too) and `Closure::fromCallable()`
 - Classes and interfaces: inheritance, abstract/final, visibility, typed and
   readonly properties, constructor promotion, static members, constants,
   `self`/`parent`/`static` (late static binding), magic methods (`__get`,

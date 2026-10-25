@@ -1,0 +1,46 @@
+hello ns
+4
+string(1) "Q"
+string(1) "P"
+string(8) "secret x"
+bool(true)
+array(3) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+  [2]=>
+  int(4)
+}
+int(2)
+array(3) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(3)
+  [2]=>
+  int(2)
+}
+bool(true)
+string(4) "abab"
+string(3) "ccc"
+strlen(): Argument #1 ($string) must be of type string, array given
+#0 first_class_callable2.php(38): strlen(Array)
+#1 first_class_callable2.php(39): t()
+#2 {main}
+#0 [internal function]: u(1)
+#1 first_class_callable2.php(41): array_map(Object(Closure), Array)
+#2 {main}
+#0 first_class_callable2.php(42): u(5)
+#1 first_class_callable2.php(42): Closure->__invoke(5)
+#2 {main}
+Call to a member function m() on null
+Call to private method P::secret() from global scope
+Non-static method P::who() cannot be called statically
+Value of type int is not callable
+Object of type P is not callable
+Closure::fromCallable() expects exactly 1 argument, 0 given
+Failed to create closure from callable: first array member is not a valid class name or object
+12
+int(5)
+int(9)

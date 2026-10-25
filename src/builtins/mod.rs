@@ -788,11 +788,12 @@ struct DebugProp {
 fn debug_props(o: &Object) -> Vec<DebugProp> {
     let prop = |name: &str, value: Value| DebugProp { key: Key::Str(name.as_bytes().into()), value: Some(value), ty: String::new() };
     if let Internal::Closure(c) = &o.internal {
-        let mut props = vec![
-            prop("name", Value::str(c.name.clone())),
-            prop("file", Value::str(c.file.clone())),
-            prop("line", Value::Int(c.func.line as i64)),
-        ];
+        let mut props = vec![prop("name", Value::str(c.name.clone()))];
+        // A closure of a built-in function has no location
+        if !c.file.is_empty() {
+            props.push(prop("file", Value::str(c.file.clone())));
+            props.push(prop("line", Value::Int(c.func.line as i64)));
+        }
         if !c.bound.is_empty() {
             let vars = c.bound.iter().map(|(k, v)| (Key::from_bytes(k.as_bytes()), v.clone())).collect();
             props.push(prop("static", Value::Array(Rc::new(vars))));
