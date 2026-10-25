@@ -1,0 +1,4 @@
+
+Fatal error: Generator return type must be a supertype of Generator, int given in generator_fatal2.php on line 2
+Stack trace:
+#0 {main}

@@ -237,6 +237,8 @@ struct Parser {
     /// Whether the namespace declarations so far were braced, None before the first
     braced_ns: Option<bool>,
     names: Names,
+    /// The line of the first `yield` in the function being parsed
+    yield_line: Option<u32>,
 }
 
 /// What kind of declaration a class member belongs to
@@ -268,6 +270,7 @@ impl Parser {
             seen_code: false,
             braced_ns: None,
             names: Names::default(),
+            yield_line: None,
         }
     }
 
@@ -472,9 +475,40 @@ impl Parser {
     /// Runs `f` with `func` as the enclosing function
     fn in_func<T>(&mut self, func: FuncCtx, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
         let outer = self.func.replace(func);
+        let outer_yield = self.yield_line.take();
         let out = f(self);
         self.func = outer;
+        self.yield_line = outer_yield;
         out
+    }
+
+    /// A function declaration, within its in_func(): a function that yields is a
+    /// generator, whose return type must allow Generator and whose body is lowered
+    #[allow(clippy::too_many_arguments)]
+    fn make_func(
+        &self,
+        kind: FuncKind,
+        name: String,
+        uses: Vec<(String, bool)>,
+        params: Vec<Param>,
+        ret: Option<TypeHint>,
+        body: Vec<Stmt>,
+        line: u32,
+    ) -> PResult<Rc<FuncDecl>> {
+        let Some(yield_line) = self.yield_line else {
+            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false }));
+        };
+        if let Some(ty) = &ret {
+            let ok = ty.types.iter().any(|t| {
+                matches!(t.as_str(), "object" | "mixed" | "iterable" | "static" | "traversable" | "iterator" | "generator")
+            });
+            if !ok {
+                let msg = format!("Generator return type must be a supertype of Generator, {} given", ty.display);
+                return Err(ParseError { msg, line: yield_line });
+            }
+        }
+        let body = crate::genlower::lower(body)?;
+        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true }))
     }
 
     fn peek(&self) -> &Tok {
@@ -953,12 +987,6 @@ impl Parser {
             by_ref = self.eat(&Tok::Op("&"));
             value = self.foreach_target()?;
         }
-        if by_ref && !subject.is_lvalue() {
-            return Err(ParseError {
-                msg: "Cannot create references to elements of a temporary array expression".into(),
-                line: self.line(),
-            });
-        }
         self.expect(Tok::Op(")"))?;
         let body = self.body_or_alt("endforeach")?;
         Ok(Stmt::Foreach { subject, key, value, by_ref, body })
@@ -974,12 +1002,13 @@ impl Parser {
             return self.unexpected();
         };
         let name = self.prefix_ns(&name);
-        let (params, ret, body) = self.in_func(FuncCtx::Named(name.clone()), |p| {
+        let func = self.in_func(FuncCtx::Named(name.clone()), |p| {
             let params = p.params()?;
             let ret = if p.eat(&Tok::Op(":")) { Some(p.type_hint()?) } else { None };
-            Ok((params, ret, p.brace_body()?))
+            let body = p.brace_body()?;
+            p.make_func(FuncKind::Named, name, Vec::new(), params, ret, body, line)
         })?;
-        Ok(Stmt::Function(Rc::new(FuncDecl { kind: FuncKind::Named, name, uses: Vec::new(), params, ret, body, line })))
+        Ok(Stmt::Function(func))
     }
 
     /// `function (...) use (...) { ... }`, after the `function` keyword
@@ -1015,7 +1044,7 @@ impl Parser {
         let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
         let body = self.brace_body()?;
         let name = "{closure}".to_string();
-        Ok(ExprKind::Closure(Rc::new(FuncDecl { kind: FuncKind::Closure, name, uses, params, ret, body, line })))
+        Ok(ExprKind::Closure(self.make_func(FuncKind::Closure, name, uses, params, ret, body, line)?))
     }
 
     /// `fn (...) => expr`, after the `fn` keyword
@@ -1039,7 +1068,7 @@ impl Parser {
             .collect();
         let name = "{closure}".to_string();
         let body = vec![Stmt::Return(Some(body))];
-        Ok(ExprKind::Closure(Rc::new(FuncDecl { kind: FuncKind::Arrow, name, uses, params, ret, body, line })))
+        Ok(ExprKind::Closure(self.make_func(FuncKind::Arrow, name, uses, params, ret, body, line)?))
     }
 
     fn brace_body(&mut self) -> PResult<Vec<Stmt>> {
@@ -1272,7 +1301,7 @@ impl Parser {
             self.eat(&Tok::Op("&"));
             let name = self.class_name()?;
             let is_abstract = is_abstract || in_interface;
-            let (params, ret, body) = self.in_func(FuncCtx::Method(name.clone()), |p| {
+            let func = self.in_func(FuncCtx::Method(name.clone()), |p| {
                 let params = p.params()?;
                 let ret = if p.eat(&Tok::Op(":")) { Some(p.type_hint()?) } else { None };
                 let body = if p.eat(&Tok::Semicolon) {
@@ -1286,12 +1315,11 @@ impl Parser {
                     }
                     p.brace_body()?
                 };
-                Ok((params, ret, body))
+                if params.iter().any(|p| p.promote.is_some()) && !name.eq_ignore_ascii_case("__construct") {
+                    return Err(ParseError { msg: "Cannot declare promoted property outside a constructor".into(), line });
+                }
+                p.make_func(FuncKind::Method, name, Vec::new(), params, ret, body, line)
             })?;
-            if params.iter().any(|p| p.promote.is_some()) && !name.eq_ignore_ascii_case("__construct") {
-                return Err(ParseError { msg: "Cannot declare promoted property outside a constructor".into(), line });
-            }
-            let func = Rc::new(FuncDecl { kind: FuncKind::Method, name, uses: Vec::new(), params, ret, body, line });
             members.push(Member::Method { func, vis, is_static, is_abstract, is_final });
             return Ok(());
         }
@@ -1801,6 +1829,27 @@ impl Parser {
                 self.next();
                 return self.prefix();
             }
+            Tok::Ident(kw) if kw.eq_ignore_ascii_case("yield") => {
+                self.next();
+                if self.func.is_none() {
+                    let msg = "The \"yield\" expression can only be used inside a function".into();
+                    return Err(ParseError { msg, line });
+                }
+                self.yield_line.get_or_insert(line);
+                if self.eat_kw("from") {
+                    ExprKind::YieldFrom(Box::new(self.expr_bp(P_ASSIGN)?))
+                } else if matches!(self.peek(), Tok::Semicolon | Tok::Eof | Tok::Op(")" | "," | "]" | "}" | "=>")) {
+                    ExprKind::Yield { key: None, value: None }
+                } else {
+                    let first = self.expr_bp(P_ASSIGN)?;
+                    if self.eat(&Tok::Op("=>")) {
+                        let value = self.expr_bp(P_ASSIGN)?;
+                        ExprKind::Yield { key: Some(Box::new(first)), value: Some(Box::new(value)) }
+                    } else {
+                        ExprKind::Yield { key: None, value: Some(Box::new(first)) }
+                    }
+                }
+            }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("print") => {
                 self.next();
                 ExprKind::Call("print".into(), vec![Arg { value: self.expr_bp(P_ASSIGN)?, spread: false }])
@@ -2047,6 +2096,10 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
             args(a, out);
         }
         ExprKind::Isset(list) => list.iter().for_each(|x| free_vars(x, out)),
+        ExprKind::YieldFrom(x) => free_vars(x, out),
+        ExprKind::Yield { key, value } => {
+            key.iter().chain(value).for_each(|x| free_vars(x, out));
+        }
         // A nested closure only needs what it captures itself
         ExprKind::Closure(f) => f.uses.iter().for_each(|(name, _)| add(name, out)),
     }

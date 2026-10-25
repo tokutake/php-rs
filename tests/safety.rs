@@ -116,3 +116,18 @@ fn destructors_do_not_overflow_the_stack() {
         "Maximum call stack size of",
     );
 }
+
+#[test]
+fn deep_generator_delegation_is_an_error() {
+    // Each level of `yield from` resumes the next one natively
+    assert_php_error(
+        "yield_from",
+        "<?php function d($n) { if ($n) { yield from d($n - 1); } else { yield 1; } } foreach (d(100000) as $v) {}",
+        "Maximum call stack size of",
+    );
+    assert_php_error(
+        "gen_recursion",
+        "<?php function r() { $g = r(); $g->current(); yield 1; } r()->current();",
+        "Maximum call stack size of",
+    );
+}

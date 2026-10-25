@@ -1,0 +1,4 @@
+
+Fatal error: The "yield" expression can only be used inside a function in generator_fatal1.php on line 2
+Stack trace:
+#0 {main}

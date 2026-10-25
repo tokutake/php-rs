@@ -103,6 +103,18 @@ impl<W: Write> Interp<W> {
             }
         }
 
+        let iterable = |i: &&str| *i == "Iterator" || *i == "IteratorAggregate";
+        if !decl.is_interface
+            && !decl.is_abstract
+            && entry.interfaces.contains(&"Traversable")
+            && !entry.interfaces.iter().any(iterable)
+        {
+            let kind = if decl.is_enum { "Enum" } else { "Class" };
+            return Err(Fatal::compile(format!(
+                "{kind} {name} must implement interface Traversable as part of either Iterator or IteratorAggregate"
+            )));
+        }
+
         let mut prop_defaults: Vec<(Key, Expr)> = Vec::new();
         let mut static_defaults: Vec<(String, Expr)> = Vec::new();
         for member in &decl.members {
@@ -542,6 +554,12 @@ impl<W: Write> Interp<W> {
         if class.is_abstract {
             return Err(Fatal::error(format!("Cannot instantiate abstract class {}", class.name)));
         }
+        if class.name == "Generator" {
+            // php-src creates the object before refusing it, which takes a handle
+            let _object = object::Handle::new();
+            let e = Fatal::error("The \"Generator\" class is reserved for internal use and cannot be manually instantiated");
+            return Err(Fatal::thrown(self.exception_object(e)));
+        }
         if class.internal_only {
             return Err(Fatal::error(format!("Instantiation of class {} is not allowed", class.name)));
         }
@@ -587,8 +605,10 @@ impl<W: Write> Interp<W> {
         let Value::Object(o) = v else {
             return Err(Fatal::error("__clone method called on non-object"));
         };
-        if o.class.is_throwable || o.class.is_enum {
-            return Err(Fatal::error(format!("Trying to clone an uncloneable object of class {}", o.class.name)));
+        if o.class.is_throwable || o.class.is_enum || matches!(o.internal, Internal::Generator(_)) {
+            // The error exists before the object being cloned is released, as in php-src
+            let e = Fatal::error(format!("Trying to clone an uncloneable object of class {}", o.class.name));
+            return Err(Fatal::thrown(self.exception_object(e)));
         }
         let internal = match &o.internal {
             Internal::Closure(c) => Internal::Closure(object::Closure {
@@ -599,7 +619,7 @@ impl<W: Write> Interp<W> {
                 this: c.this.clone(),
                 scope: c.scope.clone(),
             }),
-            Internal::None => Internal::None,
+            Internal::None | Internal::Generator(_) => Internal::None,
         };
         let copy = Object::new(o.class.clone(), internal);
         let props = o.props.try_borrow().map_err(|_| super::recursive_reference())?.clone();
@@ -816,6 +836,22 @@ impl<W: Write> Interp<W> {
             }
             return Ok(Value::Null);
         }
+        if matches!(
+            n,
+            Native::GenCurrent
+                | Native::GenKey
+                | Native::GenNext
+                | Native::GenValid
+                | Native::GenRewind
+                | Native::GenSend
+                | Native::GenThrow
+                | Native::GenGetReturn
+        ) {
+            return self.generator_method(n, &this, vals);
+        }
+        if n == Native::Abstract {
+            return Err(Fatal::error(format!("Cannot call abstract method {}::{}()", method.class, method.name)));
+        }
         if n == Native::ClosureInvoke {
             let c = this.closure().ok_or_else(|| Fatal::error("Closure::__invoke() called on a non-closure"))?;
             return self.invoke_closure(c, vals.into_iter().map(ArgVal::Val).collect(), line);
@@ -838,11 +874,7 @@ impl<W: Write> Interp<W> {
                 Value::str(object::trace_string(&frames))
             }
             Native::ThrowableToString => Value::str(object::throwable_to_string(&this)),
-            Native::ThrowableConstruct
-            | Native::ClosureInvoke
-            | Native::EnumCases
-            | Native::EnumFrom
-            | Native::EnumTryFrom => unreachable!("handled above"),
+            _ => unreachable!("handled above"),
         })
     }
 
