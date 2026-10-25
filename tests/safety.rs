@@ -137,3 +137,23 @@ fn recursive_include_is_an_error() {
     // The script includes itself; the include path holds the script's directory
     assert_php_error("self_include", "<?php include __FILE__;", "Maximum call stack size of");
 }
+
+#[test]
+fn deep_json_is_handled() {
+    // The decoder keeps its own stack, and the nested result is freed without recursion
+    let src = r#"<?php
+$n = 200000;
+$v = json_decode(str_repeat('[', $n) . str_repeat(']', $n), true, 1 << 30);
+$o = json_decode(str_repeat('{"a":', $n) . '1' . str_repeat('}', $n), false, 1 << 30);
+var_dump(is_array($v), is_object($o), json_validate(str_repeat('[', $n) . str_repeat(']', $n), 1 << 30));
+$a = [];
+for ($i = 0; $i < $n; $i++) { $a = [$a]; }
+var_dump(json_encode($a, 0, 1 << 30));
+echo json_last_error_msg();
+unset($v, $o, $a);"#;
+    let (code, out) = run("deep_json", src);
+    assert_eq!(
+        (code, out.as_str()),
+        (0, "bool(true)\nbool(true)\nbool(true)\nbool(false)\nMaximum stack depth exceeded")
+    );
+}

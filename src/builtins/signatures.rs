@@ -564,6 +564,26 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "separator", default: None, variadic: false, by_ref: false },
         Param { name: "array", default: Some("null"), variadic: false, by_ref: false },
     ]),
+    ("json_decode", &[
+        Param { name: "json", default: None, variadic: false, by_ref: false },
+        Param { name: "associative", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "depth", default: Some("512"), variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("json_encode", &[
+        Param { name: "value", default: None, variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "depth", default: Some("512"), variadic: false, by_ref: false },
+    ]),
+    ("json_last_error", &[
+    ]),
+    ("json_last_error_msg", &[
+    ]),
+    ("json_validate", &[
+        Param { name: "json", default: None, variadic: false, by_ref: false },
+        Param { name: "depth", default: Some("512"), variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+    ]),
     ("key_exists", &[
         Param { name: "key", default: None, variadic: false, by_ref: false },
         Param { name: "array", default: None, variadic: false, by_ref: false },

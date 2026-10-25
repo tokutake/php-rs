@@ -594,6 +594,9 @@ impl<W: Write> Interp<W> {
         let class = self.classes.get(&e.class.to_ascii_lowercase()).cloned().unwrap_or_else(|| self.classes["error"].clone());
         let obj = Object::new(class, Internal::None);
         obj.set("\0*\0message", Value::str(e.msg));
+        if e.code != 0 {
+            obj.set("\0*\0code", Value::Int(e.code));
+        }
         let file = e.file.unwrap_or_else(|| self.file.path.clone());
         obj.set("\0*\0file", Value::str(file.to_string()));
         obj.set("\0*\0line", Value::Int(e.line.unwrap_or_else(diag::line) as i64));
@@ -1174,6 +1177,40 @@ impl<W: Write> Interp<W> {
         Ok((p.cell.clone(), ty))
     }
 
+    /// php-src builds a backed enum's table of backing values the first time
+    /// any of its constants is used, which creates every case object in
+    /// declaration order (and so decides their object ids)
+    fn materialize_backed_cases(&mut self, class: &Rc<ClassEntry>) -> EResult<()> {
+        for case in &class.cases {
+            let Some(c) = class.consts.get(case).cloned() else { continue };
+            let pending = {
+                let mut state = c.state.borrow_mut();
+                match &*state {
+                    ConstState::Case(_) => match std::mem::replace(&mut *state, ConstState::Evaluating) {
+                        ConstState::Case(value) => Some(value),
+                        _ => unreachable!(),
+                    },
+                    _ => None,
+                }
+            };
+            if let Some(value) = pending {
+                self.materialize_case(&c, class.clone(), case, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The object of an enum case, remembered in its constant
+    fn materialize_case(&mut self, c: &ClassConst, class: Rc<ClassEntry>, name: &str, value: Option<Expr>) -> EResult<Value> {
+        let scope = self.classes.get(&c.class.to_ascii_lowercase()).cloned().unwrap_or(class);
+        let result = self.enum_case(scope, name, value.as_ref());
+        *c.state.borrow_mut() = match &result {
+            Ok(v) => ConstState::Done(v.clone()),
+            Err(_) => ConstState::Case(value),
+        };
+        result
+    }
+
     pub(super) fn class_const(&mut self, class_ref: &ClassRef, name: &str) -> EResult<Value> {
         if name.eq_ignore_ascii_case("class") {
             return match class_ref {
@@ -1186,6 +1223,9 @@ impl<W: Write> Interp<W> {
             };
         }
         let class = self.resolve_class(class_ref)?;
+        if class.backing.is_some() {
+            self.materialize_backed_cases(&class)?;
+        }
         let Some(c) = class.consts.get(name).cloned() else {
             return Err(Fatal::error(format!("Undefined constant {}::{name}", class.name)));
         };
@@ -1205,13 +1245,7 @@ impl<W: Write> Interp<W> {
                 ConstState::Unevaluated(e) => e,
                 ConstState::Case(value) => {
                     drop(state);
-                    let scope = self.classes.get(&c.class.to_ascii_lowercase()).cloned().unwrap_or(class);
-                    let result = self.enum_case(scope, name, value.as_ref());
-                    *c.state.borrow_mut() = match &result {
-                        Ok(v) => ConstState::Done(v.clone()),
-                        Err(_) => ConstState::Case(value),
-                    };
-                    return result;
+                    return self.materialize_case(&c, class, name, value);
                 }
             }
         };
