@@ -538,6 +538,7 @@ fn each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         | ExprKind::Empty(x)
         | ExprKind::Throw(x)
         | ExprKind::Clone(x)
+        | ExprKind::Silence(x)
         | ExprKind::YieldFrom(x) => f(x),
         ExprKind::Ternary(c, t, o) => {
             f(c);
@@ -643,6 +644,7 @@ fn each_child_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         | ExprKind::Empty(x)
         | ExprKind::Throw(x)
         | ExprKind::Clone(x)
+        | ExprKind::Silence(x)
         | ExprKind::YieldFrom(x) => f(x),
         ExprKind::Ternary(c, t, o) => {
             f(c);

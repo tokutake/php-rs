@@ -1,0 +1,102 @@
+int(5)
+float(5.5)
+float(9.223372036854776E+18)
+int(3)
+float(5)
+float(-4)
+float(4)
+float(-5)
+float(5)
+float(3)
+float(-3)
+float(3.14)
+float(1200)
+float(1.96)
+float(5.05)
+float(5.06)
+float(-0)
+float(10)
+float(1.5)
+float(0.29)
+float(2)
+float(4)
+float(2)
+float(-3)
+float(4)
+float(1.4142135623730951)
+float(NAN)
+int(1024)
+float(0.5)
+float(8)
+int(9)
+float(9.223372036854776E+18)
+int(3)
+float(1)
+float(-1.5)
+float(INF)
+float(-INF)
+bool(true)
+int(3)
+int(8)
+string(6) "banana"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+}
+float(3.5)
+float(1.5)
+int(-1)
+string(2) "10"
+string(3) "abc"
+int(0)
+float(2.718281828459045)
+float(1)
+float(3)
+float(3)
+float(0)
+float(0)
+float(0)
+float(1)
+float(0)
+float(0.7853981633974483)
+float(3.141592653589793)
+float(5)
+float(3.141592653589793)
+float(180)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored in std_math.php on line 9
+
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored in std_math.php on line 9
+string(4) "1010"
+int(10)
+string(2) "10"
+int(511)
+string(2) "ff"
+int(26)
+string(8) "11111111"
+string(4) "1295"
+string(16) "ffffffffffffffff"
+int(0)
+int(1)
+float(6.5)
+int(24)
+int(1)
+string(5) "1,235"
+string(2) "-1"
+string(24) "1,000,000,000,000,000.00"
+string(4) "0.13"
+string(8) "1 234.57"
+string(10) "12'345'678"
+
+Fatal error: Uncaught ValueError: max(): Argument #1 ($value) must contain at least one element in std_math.php:11
+Stack trace:
+#0 std_math.php(11): max(Array)
+#1 {main}
+  thrown in std_math.php on line 11

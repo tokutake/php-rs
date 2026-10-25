@@ -52,6 +52,8 @@ pub enum ExprKind {
     ClassConst { class: ClassRef, name: String },
     InstanceOf(Box<Expr>, ClassRef),
     Clone(Box<Expr>),
+    /// `@expr`: diagnostics raised while evaluating it are dropped
+    Silence(Box<Expr>),
     Throw(Box<Expr>),
     Isset(Vec<Expr>),
     Empty(Box<Expr>),
