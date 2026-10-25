@@ -1,0 +1,9 @@
+dtor 1
+
+Fatal error: Uncaught Error: e in destruct_uncaught.php:4
+Stack trace:
+#0 destruct_uncaught.php(3): g()
+#1 destruct_uncaught.php(6): f()
+#2 {main}
+  thrown in destruct_uncaught.php on line 4
+dtor 2

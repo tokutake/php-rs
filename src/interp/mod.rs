@@ -252,6 +252,23 @@ pub struct Interp<W: Write> {
     /// Built-in calls in progress, with the number of PHP frames when each was
     /// made, so stack traces can show them between the PHP frames
     internal_calls: Vec<(usize, TraceFrame)>,
+    /// Destructors called at the end of the script show as called internally
+    in_shutdown: bool,
+    /// Destructor calls in progress. One running after a frame has gone does not
+    /// add to the frame count, but still nests natively
+    destructing: usize,
+}
+
+fn undefined_constant(name: &str) -> Fatal {
+    Fatal::error(format!("Undefined constant \"{name}\""))
+}
+
+/// Constants are case-sensitive, except for their namespace part
+fn const_key(name: &str) -> std::borrow::Cow<'_, str> {
+    match name.rfind('\\') {
+        Some(i) => format!("{}{}", name[..i].to_ascii_lowercase(), &name[i..]).into(),
+        None => name.into(),
+    }
 }
 
 fn recursive_reference() -> Fatal {
@@ -285,6 +302,8 @@ impl<W: Write> Interp<W> {
             declared: HashSet::new(),
             magic_guard: HashSet::new(),
             internal_calls: Vec::new(),
+            in_shutdown: false,
+            destructing: 0,
         }
     }
 
@@ -296,8 +315,59 @@ impl<W: Write> Interp<W> {
     pub fn run(&mut self, stmts: &[Stmt]) -> bool {
         STRICT_TYPES.with(|s| s.set(matches!(stmts.first(), Some(Stmt::StrictTypes(true)))));
         let result = self.hoist(stmts).and_then(|_| self.block(stmts));
+        let mut ok = true;
+        if let Err(e) = result {
+            ok = false;
+            let fatal = e.uncatchable;
+            self.report(e);
+            // A fatal error ends the script without destructors, an uncaught exception does not
+            if fatal {
+                object::disable_destructors();
+                return false;
+            }
+        }
+        if let Err(e) = self.shutdown() {
+            ok = false;
+            self.report(e);
+        }
+        object::disable_destructors();
         self.flush_diags();
-        let Err(e) = result else { return true };
+        ok
+    }
+
+    /// Destroys what is left at the end of the script like php-src: global
+    /// variables holding the only handle to an object, last first (repeated while
+    /// that frees any), then all remaining objects in handle order
+    fn shutdown(&mut self) -> EResult<()> {
+        self.in_shutdown = true;
+        self.run_destructors()?;
+        loop {
+            let live = |vars: &Vars| vars.slots.iter().flatten().count();
+            let before = live(&self.frames[0].vars);
+            for i in (0..self.frames[0].vars.slots.len()).rev() {
+                let name = match &self.frames[0].vars.slots[i] {
+                    Some((name, Value::Object(o))) if Rc::strong_count(o) == 1 => name.clone(),
+                    _ => continue,
+                };
+                self.frames[0].vars.remove(&name);
+                self.run_destructors()?;
+            }
+            if live(&self.frames[0].vars) == before {
+                break;
+            }
+        }
+        for obj in object::destructible_objects() {
+            if !obj.destructed.replace(true) {
+                self.destruct(obj)?;
+                self.run_destructors()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Prints an uncaught error the way PHP does
+    fn report(&mut self, e: Fatal) {
+        self.flush_diags();
         let msg = if e.uncatchable {
             let line = e.line.unwrap_or_else(diag::line);
             let trace = object::trace_string(&e.trace.unwrap_or_default());
@@ -315,7 +385,60 @@ impl<W: Write> Interp<W> {
             format!("\nFatal error: Uncaught {}\n  thrown in {file} on line {line}\n", String::from_utf8_lossy(&text))
         };
         let _ = self.out.write_all(msg.as_bytes());
-        false
+    }
+
+    /// Calls the destructors of the objects released since the last call
+    fn run_destructors(&mut self) -> EResult<()> {
+        // Depth first, and without native recursion: long chains of objects are
+        // released one link at a time
+        let mut stack = Vec::new();
+        loop {
+            match object::take_pending_destruct() {
+                Some((obj, rest)) => {
+                    stack.push(rest);
+                    if let Err(e) = self.destruct(obj) {
+                        while let Some(rest) = stack.pop() {
+                            object::restore_pending(rest);
+                        }
+                        return Err(e);
+                    }
+                }
+                None => match stack.pop() {
+                    Some(rest) => object::restore_pending(rest),
+                    None => return Ok(()),
+                },
+            }
+        }
+    }
+
+    fn destruct(&mut self, obj: Rc<Object>) -> EResult<()> {
+        let Some(m) = obj.class.find_method("__destruct").cloned() else { return Ok(()) };
+        let line = diag::line();
+        self.destructing += 1;
+        let result = self.call_method(Some(obj.clone()), &m, Vec::new(), line, obj.class.clone());
+        self.destructing -= 1;
+        diag::set_line(line);
+        result.map(drop)
+    }
+
+    /// Runs the destructors due once `result` is in. One that throws while an
+    /// exception is on its way out gets that exception as its previous one
+    fn with_destructors<T>(&mut self, result: EResult<T>) -> EResult<T> {
+        let pending = match result {
+            Ok(v) => return self.run_destructors().map(|_| v),
+            Err(e) if e.uncatchable => return Err(e),
+            Err(e) => e,
+        };
+        match self.run_destructors() {
+            Ok(()) => Err(pending),
+            Err(e) if e.uncatchable => Err(e),
+            Err(e) => {
+                let ex = self.exception_object(e);
+                let previous = self.exception_object(pending);
+                object::chain_previous(&ex, previous);
+                Err(Fatal::thrown(ex))
+            }
+        }
     }
 
     /// Unconditional top-level functions and classes exist before any code runs.
@@ -397,9 +520,10 @@ impl<W: Write> Interp<W> {
 
     fn block(&mut self, stmts: &[Stmt]) -> EResult<Flow> {
         for s in stmts {
-            match self.stmt(s)? {
-                Flow::Normal => {}
-                flow => return Ok(flow),
+            let flow = self.stmt(s)?;
+            self.run_destructors()?;
+            if !matches!(flow, Flow::Normal) {
+                return Ok(flow);
             }
         }
         Ok(Flow::Normal)
@@ -410,6 +534,8 @@ impl<W: Write> Interp<W> {
             Stmt::Echo(exprs) => {
                 for e in exprs {
                     let v = self.expr(e)?;
+                    // Temporaries die before the output is written
+                    self.run_destructors()?;
                     let bytes = self.stringify(&v)?;
                     self.write(&bytes)?;
                 }
@@ -702,6 +828,10 @@ impl<W: Write> Interp<W> {
             }
             ExprKind::Var(name) => self.lookup(name),
             ExprKind::Const(name) => self.constant(name.trim_start_matches('\\'))?,
+            ExprKind::NsConst(name, global) => match self.lookup_const(name) {
+                Some(v) => v,
+                None => self.lookup_const(global).ok_or_else(|| undefined_constant(name))?,
+            },
             ExprKind::Magic(Magic::File) => Value::str(self.file.as_bytes()),
             ExprKind::Magic(Magic::Dir) => {
                 let dir = std::path::Path::new(&self.file).parent().map_or(".".into(), |d| d.display().to_string());
@@ -900,7 +1030,17 @@ impl<W: Write> Interp<W> {
             }
             ExprKind::Empty(target) => Value::Bool(!self.quiet(target)?.is_some_and(|v| v.to_bool())),
             ExprKind::Call(name, args) => {
-                let v = self.call(name.trim_start_matches('\\'), args, e.line)?;
+                let v = self.call(name.trim_start_matches('\\'), args, e.line, true)?;
+                // Whatever the call did, diagnostics from here on belong to the call site
+                diag::set_line(e.line);
+                v
+            }
+            ExprKind::NsCall(name, global, args) => {
+                let lglobal = global.to_ascii_lowercase();
+                let use_global = !self.functions.contains_key(&name.to_ascii_lowercase())
+                    && (self.functions.contains_key(&lglobal) || builtins::exists(&lglobal));
+                // Resolved at runtime, so php-src does not compile it to a dedicated opcode
+                let v = if use_global { self.call(global, args, e.line, false)? } else { self.call(name, args, e.line, false)? };
                 // Whatever the call did, diagnostics from here on belong to the call site
                 diag::set_line(e.line);
                 v
@@ -1216,19 +1356,24 @@ impl<W: Write> Interp<W> {
     }
 
     fn constant(&mut self, name: &str) -> EResult<Value> {
-        if let Some(v) = self.constants.get(name) {
-            return Ok(v.clone());
+        self.lookup_const(name).ok_or_else(|| undefined_constant(name))
+    }
+
+    fn lookup_const(&self, name: &str) -> Option<Value> {
+        if let Some(v) = self.constants.get(&*const_key(name)) {
+            return Some(v.clone());
         }
-        constant(name).ok_or_else(|| Fatal::error(format!("Undefined constant \"{name}\"")))
+        constant(name)
     }
 
     /// Defines a global constant; false (with a warning) if it already exists
     fn define_const(&mut self, name: &str, v: Value) -> bool {
-        if self.constants.contains_key(name) || constant(name).is_some() {
+        let key = const_key(name);
+        if self.constants.contains_key(&*key) || constant(name).is_some() {
             diag::warning(format!("Constant {name} already defined"));
             return false;
         }
-        self.constants.insert(name.to_string(), v);
+        self.constants.insert(key.into_owned(), v);
         true
     }
 
@@ -1296,7 +1441,9 @@ impl<W: Write> Interp<W> {
         }
     }
 
-    fn call(&mut self, name: &str, args: &[Arg], line: u32) -> EResult<Value> {
+    /// Calls a function by name. `direct` is false for calls resolved at runtime,
+    /// which php-src never compiles to dedicated opcodes
+    fn call(&mut self, name: &str, args: &[Arg], line: u32, direct: bool) -> EResult<Value> {
         let lname = name.to_ascii_lowercase();
         if let Some(f) = self.functions.get(&lname).cloned() {
             let ctx = CallCtx { name: f.name.clone(), trace_fn: f.name.clone(), ..CallCtx::default() };
@@ -1325,7 +1472,7 @@ impl<W: Write> Interp<W> {
         }
 
         let vals = self.eval_args(args)?;
-        if compiled_inline(&lname, args) || lname == "print" || !builtins::exists(&lname) {
+        if (direct && compiled_inline(&lname, args)) || lname == "print" || !builtins::exists(&lname) {
             return self.call_builtin(name, &lname, vals, line);
         }
         self.internal_call(lname.clone(), None, vals.clone(), line, |this| this.call_builtin(name, &lname, vals, line))
@@ -1515,7 +1662,7 @@ impl<W: Write> Interp<W> {
         args: Vec<ArgVal>,
         call_line: u32,
     ) -> EResult<Value> {
-        if self.frames.len() > MAX_CALL_DEPTH {
+        if self.frames.len() + self.destructing > MAX_CALL_DEPTH {
             // php-src measures the native stack; its default limit reads like this
             return Err(Fatal::error(
                 "Maximum call stack size of 8355840 bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?",
@@ -1550,7 +1697,7 @@ impl<W: Write> Interp<W> {
             Fatal::thrown(self.exception_object(e))
         });
         self.frames.pop();
-        result
+        self.with_destructors(result)
     }
 
     fn invoke_inner(&mut self, f: &FuncDecl, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
@@ -1710,7 +1857,7 @@ impl<W: Write> Interp<W> {
                 out.push(builtin_frame(pending));
             }
             let f = &self.frames[i];
-            let internal = by_builtin(i, pending);
+            let internal = by_builtin(i, pending) || (i == 1 && self.in_shutdown);
             out.push(TraceFrame {
                 file: if internal { String::new() } else { self.file.clone() },
                 line: f.call_line,
@@ -1781,7 +1928,7 @@ impl<W: Write> Interp<W> {
                     let class = crate::ast::ClassRef::Named(class.to_string());
                     return self.static_call(&class, method, args, line);
                 }
-                self.call(name.trim_start_matches('\\'), args, line)
+                self.call(name.trim_start_matches('\\'), args, line, false)
             }
             Value::Array(_) => {
                 let Some(c) = self.callable(&f)? else { return Err(Fatal::error("Array callback must have exactly two elements")) };

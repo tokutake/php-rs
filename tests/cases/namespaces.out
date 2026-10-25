@@ -1,0 +1,53 @@
+App\Models
+App\Models\User
+App\Models\helper(1)
+my strlen
+3
+FALLBACK
+1.0 42 1.0 1.0
+8 8 32767
+App\Models\User ann
+Hello from App\Models\User / App\Models\Greets / App\Models\Greets::greet
+bool(true)
+bool(true)
+bool(true)
+admin App\Models\Role
+enum(App\Models\Role::Guest)
+App\Models\User
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+App\Models\helper(2)
+App\Models\helper(3)
+dyn
+bool(true)
+int(42)
+bool(true)
+App\Models\helper(4)
+42
+RuntimeException rt
+caught InvalidArgumentException
+App\Models\MyException
+App\Models\User
+App\Models\typed(): Argument #1 ($u) must be of type App\Models\User, string given, called in namespaces.php on line 65
+object(App\Models\User)#1 (1) {
+  ["n":"App\Models\User":private]=>
+  string(3) "ann"
+}
+Array
+(
+    [0] => App\Models\Role Enum:string
+        (
+            [name] => Admin
+            [value] => admin
+        )
+
+    [1] => App\Models\Role Enum:string
+        (
+            [name] => Guest
+            [value] => guest
+        )
+
+)

@@ -33,12 +33,17 @@ Early stage. Implemented so far:
   readonly properties, constructor promotion, static members, constants,
   `self`/`parent`/`static` (late static binding), magic methods (`__get`,
   `__set`, `__call`, `__toString`, `__invoke`, ...), `clone`, user exceptions
+- Namespaces: `namespace A;` and braced `namespace A { }`, `use` imports (classes,
+  `function`, `const`, aliases, group use), resolution of qualified, fully qualified
+  and `namespace\` names, and the global fallback for unqualified functions and constants
+- Destructors: `__destruct` when the last reference goes away, and at the end of
+  the script in php-src's order (also after an uncaught exception)
 - Traits (`insteadof`/`as` adaptations, static and abstract members, traits using traits)
 - Enums: pure and backed, `cases()`/`from()`/`tryFrom()`, methods, constants, interfaces
 - Warnings, deprecations and uncaught errors in PHP's format, with line numbers and stack traces
 - A small set of built-in functions (`count`, `implode`, `explode`, `usort`, `array_map`, ...)
 
-Not yet: `__destruct`, namespaces, generators, most of
+Not yet: generators, most of
 the standard library. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage

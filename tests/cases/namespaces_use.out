@@ -1,0 +1,46 @@
+cba
+Lib\Util\Box 5
+zyx
+Lib\Util\Box
+1-2-3
+HI! YO!
+--
+Lib\Geo\Square 9
+bool(true)
+bool(true)
+bool(true)
+Lib\Geo\Square Lib\Util\Box Lib\Util Lib\Util\Str
+App\local
+Array
+(
+    [0] => App\Thing
+    [1] => App\Thing::m
+    [2] => m
+    [3] => App\Thing
+)
+Array
+(
+    [0] => App\local
+)
+Array
+(
+    [0] => ba
+)
+A!,B!
+Call to undefined function App\undefined_fn()
+Undefined constant "App\UNDEFINED_CONST"
+Class "App\Missing" not found
+Call to undefined function Lib\Util\nothing()
+global
+App\local
+labolg
+object(App\Thing)#3 (0) {
+}
+
+Fatal error: Uncaught Exception: trace in namespaces_use.php:76
+Stack trace:
+#0 namespaces_use.php(81): f()
+#1 namespaces_use.php(77): App\h()
+#2 namespaces_use.php(82): g()
+#3 {main}
+  thrown in namespaces_use.php on line 76
