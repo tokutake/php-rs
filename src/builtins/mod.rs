@@ -440,6 +440,7 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
             match v.unwrap() {
                 Value::Array(a) if mode == 1 => Ok(Value::Int(count_recursive(&a, 0))),
                 Value::Array(a) => Ok(Value::Int(a.len() as i64)),
+                Value::Object(o) if o.class.is_subclass_of("Countable") => Ok(Value::Int(rt.call_method0(&o, "count")?.to_int())),
                 other => Err(Fatal::type_error(format!(
                     "{lname}(): Argument #1 ($value) must be of type Countable|array, {} given",
                     other.value_name()

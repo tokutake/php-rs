@@ -654,6 +654,21 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         ..Default::default()
     });
     put(ClassEntry {
+        name: "ArrayAccess",
+        is_interface: true,
+        methods: ["offsetExists", "offsetGet", "offsetSet", "offsetUnset"]
+            .iter()
+            .map(|m| abstract_method(m, "ArrayAccess"))
+            .collect(),
+        ..Default::default()
+    });
+    put(ClassEntry {
+        name: "Countable",
+        is_interface: true,
+        methods: [abstract_method("count", "Countable")].into_iter().collect(),
+        ..Default::default()
+    });
+    put(ClassEntry {
         name: "JsonSerializable",
         is_interface: true,
         methods: [abstract_method("jsonSerialize", "JsonSerializable")].into_iter().collect(),

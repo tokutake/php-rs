@@ -127,6 +127,9 @@ enum Base<'e> {
     Prop(Rc<Object>, String),
     /// A static property's storage, with its declared type and `Class::$name` for messages
     Cell(RefCellValue, Option<(TypeHint, String)>),
+    /// `$obj[dim]` on an object, which goes through ArrayAccess. Always the
+    /// last step of a path (see resolve_offsets)
+    Offset(Rc<Object>, Option<Value>),
 }
 
 /// A write target: a base plus evaluated offsets (None for `[]`)
@@ -867,6 +870,7 @@ impl<W: Write> Interp<W> {
             }
             Stmt::Foreach { subject, key, value, body, .. } => {
                 let path = self.path(subject)?;
+                let path = self.fetch_offset(path)?;
                 let keys = self.with_place(&path, false, true, |slot| {
                     Ok(match slot {
                         Value::Array(arr) => Ok(arr.keys().cloned().collect::<Vec<_>>()),
@@ -1222,7 +1226,10 @@ impl<W: Write> Interp<W> {
             ExprKind::Index(base, Some(index)) => {
                 let b = self.expr(base)?;
                 let i = self.expr(index)?;
-                read_dim(&b, &i)?
+                match &b {
+                    Value::Object(o) => self.offset_get(o, Some(&i))?,
+                    _ => read_dim(&b, &i)?,
+                }
             }
             ExprKind::Assign(target, rhs) => match &target.kind {
                 ExprKind::List(items) if has_ref(items) => {
@@ -1270,6 +1277,19 @@ impl<W: Write> Interp<W> {
                         binary(op, &cur, &r)?
                     };
                     self.write_prop(&obj, &name, new.clone())?;
+                    return Ok(new);
+                }
+                // Likewise an ArrayAccess element is read with offsetGet and written with offsetSet
+                if let Base::Offset(obj, dim) = &path.base {
+                    let cur = self.offset_get(obj, dim.as_ref())?;
+                    let new = if *op == "." {
+                        let mut s = self.stringify(&cur)?;
+                        s.extend_from_slice(&self.stringify(&r)?);
+                        Value::str(s)
+                    } else {
+                        binary(op, &cur, &r)?
+                    };
+                    self.offset_set(obj, dim.as_ref(), new.clone())?;
                     return Ok(new);
                 }
                 // String conversion may run __toString, so it happens before the write
@@ -1506,6 +1526,12 @@ impl<W: Write> Interp<W> {
                 let i = self.expr(index)?;
                 Ok(match &b {
                     Value::Array(arr) => arr.get(&to_key(&i, "array")?).map(Value::copy_out),
+                    // isset() itself only asks offsetExists; anything else reads the value too
+                    Value::Object(o) => match self.offset_exists(o, &i)? {
+                        false => None,
+                        true if need_value => Some(self.offset_get(o, Some(&i))?),
+                        true => Some(Value::Bool(true)),
+                    },
                     Value::Str(s) => {
                         let off = match &i {
                             Value::Str(t) => match parse_numeric(t) {
@@ -1540,6 +1566,64 @@ impl<W: Write> Interp<W> {
     /// property step is evaluated as a value: objects are handles, so writing
     /// through them needs no write access to the variable holding them
     fn path<'e>(&mut self, target: &'e Expr) -> EResult<Path<'e>> {
+        let path = self.raw_path(target)?;
+        self.resolve_offsets(path)
+    }
+
+    /// Rewrites a path whose offsets run into an object, so that they go through
+    /// ArrayAccess. The object's offset becomes the last step. Offsets below it
+    /// are reached with offsetGet: unless that gives an object, the write lands in
+    /// a copy that is thrown away, as in PHP
+    fn resolve_offsets<'e>(&mut self, mut path: Path<'e>) -> EResult<Path<'e>> {
+        while let Some((k, obj)) = self.find_object(&path) {
+            let mut rest = path.dims.split_off(k);
+            let dim = rest.remove(0);
+            if rest.is_empty() {
+                return Ok(Path { base: Base::Offset(obj, dim), dims: Vec::new() });
+            }
+            let v = self.offset_get_indirect(&obj, dim.as_ref())?;
+            path = Path { base: Base::Cell(Rc::new(RefCell::new(v)), None), dims: rest };
+        }
+        Ok(path)
+    }
+
+    /// For a path used more than once: an ArrayAccess element is fetched once
+    /// into a copy, which the uses then share
+    fn fetch_offset<'e>(&mut self, path: Path<'e>) -> EResult<Path<'e>> {
+        match &path.base {
+            Base::Offset(obj, dim) => {
+                let v = self.offset_get_indirect(obj, dim.as_ref())?;
+                Ok(Path { base: Base::Cell(Rc::new(RefCell::new(v)), None), dims: path.dims })
+            }
+            _ => Ok(path),
+        }
+    }
+
+    /// The first object that an offset of the path is applied to, with the
+    /// position of that offset. Only looks, without creating anything
+    fn find_object(&mut self, path: &Path<'_>) -> Option<(usize, Rc<Object>)> {
+        if path.dims.is_empty() {
+            return None;
+        }
+        let dims = &path.dims;
+        match &path.base {
+            Base::Var(name) => self.frames.last().unwrap().vars.get(name).and_then(|v| probe_object(v, dims, 0)),
+            Base::Global(name) => self.frames[0].vars.get(name).and_then(|v| probe_object(v, dims, 0)),
+            Base::Prop(obj, name) => {
+                let key = match self.find_prop(&obj.class, name) {
+                    oop::PropLookup::Declared(p) => p.key,
+                    oop::PropLookup::Dynamic => Key::Str(name.as_bytes().into()),
+                    oop::PropLookup::Inaccessible(_) => return None,
+                };
+                let props = obj.props.try_borrow().ok()?;
+                probe_object(props.get(&key)?, dims, 0)
+            }
+            Base::Cell(cell, _) => probe_object(&*cell.try_borrow().ok()?, dims, 0),
+            Base::Offset(..) => None,
+        }
+    }
+
+    fn raw_path<'e>(&mut self, target: &'e Expr) -> EResult<Path<'e>> {
         diag::set_line(target.line);
         match &target.kind {
             ExprKind::Var(name) if Self::is_superglobal(name) => {
@@ -1552,7 +1636,7 @@ impl<W: Write> Interp<W> {
                 Ok(Path { base: Base::Global(name), dims: Vec::new() })
             }
             ExprKind::Index(base, index) => {
-                let mut path = self.path(base)?;
+                let mut path = self.raw_path(base)?;
                 path.dims.push(match index {
                     Some(i) => Some(self.expr(i)?),
                     None => None,
@@ -1615,6 +1699,10 @@ impl<W: Write> Interp<W> {
                 let mut slot = cell.try_borrow_mut().map_err(|_| recursive_reference())?;
                 descend(&mut slot, &path.dims, read, deref_last, f)
             }
+            Base::Offset(obj, dim) => {
+                let mut copy = self.offset_get_indirect(obj, dim.as_ref())?;
+                descend(&mut copy, &path.dims, read, deref_last, f)
+            }
         }
     }
 
@@ -1632,6 +1720,10 @@ impl<W: Write> Interp<W> {
         if let (Base::Cell(..), true) = (&path.base, path.dims.is_empty()) {
             return Err(Fatal::error("Binding static properties by reference is not supported yet"));
         }
+        if let Base::Offset(obj, dim) = &path.base {
+            self.offset_get_indirect(obj, dim.as_ref())?;
+            return Err(Fatal::error("Cannot assign by reference to an array dimension of an object"));
+        }
         self.with_place(&path, false, false, |slot| {
             *slot = Value::Ref(r);
             Ok(())
@@ -1645,6 +1737,9 @@ impl<W: Write> Interp<W> {
         let mut path = self.path(target)?;
         if let (Base::Prop(obj, name), true) = (&path.base, path.dims.is_empty()) {
             return self.write_prop(obj, name, v);
+        }
+        if let Base::Offset(obj, dim) = &path.base {
+            return self.offset_set(obj, dim.as_ref(), v);
         }
         if let (Base::Cell(cell, ty), true) = (&path.base, path.dims.is_empty()) {
             let v = match ty {
@@ -1663,16 +1758,29 @@ impl<W: Write> Interp<W> {
         if let Some(Some(index)) = path.dims.last() {
             let index = index.clone();
             path.dims.pop();
-            // A string offset needs the value converted first; doing it here keeps
-            // __toString out of the borrowed write path
-            let as_str = if matches!(v, Value::Object(_)) { Some(self.stringify(&v)?) } else { None };
-            return self.with_place(&path, false, true, |parent| {
+            // An object written to a string offset is converted with __toString,
+            // which cannot run in the borrowed write path: the write is retried
+            // with the converted value
+            let obj = matches!(v, Value::Object(_)).then(|| v.clone());
+            let needs_str = self.with_place(&path, false, true, |parent| {
                 if let Value::Str(s) = parent {
-                    let v = as_str.map_or(v, Value::str);
-                    return assign_string_offset(Rc::make_mut(s), &index, &v);
+                    if obj.is_some() {
+                        return Ok(true);
+                    }
+                    assign_string_offset(Rc::make_mut(s), &index, &v)?;
+                    return Ok(false);
                 }
-                set_slot(write_dim(parent, Some(&index), false)?, v)
-            });
+                set_slot(write_dim(parent, Some(&index), false)?, v)?;
+                Ok(false)
+            })?;
+            if let (true, Some(obj)) = (needs_str, obj) {
+                let v = Value::str(self.stringify(&obj)?);
+                return self.with_place(&path, false, true, |parent| match parent {
+                    Value::Str(s) => assign_string_offset(Rc::make_mut(s), &index, &v),
+                    _ => set_slot(write_dim(parent, Some(&index), false)?, v),
+                });
+            }
+            return Ok(());
         }
         self.with_place(&path, false, true, |slot| {
             *slot = v;
@@ -1692,6 +1800,7 @@ impl<W: Write> Interp<W> {
             let key = self.list_key(item, &mut next)?;
             let elem = match &v {
                 Value::Array(_) => read_dim(&v, &key)?,
+                Value::Object(o) => self.offset_get(o, Some(&key))?,
                 _ => Value::Null,
             };
             self.assign(&item.target, elem)?;
@@ -1720,6 +1829,7 @@ impl<W: Write> Interp<W> {
                     let container = self.with_place(source, false, true, |slot| Ok(slot.clone()))?;
                     let v = match &container {
                         Value::Array(_) => read_dim(&container, &key)?,
+                        Value::Object(o) => self.offset_get(o, Some(&key))?,
                         _ => Value::Null,
                     };
                     self.assign(&item.target, v)?;
@@ -1777,6 +1887,7 @@ impl<W: Write> Interp<W> {
                 }
                 Base::Prop(obj, name) => self.unset_prop(obj, name),
                 Base::Cell(..) => Err(Fatal::error("Attempt to unset static property")),
+                Base::Offset(obj, dim) => self.offset_unset(obj, dim.as_ref()),
             };
         };
         match &path.base {
@@ -1802,6 +1913,10 @@ impl<W: Write> Interp<W> {
             Base::Cell(cell, _) => {
                 let mut slot = cell.try_borrow_mut().map_err(|_| recursive_reference())?;
                 unset_in(&mut slot, &path.dims, last)
+            }
+            Base::Offset(obj, dim) => {
+                let mut copy = self.offset_get_indirect(obj, dim.as_ref())?;
+                unset_in(&mut copy, &path.dims, last)
             }
         }
     }
@@ -1876,6 +1991,7 @@ impl<W: Write> Interp<W> {
                 return Err(Fatal::error(format!("{lname}(): Argument #1 ($array) could not be passed by reference")));
             }
             let path = self.path(&first.value)?;
+            let path = self.fetch_offset(path)?;
             let vals = self.eval_args(rest)?;
             let mut shown = vec![self.with_place(&path, false, true, |slot| Ok(slot.clone()))?];
             shown.extend(vals.iter().cloned());
@@ -3097,6 +3213,34 @@ fn descend<T>(
             descend(next, rest, read, deref_last, f)
         }
     }
+}
+
+/// Walks `dims` from `v` through arrays, looking for an object that one of the
+/// offsets is applied to. `depth` is the position of the offset applied to `v`
+fn probe_object(v: &Value, dims: &[Option<Value>], depth: usize) -> Option<(usize, Rc<Object>)> {
+    match v {
+        Value::Ref(r) => probe_object(&*r.try_borrow().ok()?, dims, depth),
+        Value::Object(o) if depth < dims.len() => Some((depth, o.clone())),
+        // The element the last offset lands on is not indexed itself, so it is not looked up
+        Value::Array(a) if depth + 1 < dims.len() => {
+            let key = peek_key(dims[depth].as_ref()?)?;
+            probe_object(a.get(&key)?, dims, depth + 1)
+        }
+        _ => None,
+    }
+}
+
+/// The array key a value converts to, without the diagnostics of to_key
+fn peek_key(v: &Value) -> Option<Key> {
+    Some(match v {
+        Value::Int(i) => Key::Int(*i),
+        Value::Str(s) => Key::from_bytes(s),
+        Value::Bool(b) => Key::Int(*b as i64),
+        Value::Float(f) if float_fits_int(*f) => Key::Int(*f as i64),
+        Value::Null => Key::Str(Rc::from(&b""[..])),
+        Value::Ref(r) => return peek_key(&*r.try_borrow().ok()?),
+        _ => return None,
+    })
 }
 
 /// Converts a slot into a reference holding its old value, or returns its existing reference

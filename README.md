@@ -43,6 +43,9 @@ Early stage. Implemented so far:
   when a suspended generator is destroyed
 - `Iterator`, `IteratorAggregate` and `Traversable` in foreach, `iterator_to_array()`,
   `iterator_count()`
+- `ArrayAccess` (reads, writes, `isset`/`empty`/`??`, `unset`, compound assignment,
+  destructuring, nested objects, and PHP's "Indirect modification" notices) and
+  `Countable` for `count()`
 - `include` / `require` (and `_once`), with each file's own namespace, strict_types,
   `__FILE__` and locations in diagnostics and traces; `exit` / `die`; `$GLOBALS`,
   `$argv` / `$argc` and the superglobals (`$_SERVER`, `$_ENV`, `$_GET`, ...)

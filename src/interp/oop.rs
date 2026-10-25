@@ -17,7 +17,7 @@ use crate::object::{
 use crate::value::Value;
 
 /// How a property name resolves on an object, seen from the current scope
-enum PropLookup {
+pub(super) enum PropLookup {
     Declared(PropInfo),
     /// Declared, but not visible from here
     Inaccessible(PropInfo),
@@ -917,7 +917,7 @@ impl<W: Write> Interp<W> {
 
     // ---- Properties ----
 
-    fn find_prop(&self, class: &ClassEntry, name: &str) -> PropLookup {
+    pub(super) fn find_prop(&self, class: &ClassEntry, name: &str) -> PropLookup {
         // A private property of the calling class wins when the object is an instance of it
         if let Some(scope) = &self.ctx().scope
             && class.is_subclass_of(scope.name) {
@@ -1257,6 +1257,49 @@ impl<W: Write> Interp<W> {
             Err(_) => ConstState::Unevaluated(expr),
         };
         result
+    }
+
+    // ---- ArrayAccess ----
+
+    /// Calls an ArrayAccess method. Other objects cannot be used as arrays
+    fn offset_call(&mut self, obj: &Rc<Object>, method: &str, args: Vec<Value>) -> EResult<Value> {
+        let m = match obj.class.find_method(method) {
+            Some(m) if obj.class.is_subclass_of("ArrayAccess") => m.clone(),
+            _ => return Err(Fatal::error(format!("Cannot use object of type {} as array", obj.class.name))),
+        };
+        let line = diag::line();
+        let args = args.into_iter().map(ArgVal::Val).collect();
+        let v = self.call_method(Some(obj.clone()), &m, args, line, obj.class.clone());
+        diag::set_line(line);
+        v
+    }
+
+    /// `$obj[dim]` for reading; `$obj[]` passes null
+    pub(super) fn offset_get(&mut self, obj: &Rc<Object>, dim: Option<&Value>) -> EResult<Value> {
+        self.offset_call(obj, "offsetGet", vec![dim.cloned().unwrap_or(Value::Null)])
+    }
+
+    /// offsetGet for a write below the element. offsetGet returns a copy, so
+    /// unless it is an object the write has no effect, which PHP points out
+    pub(super) fn offset_get_indirect(&mut self, obj: &Rc<Object>, dim: Option<&Value>) -> EResult<Value> {
+        let v = self.offset_get(obj, dim)?;
+        if !matches!(v, Value::Object(_)) {
+            diag::notice(format!("Indirect modification of overloaded element of {} has no effect", obj.class.name));
+        }
+        Ok(v)
+    }
+
+    pub(super) fn offset_exists(&mut self, obj: &Rc<Object>, dim: &Value) -> EResult<bool> {
+        Ok(self.offset_call(obj, "offsetExists", vec![dim.clone()])?.to_bool())
+    }
+
+    pub(super) fn offset_set(&mut self, obj: &Rc<Object>, dim: Option<&Value>, v: Value) -> EResult<()> {
+        self.offset_call(obj, "offsetSet", vec![dim.cloned().unwrap_or(Value::Null), v]).map(drop)
+    }
+
+    pub(super) fn offset_unset(&mut self, obj: &Rc<Object>, dim: Option<&Value>) -> EResult<()> {
+        let Some(dim) = dim else { return Err(Fatal::error("Cannot use [] for unsetting")) };
+        self.offset_call(obj, "offsetUnset", vec![dim.clone()]).map(drop)
     }
 
     // ---- Callables and type checks ----
