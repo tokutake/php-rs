@@ -139,6 +139,21 @@ impl<'e> Path<'e> {
 enum ArgVal {
     Val(Value),
     Ref(RefCellValue),
+    /// A parameter skipped by named arguments: its default applies
+    Missing,
+    /// A named argument without a parameter of its own, for the variadic one
+    Named(String, Box<ArgVal>),
+}
+
+impl ArgVal {
+    fn value(&self) -> Value {
+        match self {
+            ArgVal::Val(v) => v.clone(),
+            ArgVal::Ref(r) => value::with_deref(r, Value::clone),
+            ArgVal::Missing => Value::Null,
+            ArgVal::Named(_, v) => v.value(),
+        }
+    }
 }
 
 /// What a call runs as: its name in messages and traces, and its class context
@@ -260,6 +275,8 @@ pub struct Interp<W: Write> {
     destructing: usize,
     /// Generators being run, innermost last
     gen_runs: Vec<generator::GenRun>,
+    /// Parsed defaults of built-in parameters, by source text
+    builtin_defaults: HashMap<&'static str, Rc<Expr>>,
 }
 
 fn undefined_constant(name: &str) -> Fatal {
@@ -308,6 +325,7 @@ impl<W: Write> Interp<W> {
             in_shutdown: false,
             destructing: 0,
             gen_runs: Vec::new(),
+            builtin_defaults: HashMap::new(),
         }
     }
 
@@ -1477,6 +1495,29 @@ impl<W: Write> Interp<W> {
             let bound = self.bind_args(&f, &ctx.name, args)?;
             return self.invoke_with(&f, ctx, Vec::new(), bound, line);
         }
+        // call_user_func() hands its named arguments on to the callback
+        if lname == "call_user_func" && args.iter().any(|a| a.name.is_some()) && !args.iter().any(|a| a.spread) {
+            let mut positional = Vec::new();
+            let mut named = Vec::new();
+            for a in args {
+                let v = self.expr(&a.value)?;
+                match &a.name {
+                    Some(n) => named.push((n.clone(), v)),
+                    None => positional.push(v),
+                }
+            }
+            if positional.is_empty() {
+                return Err(Fatal::new("ArgumentCountError", "call_user_func(): Argument #1 ($callback) not passed"));
+            }
+            let cb = positional.remove(0);
+            let f = self.callback(&lname, 1, &cb)?;
+            let shown = std::iter::once(cb).chain(positional.iter().cloned()).collect();
+            return self.internal_call(lname.clone(), None, shown, line, |this| {
+                this.call_value_named(&f, positional, named, line)
+            });
+        }
+        let reordered = if builtins::exists(&lname) { self.order_builtin_args(&lname, args)? } else { None };
+        let args = reordered.as_deref().unwrap_or(args);
 
         // Built-ins that take their first argument by reference
         if builtins::is_by_ref(&lname) || matches!(lname.as_str(), "usort" | "uasort" | "uksort" | "array_walk") {
@@ -1660,7 +1701,18 @@ impl<W: Write> Interp<W> {
                         args.value_name()
                     )));
                 };
-                self.call_value(&f, arr.values().map(Value::copy_out).collect(), line)
+                let mut positional = Vec::new();
+                let mut named = Vec::new();
+                for (k, v) in arr.iter() {
+                    match k {
+                        Key::Int(_) if !named.is_empty() => {
+                            return Err(Fatal::error("Cannot use positional argument after named argument during unpacking"));
+                        }
+                        Key::Int(_) => positional.push(v.copy_out()),
+                        Key::Str(s) => named.push((String::from_utf8_lossy(s).into_owned(), v.copy_out())),
+                    }
+                }
+                self.call_value_named(&f, positional, named, line)
             }
             "define" => {
                 let [name, value] = <[Value; 2]>::try_from(vals).map_err(|v| builtins::arg_count(lname, 2, v.len()))?;
@@ -1808,10 +1860,46 @@ impl<W: Write> Interp<W> {
     /// Evaluates call arguments for a user function, taking references for by-ref parameters
     fn bind_args(&mut self, f: &FuncDecl, fname: &str, args: &[Arg]) -> EResult<Vec<ArgVal>> {
         let mut bound = Vec::with_capacity(args.len());
+        let mut named = Vec::new();
         for a in args {
             if a.spread {
                 let v = self.expr(&a.value)?;
-                bound.extend(spread(v)?.into_iter().map(ArgVal::Val));
+                let mut named_here = false;
+                for (k, v) in spread_entries(v)? {
+                    match k {
+                        // Only within one unpacked array do string keys rule out int keys
+                        Key::Int(_) if named_here => {
+                            return Err(Fatal::error("Cannot use positional argument after named argument during unpacking"));
+                        }
+                        Key::Int(_) => bound.push(ArgVal::Val(v)),
+                        Key::Str(s) => {
+                            named_here = true;
+                            let name = String::from_utf8_lossy(&s).into_owned();
+                            place_named(f, &mut bound, &mut named, name, ArgVal::Val(v))?;
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(name) = &a.name {
+                let param = f.params.iter().position(|p| &p.name == name && !p.variadic);
+                let by_ref = match param {
+                    Some(i) => f.params[i].by_ref,
+                    None => f.params.last().is_some_and(|p| p.variadic && p.by_ref),
+                };
+                let val = if by_ref {
+                    if !a.value.is_lvalue() {
+                        let n = param.map_or(f.params.len(), |i| i + 1);
+                        return Err(Fatal::error(format!(
+                            "{fname}(): Argument #{n} (${name}) could not be passed by reference"
+                        )));
+                    }
+                    let path = self.path(&a.value)?;
+                    ArgVal::Ref(self.make_ref(&path)?)
+                } else {
+                    ArgVal::Val(self.expr(&a.value)?)
+                };
+                place_named(f, &mut bound, &mut named, name.clone(), val)?;
                 continue;
             }
             let i = bound.len();
@@ -1833,7 +1921,162 @@ impl<W: Write> Interp<W> {
                 bound.push(ArgVal::Val(self.expr(&a.value)?));
             }
         }
+        bound.extend(named.into_iter().map(|(n, v)| ArgVal::Named(n, Box::new(v))));
         Ok(bound)
+    }
+
+    /// Arguments for a user function from evaluated values, some of them named
+    fn bind_values(f: &FuncDecl, positional: Vec<Value>, named: Vec<(String, Value)>) -> EResult<Vec<ArgVal>> {
+        let mut bound: Vec<ArgVal> = positional.into_iter().map(ArgVal::Val).collect();
+        let mut extra = Vec::new();
+        for (name, v) in named {
+            place_named(f, &mut bound, &mut extra, name, ArgVal::Val(v))?;
+        }
+        bound.extend(extra.into_iter().map(|(n, v)| ArgVal::Named(n, Box::new(v))));
+        Ok(bound)
+    }
+
+    /// Calls a callable with named arguments as well (call_user_func_array with string keys)
+    fn call_value_named(&mut self, f: &Callable, positional: Vec<Value>, named: Vec<(String, Value)>, line: u32) -> EResult<Value> {
+        if named.is_empty() {
+            return self.call_value(f, positional, line);
+        }
+        let decl = match f {
+            Callable::User(d) => Some(d.clone()),
+            Callable::Closure(o) => o.closure().map(|c| c.func.clone()),
+            Callable::Method { method, .. } => match &method.body {
+                object::MethodBody::User(d) => Some(d.clone()),
+                object::MethodBody::Native(_) => None,
+            },
+            Callable::Builtin(_) => None,
+        };
+        if let Some(decl) = decl {
+            let args = Self::bind_values(&decl, positional, named)?;
+            return self.call_value_args(f, args, line);
+        }
+        let display = match f {
+            Callable::Builtin(name) => name.clone(),
+            Callable::Method { method, .. } => format!("{}::{}", method.class, method.name),
+            _ => unreachable!("user callables handled above"),
+        };
+        let vals = self.order_builtin_values(&display, positional, named)?;
+        self.call_value(f, vals, line)
+    }
+
+    /// Puts named arguments of a built-in into their positions, with the
+    /// defaults of skipped parameters from its signature
+    pub(super) fn order_builtin_values(
+        &mut self,
+        fname: &str,
+        positional: Vec<Value>,
+        named: Vec<(String, Value)>,
+    ) -> EResult<Vec<Value>> {
+        let Some(sig) = builtins::signature(&fname.to_ascii_lowercase()) else {
+            let (name, _) = &named[0];
+            return Err(Fatal::error(format!("Unknown named parameter ${name}")));
+        };
+        let mut slots: Vec<Option<Value>> = positional.into_iter().map(Some).collect();
+        for (name, v) in named {
+            match sig.iter().position(|p| p.name == name && !p.variadic) {
+                Some(i) => {
+                    if slots.len() <= i {
+                        slots.resize(i + 1, None);
+                    }
+                    if slots[i].is_some() {
+                        return Err(Fatal::error(format!("Named parameter ${name} overwrites previous argument")));
+                    }
+                    slots[i] = Some(v);
+                }
+                None if sig.last().is_some_and(|p| p.variadic) => {
+                    return Err(Fatal::new(
+                        "ArgumentCountError",
+                        format!("{fname}() does not accept unknown named parameters"),
+                    ));
+                }
+                None => return Err(Fatal::error(format!("Unknown named parameter ${name}"))),
+            }
+        }
+        let mut out = Vec::with_capacity(slots.len());
+        for (i, slot) in slots.into_iter().enumerate() {
+            match slot {
+                Some(v) => out.push(v),
+                None => {
+                    let d = self.builtin_default(fname, i, &sig[i])?;
+                    out.push(self.expr(&d)?);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The default of a skipped built-in parameter, parsed from its signature
+    fn builtin_default(&mut self, fname: &str, i: usize, p: &builtins::Param) -> EResult<Rc<Expr>> {
+        let not_passed = |what: &str| {
+            Fatal::new("ArgumentCountError", format!("{fname}(): Argument #{} (${}) {what}", i + 1, p.name))
+        };
+        let Some(src) = p.default else { return Err(not_passed("not passed")) };
+        if src == "UNKNOWN" {
+            return Err(not_passed("must be passed explicitly, because the default value is not known"));
+        }
+        if let Some(e) = self.builtin_defaults.get(src) {
+            return Ok(e.clone());
+        }
+        let e = crate::parser::parse_expr(src.as_bytes())
+            .map_err(|_| not_passed("must be passed explicitly, because the default value is not known"))?;
+        let e = Rc::new(e);
+        self.builtin_defaults.insert(src, e.clone());
+        Ok(e)
+    }
+
+    /// Named arguments to a built-in called directly: the arguments in parameter
+    /// order, with defaults for those skipped. None when no argument is named
+    fn order_builtin_args(&mut self, lname: &str, args: &[Arg]) -> EResult<Option<Vec<Arg>>> {
+        if !args.iter().any(|a| a.name.is_some()) {
+            return Ok(None);
+        }
+        if args.iter().any(|a| a.spread) {
+            return Err(Fatal::error("Named arguments after argument unpacking are not supported for built-in functions yet"));
+        }
+        let Some(sig) = builtins::signature(lname) else {
+            let name = args.iter().find_map(|a| a.name.clone()).unwrap_or_default();
+            return Err(Fatal::error(format!("Unknown named parameter ${name}")));
+        };
+        let mut slots: Vec<Option<Arg>> = Vec::new();
+        for a in args {
+            let Some(name) = &a.name else {
+                slots.push(Some(a.clone()));
+                continue;
+            };
+            match sig.iter().position(|p| p.name == name && !p.variadic) {
+                Some(i) => {
+                    if slots.len() <= i {
+                        slots.resize(i + 1, None);
+                    }
+                    if slots[i].is_some() {
+                        return Err(Fatal::error(format!("Named parameter ${name} overwrites previous argument")));
+                    }
+                    slots[i] = Some(Arg { name: None, ..a.clone() });
+                }
+                None if sig.last().is_some_and(|p| p.variadic) => {
+                    return Err(Fatal::new(
+                        "ArgumentCountError",
+                        format!("{lname}() does not accept unknown named parameters"),
+                    ));
+                }
+                None => return Err(Fatal::error(format!("Unknown named parameter ${name}"))),
+            }
+        }
+        let mut out = Vec::with_capacity(slots.len());
+        for (i, slot) in slots.into_iter().enumerate() {
+            match slot {
+                Some(a) => out.push(a),
+                None => {
+                    let d = self.builtin_default(lname, i, &sig[i])?;
+                    out.push(Arg { value: (*d).clone(), spread: false, name: None });
+                }
+            }
+        }
+        Ok(Some(out))
     }
 
     fn invoke_closure(&mut self, closure: &Closure, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
@@ -1863,13 +2106,7 @@ impl<W: Write> Interp<W> {
                 "Maximum call stack size of 8355840 bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?",
             ));
         }
-        let shown = args
-            .iter()
-            .map(|a| match a {
-                ArgVal::Val(v) => v.clone(),
-                ArgVal::Ref(r) => value::with_deref(r, Value::clone),
-            })
-            .collect();
+        let shown = args.iter().map(ArgVal::value).collect();
         let vars = bound.into_iter().collect();
         let by_builtin = self.internal_calls.last().is_some_and(|(depth, _)| *depth == self.frames.len());
         self.frames.push(Frame { vars, func: Some(f.clone()), ctx, call_line, args: shown, by_builtin });
@@ -1906,6 +2143,7 @@ impl<W: Write> Interp<W> {
         diag::set_line(f.line);
         let fname = self.ctx().name.clone();
         let required = f.required();
+        let (args, named): (Vec<ArgVal>, Vec<ArgVal>) = args.into_iter().partition(|a| !matches!(a, ArgVal::Named(..)));
         if args.len() < required {
             let exact = required == f.params.len();
             return Err(Fatal::new(
@@ -1919,6 +2157,7 @@ impl<W: Write> Interp<W> {
             ));
         }
         let strict = strict_types() && !self.frame().by_builtin;
+        let mut named = named.into_iter();
         let mut args = args.into_iter();
         for (i, p) in f.params.iter().enumerate() {
             let type_error = |v: &Value, file: &str| {
@@ -1932,7 +2171,12 @@ impl<W: Write> Interp<W> {
             };
             if p.variadic {
                 let mut rest = PhpArray::new();
-                for a in args.by_ref() {
+                // Positional arguments first, then the named ones under their names
+                let extra = named.by_ref().map(|a| match a {
+                    ArgVal::Named(n, v) => (Some(n), *v),
+                    other => (None, other),
+                });
+                for (name, a) in args.by_ref().map(|a| (None, a)).chain(extra) {
                     let elem = match a {
                         ArgVal::Ref(r) if p.by_ref => Value::Ref(r),
                         ArgVal::Ref(r) => {
@@ -1940,8 +2184,14 @@ impl<W: Write> Interp<W> {
                             self.check_type(v, p.ty.as_ref(), &type_error, strict)?
                         }
                         ArgVal::Val(v) => self.check_type(v, p.ty.as_ref(), &type_error, strict)?,
+                        ArgVal::Missing | ArgVal::Named(..) => continue,
                     };
-                    rest.push(elem).map_err(|_| next_element_occupied())?;
+                    match name {
+                        Some(n) => rest.insert(Key::Str(n.into_bytes().into()), elem),
+                        None => {
+                            rest.push(elem).map_err(|_| next_element_occupied())?;
+                        }
+                    }
                 }
                 self.frame().vars.insert(p.name.clone(), Value::Array(Rc::new(rest)));
                 break;
@@ -1965,9 +2215,21 @@ impl<W: Write> Interp<W> {
                     }
                     self.check_type(v, p.ty.as_ref(), &type_error, strict)?
                 }
-                None => match &p.default {
-                    Some(d) => self.expr(d)?,
-                    None => unreachable!("argument count was checked"),
+                // Skipped by named arguments, or not passed at all
+                Some(ArgVal::Missing) | Some(ArgVal::Named(..)) | None => match &p.default {
+                    Some(d) => {
+                        let v = self.expr(d)?;
+                        if let Some(shown) = self.frame().args.get_mut(i) {
+                            *shown = v.clone();
+                        }
+                        v
+                    }
+                    None => {
+                        return Err(Fatal::new(
+                            "ArgumentCountError",
+                            format!("{fname}(): Argument #{} (${}) not passed", i + 1, p.name),
+                        ))
+                    }
                 },
             };
             self.frame().vars.insert(p.name.clone(), slot);
@@ -2135,13 +2397,7 @@ impl<W: Write> Interp<W> {
             }
             Callable::Method { this, method, class } => self.call_method(this.clone(), method, args, line, class.clone())?,
             Callable::Builtin(_) => {
-                let vals = args
-                    .into_iter()
-                    .map(|a| match a {
-                        ArgVal::Val(v) => v,
-                        ArgVal::Ref(r) => value::with_deref(&r, Value::clone),
-                    })
-                    .collect();
+                let vals = args.iter().map(ArgVal::value).collect();
                 return self.call_value(f, vals, line);
             }
         };
@@ -2373,11 +2629,50 @@ enum Callable {
     Builtin(String),
 }
 
+/// Puts a named argument into the position of its parameter, or with the
+/// extra named arguments a variadic parameter collects
+fn place_named(f: &FuncDecl, bound: &mut Vec<ArgVal>, extra: &mut Vec<(String, ArgVal)>, name: String, v: ArgVal) -> EResult<()> {
+    let overwrites = || Fatal::error(format!("Named parameter ${name} overwrites previous argument"));
+    match f.params.iter().position(|p| p.name == name && !p.variadic) {
+        Some(i) => {
+            if i < bound.len() {
+                if !matches!(bound[i], ArgVal::Missing) {
+                    return Err(overwrites());
+                }
+                bound[i] = v;
+            } else {
+                bound.resize_with(i, || ArgVal::Missing);
+                bound.push(v);
+            }
+            Ok(())
+        }
+        None if f.params.last().is_some_and(|p| p.variadic) => {
+            if extra.iter().any(|(n, _)| *n == name) {
+                return Err(overwrites());
+            }
+            extra.push((name, v));
+            Ok(())
+        }
+        None => Err(Fatal::error(format!("Unknown named parameter ${name}"))),
+    }
+}
+
+/// The entries of an unpacked argument list: string keys are named arguments
+fn spread_entries(v: Value) -> EResult<Vec<(Key, Value)>> {
+    match v {
+        Value::Array(arr) => Ok(arr.iter().map(|(k, v)| (k.clone(), v.copy_out())).collect()),
+        other => Err(Fatal::type_error(format!(
+            "Only arrays and Traversables can be unpacked, {} given",
+            other.value_name()
+        ))),
+    }
+}
+
 fn spread(v: Value) -> EResult<Vec<Value>> {
     match v {
         Value::Array(arr) => {
             if arr.keys().any(|k| matches!(k, Key::Str(_))) {
-                return Err(Fatal::error("Named arguments are not supported yet"));
+                return Err(Fatal::error("Named arguments after argument unpacking are not supported for built-in functions yet"));
             }
             Ok(arr.values().map(Value::copy_out).collect())
         }

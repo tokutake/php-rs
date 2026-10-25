@@ -14,7 +14,7 @@ use crate::object::{
     self, enum_method, mangle, unmangle, ClassConst, ClassEntry, ConstState, Internal, Method, MethodBody, Native, Object,
     PropInfo, StaticProp, Visibility,
 };
-use crate::value::{self, Value};
+use crate::value::Value;
 
 /// How a property name resolves on an object, seen from the current scope
 enum PropLookup {
@@ -676,6 +676,19 @@ impl<W: Write> Interp<W> {
     ) -> EResult<Value> {
         let bound = match &method.body {
             MethodBody::User(f) => self.bind_args(f, &format!("{}::{}", method.class, method.name), args)?,
+            MethodBody::Native(_) if args.iter().any(|a| a.name.is_some()) => {
+                let mut positional = Vec::new();
+                let mut named = Vec::new();
+                for a in args {
+                    let v = self.expr(&a.value)?;
+                    match &a.name {
+                        Some(n) => named.push((n.clone(), v)),
+                        None => positional.push(v),
+                    }
+                }
+                let display = format!("{}::{}", method.class, method.name);
+                self.order_builtin_values(&display, positional, named)?.into_iter().map(ArgVal::Val).collect()
+            }
             MethodBody::Native(_) => self.eval_args(args)?.into_iter().map(ArgVal::Val).collect(),
         };
         self.call_method(this, method, bound, line, static_class)
@@ -691,13 +704,7 @@ impl<W: Write> Interp<W> {
     ) -> EResult<Value> {
         let func = match &method.body {
             MethodBody::Native(n) => {
-                let vals: Vec<Value> = args
-                    .into_iter()
-                    .map(|a| match a {
-                        ArgVal::Val(v) => v,
-                        ArgVal::Ref(r) => value::with_deref(&r, Value::clone),
-                    })
-                    .collect();
+                let vals: Vec<Value> = args.iter().map(ArgVal::value).collect();
                 let class = Some((method.class.to_string(), if this.is_some() && !method.is_static { "->" } else { "::" }));
                 let shown = vals.clone();
                 return self.internal_call(method.name.clone(), class, shown, line, |this_| {
@@ -721,6 +728,24 @@ impl<W: Write> Interp<W> {
         self.invoke_with(&func, ctx, Vec::new(), args, line)
     }
 
+    /// The argument array for __call / __callStatic: named arguments keep their names
+    fn magic_call_args(&mut self, args: &[Arg]) -> EResult<Value> {
+        if !args.iter().any(|a| a.name.is_some()) {
+            return Ok(super::list(self.eval_args(args)?));
+        }
+        let mut arr = crate::array::PhpArray::new();
+        for a in args {
+            let v = self.expr(&a.value)?;
+            match &a.name {
+                Some(n) => arr.insert(Key::Str(n.clone().into_bytes().into()), v),
+                None => {
+                    arr.push(v).map_err(|_| super::next_element_occupied())?;
+                }
+            }
+        }
+        Ok(Value::Array(Rc::new(arr)))
+    }
+
     pub(super) fn method_call(&mut self, o: Value, name: &str, args: &[Arg], line: u32) -> EResult<Value> {
         let Value::Object(obj) = &o else {
             return Err(Fatal::error(format!("Call to a member function {name}() on {}", o.type_name())));
@@ -736,8 +761,7 @@ impl<W: Write> Interp<W> {
                 return self.call_method_ast(Some(obj.clone()), m, args, line, obj.class.clone());
             }
         if let Some(magic) = obj.class.find_method("__call").cloned() {
-            let vals = self.eval_args(args)?;
-            let margs = vec![ArgVal::Val(Value::str(name)), ArgVal::Val(super::list(vals))];
+            let margs = vec![ArgVal::Val(Value::str(name)), ArgVal::Val(self.magic_call_args(args)?)];
             return self.call_method(Some(obj.clone()), &magic, margs, line, obj.class.clone());
         }
         Err(match found {
@@ -773,13 +797,11 @@ impl<W: Write> Interp<W> {
                 return self.call_method_ast(Some(this), m, args, line, static_class);
             }
         if let (Some(this), Some(magic)) = (&this, class.find_method("__call").cloned()) {
-            let vals = self.eval_args(args)?;
-            let margs = vec![ArgVal::Val(Value::str(name)), ArgVal::Val(super::list(vals))];
+            let margs = vec![ArgVal::Val(Value::str(name)), ArgVal::Val(self.magic_call_args(args)?)];
             return self.call_method(Some(this.clone()), &magic, margs, line, this.class.clone());
         }
         if let Some(magic) = class.find_method("__callstatic").cloned() {
-            let vals = self.eval_args(args)?;
-            let margs = vec![ArgVal::Val(Value::str(name)), ArgVal::Val(super::list(vals))];
+            let margs = vec![ArgVal::Val(Value::str(name)), ArgVal::Val(self.magic_call_args(args)?)];
             return self.call_method(None, &magic, margs, line, class.clone());
         }
         Err(match found {
