@@ -293,6 +293,13 @@ impl Encoder<'_> {
                 out.push(b'0');
                 Ok(false)
             }
+            Value::Resource(_) => {
+                self.error = Error::UnsupportedType;
+                if self.partial() {
+                    out.extend_from_slice(b"null");
+                }
+                Ok(false)
+            }
             Value::Str(s) => Ok(self.string(out, s, self.flags)),
             Value::Array(a) => {
                 let entries: Vec<(Option<Key>, Value)> = a.iter().map(|(k, v)| (Some(k.clone()), v.clone())).collect();

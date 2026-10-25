@@ -5,13 +5,11 @@ use std::rc::Rc;
 
 use super::{arg_int, arg_str, args, Runtime};
 use crate::array::{Key, PhpArray};
-use crate::diag;
 use crate::interp::{EResult, Fatal};
 use crate::value::Value;
 
 pub const NAMES: &[&str] = &[
     "basename", "dirname", "pathinfo", "file_exists", "is_file", "is_dir", "is_readable", "realpath", "getcwd",
-    "file_get_contents",
 ];
 
 pub fn constant(name: &str) -> Option<Value> {
@@ -157,29 +155,6 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             Ok(match std::env::current_dir() {
                 Ok(d) => Value::str(d.display().to_string()),
                 Err(_) => Value::Bool(false),
-            })
-        }
-        "file_get_contents" => {
-            let [p, ..] = args::<1, 5>(name, vals)?;
-            let p = path_arg(rt, lname, &p.unwrap())?;
-            if p.is_empty() {
-                return Err(Fatal::value_error("Path cannot be empty"));
-            }
-            Ok(match std::fs::read(os_path(&p)) {
-                Ok(bytes) => Value::str(bytes),
-                Err(e) => {
-                    let why = match e.kind() {
-                        std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
-                        std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
-                        _ if os_path(&p).is_dir() => "Is a directory".to_string(),
-                        _ => e.to_string(),
-                    };
-                    diag::warning(format!(
-                        "file_get_contents({}): Failed to open stream: {why}",
-                        String::from_utf8_lossy(&p)
-                    ));
-                    Value::Bool(false)
-                }
             })
         }
         _ => Err(Fatal::error(format!("Call to undefined function {name}()"))),

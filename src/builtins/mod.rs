@@ -6,6 +6,7 @@ mod file;
 mod format;
 mod json;
 mod signatures;
+mod streams;
 mod math;
 mod preg;
 mod string;
@@ -33,6 +34,7 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| env::constant(name))
         .or_else(|| json::constant(name))
         .or_else(|| preg::constant(name))
+        .or_else(|| streams::constant(name))
 }
 
 pub use format::{sprintf, vsprintf};
@@ -60,6 +62,11 @@ pub trait Runtime {
     fn check_callback(&mut self, fname: &str, n: usize, cb: &Value) -> EResult<()>;
     fn is_callable(&mut self, cb: &Value) -> bool;
     fn call_callback(&mut self, cb: &Value, args: Vec<Value>) -> EResult<Value>;
+    /// Writes to the script's output, as echo does
+    fn echo(&mut self, bytes: &[u8]);
+    fn flush_out(&mut self);
+    /// fclose(STDOUT): later output is discarded
+    fn close_stdout(&mut self);
 }
 
 /// Built-ins whose first parameter is by reference
@@ -116,6 +123,7 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (env::NAMES, env::call),
     (json::NAMES, json::call),
     (preg::NAMES, preg::call),
+    (streams::NAMES, streams::call),
 ];
 
 pub fn next_occupied() -> Fatal {
@@ -150,6 +158,12 @@ impl Runtime for NoRuntime {
     fn call_callback(&mut self, _cb: &Value, _args: Vec<Value>) -> EResult<Value> {
         Err(Fatal::error("Callbacks are not available here"))
     }
+
+    fn echo(&mut self, _bytes: &[u8]) {}
+
+    fn flush_out(&mut self) {}
+
+    fn close_stdout(&mut self) {}
 }
 
 /// A preg_* function with its by-reference parameter: the result, and the
@@ -255,7 +269,7 @@ pub fn arg_int(fname: &str, n: usize, param: &str, v: &Value) -> EResult<i64> {
             (Num::Float(f), Numeric::Full) => float(f),
             _ => Err(param_type_error(fname, n, param, "int", v)),
         },
-        Value::Array(_) | Value::Object(_) => Err(param_type_error(fname, n, param, "int", v)),
+        Value::Array(_) | Value::Object(_) | Value::Resource(_) => Err(param_type_error(fname, n, param, "int", v)),
         Value::Ref(r) => with_deref(r, |inner| arg_int(fname, n, param, inner)),
     }
 }
@@ -446,6 +460,13 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
                 Value::Str(_) => "string",
                 Value::Array(_) => "array",
                 Value::Object(_) => "object",
+                Value::Resource(r) => {
+                    if r.is_open() {
+                        "resource"
+                    } else {
+                        "resource (closed)"
+                    }
+                }
                 Value::Ref(_) => unreachable!("arguments are dereferenced"),
             }))
         }
@@ -844,6 +865,7 @@ fn var_dump_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<us
         Value::Null => out.extend_from_slice(b"NULL\n"),
         Value::Bool(b) => out.extend_from_slice(format!("bool({b})\n").as_bytes()),
         Value::Int(i) => out.extend_from_slice(format!("int({i})\n").as_bytes()),
+        Value::Resource(r) => out.extend_from_slice(format!("resource({}) of type ({})\n", r.id, r.type_name()).as_bytes()),
         Value::Float(f) => out.extend_from_slice(format!("float({})\n", format_float_repr(*f)).as_bytes()),
         Value::Str(s) => {
             out.extend_from_slice(format!("string({}) \"", s.len()).as_bytes());

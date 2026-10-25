@@ -10,6 +10,7 @@ mod lexer;
 mod object;
 mod parser;
 mod regex;
+mod stream;
 mod value;
 
 use std::io::{BufWriter, Write};

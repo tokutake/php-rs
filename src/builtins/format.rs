@@ -75,7 +75,7 @@ impl Spec {
 
 /// `nb_additional`: how many arguments precede the values, for the error
 /// message (None for vsprintf, whose values come in an array)
-fn formatted_print(
+pub(super) fn formatted_print(
     rt: &mut dyn Runtime,
     fname: &str,
     format: &[u8],

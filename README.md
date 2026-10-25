@@ -60,6 +60,15 @@ Early stage. Implemented so far:
   enums), `json_decode()` (objects or arrays, big integers, depth limits),
   `json_validate()`, `json_last_error()` and `JSON_THROW_ON_ERROR`; the decoder keeps
   its own stack, so deeply nested input cannot overflow the native one
+- Files and streams: resources (`resource(5) of type (stream)`, ids as php-src
+  numbers them), `fopen` with plain files, `php://memory`, `php://temp`,
+  `php://stdin`/`stdout`/`stderr`/`output` and `STDIN`/`STDOUT`/`STDERR`;
+  `fread`/`fgets`/`fgetc`/`fwrite`/`fseek`/`ftell`/`feof` with php-src's
+  end-of-file rule, `fprintf`, `fputcsv`/`fgetcsv`/`str_getcsv`,
+  `file_get_contents`/`file_put_contents`/`file()`, directories (`opendir`,
+  `scandir`, `glob`), `unlink`/`mkdir`/`rename`/`copy`/`touch`/`stat` and friends.
+  Reads stop at php-src's default memory limit, so an endless stream cannot
+  exhaust memory
 - Regular expressions: the preg_* functions (`preg_match`, `preg_match_all`,
   `preg_replace`, `preg_replace_callback(_array)`, `preg_split`, `preg_grep`,
   `preg_quote`, ...) on a PCRE2-compatible engine of its own: PCRE2's syntax
@@ -70,7 +79,7 @@ Early stage. Implemented so far:
   pathological pattern ends in `PREG_BACKTRACK_LIMIT_ERROR` and friends rather
   than a hang or a crash
 
-Not yet: dates, writing files and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
+Not yet: dates, network streams and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage
 
