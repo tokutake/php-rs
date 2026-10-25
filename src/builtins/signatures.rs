@@ -658,6 +658,68 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
         Param { name: "exponent", default: None, variadic: false, by_ref: false },
     ]),
+    ("preg_filter", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "replacement", default: None, variadic: false, by_ref: false },
+        Param { name: "subject", default: None, variadic: false, by_ref: false },
+        Param { name: "limit", default: Some("-1"), variadic: false, by_ref: false },
+        Param { name: "count", default: Some("null"), variadic: false, by_ref: true },
+    ]),
+    ("preg_grep", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "array", default: None, variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("preg_last_error", &[
+    ]),
+    ("preg_last_error_msg", &[
+    ]),
+    ("preg_match", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "subject", default: None, variadic: false, by_ref: false },
+        Param { name: "matches", default: Some("null"), variadic: false, by_ref: true },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "offset", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("preg_match_all", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "subject", default: None, variadic: false, by_ref: false },
+        Param { name: "matches", default: Some("null"), variadic: false, by_ref: true },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "offset", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("preg_quote", &[
+        Param { name: "str", default: None, variadic: false, by_ref: false },
+        Param { name: "delimiter", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("preg_replace", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "replacement", default: None, variadic: false, by_ref: false },
+        Param { name: "subject", default: None, variadic: false, by_ref: false },
+        Param { name: "limit", default: Some("-1"), variadic: false, by_ref: false },
+        Param { name: "count", default: Some("null"), variadic: false, by_ref: true },
+    ]),
+    ("preg_replace_callback", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "callback", default: None, variadic: false, by_ref: false },
+        Param { name: "subject", default: None, variadic: false, by_ref: false },
+        Param { name: "limit", default: Some("-1"), variadic: false, by_ref: false },
+        Param { name: "count", default: Some("null"), variadic: false, by_ref: true },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("preg_replace_callback_array", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "subject", default: None, variadic: false, by_ref: false },
+        Param { name: "limit", default: Some("-1"), variadic: false, by_ref: false },
+        Param { name: "count", default: Some("null"), variadic: false, by_ref: true },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("preg_split", &[
+        Param { name: "pattern", default: None, variadic: false, by_ref: false },
+        Param { name: "subject", default: None, variadic: false, by_ref: false },
+        Param { name: "limit", default: Some("-1"), variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+    ]),
     ("print_r", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
         Param { name: "return", default: Some("false"), variadic: false, by_ref: false },
