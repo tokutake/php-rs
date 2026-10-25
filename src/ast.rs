@@ -131,6 +131,8 @@ pub struct Arg {
     pub value: Expr,
     /// `...$args`
     pub spread: bool,
+    /// `name: value`
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

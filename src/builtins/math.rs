@@ -8,7 +8,7 @@ use crate::interp::{EResult, Fatal};
 use crate::value::{self, loose_cmp, Num, Value};
 
 pub const NAMES: &[&str] = &[
-    "abs", "ceil", "floor", "round", "sqrt", "pow", "exp", "expm1", "log", "log10", "log2", "log1p", "sin", "cos",
+    "abs", "ceil", "floor", "round", "sqrt", "pow", "exp", "expm1", "log", "log10", "log1p", "sin", "cos",
     "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "pi", "fmod", "fdiv",
     "hypot", "deg2rad", "rad2deg", "is_nan", "is_finite", "is_infinite", "max", "min", "array_product", "decbin",
     "bindec", "decoct", "octdec", "dechex", "hexdec", "base_convert", "number_format",
@@ -122,7 +122,6 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
         "exp" => unary(f64::exp, vals),
         "expm1" => unary(f64::exp_m1, vals),
         "log10" => unary(f64::log10, vals),
-        "log2" => unary(f64::log2, vals),
         "log1p" => unary(f64::ln_1p, vals),
         "sin" => unary(f64::sin, vals),
         "cos" => unary(f64::cos, vals),

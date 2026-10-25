@@ -23,6 +23,8 @@ Early stage. Implemented so far:
 - Destructuring with `[...]` / `list()` (keyed, nested, by reference, in `foreach`)
 - Heredoc and nowdoc strings, `"$obj->prop"` interpolation
 - Constants: `const`, `define()`, `constant()`, magic constants (`__LINE__`, `__CLASS__`, ...)
+- Named arguments, for user and built-in functions, methods and `new` (also from
+  spread arrays and call_user_func_array)
 - User functions: type declarations, defaults, variadics, by-reference parameters,
   `static`, `global`, references
 - Exceptions: `try`/`catch`/`finally`, `throw` (also as an expression), the

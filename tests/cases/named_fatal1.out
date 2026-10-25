@@ -1,0 +1,4 @@
+
+Fatal error: Cannot use positional argument after named argument in named_fatal1.php on line 3
+Stack trace:
+#0 {main}

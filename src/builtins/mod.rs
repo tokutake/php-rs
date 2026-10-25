@@ -2,6 +2,7 @@
 
 mod array;
 mod format;
+mod signatures;
 mod math;
 mod string;
 mod types;
@@ -68,6 +69,21 @@ const NAMES: &[&str] = &[
     "iterator_to_array", "iterator_count", "is_iterable", "var_export", "printf", "vprintf", "array_walk",
     "array_reduce", "compact", "extract",
 ];
+
+/// A built-in's parameter, for named arguments
+pub struct Param {
+    pub name: &'static str,
+    /// As PHP source; "UNKNOWN" when php-src has none to offer
+    pub default: Option<&'static str>,
+    pub variadic: bool,
+    #[allow(dead_code)]
+    pub by_ref: bool,
+}
+
+/// The parameters of a built-in function, or `class::method` of a built-in class
+pub fn signature(key: &str) -> Option<&'static [Param]> {
+    signatures::SIGNATURES.binary_search_by(|(k, _)| k.cmp(&key)).ok().map(|i| signatures::SIGNATURES[i].1)
+}
 
 type BuiltinFn = fn(&mut dyn Runtime, &str, &str, Vec<Value>) -> Option<EResult<Value>>;
 

@@ -144,6 +144,20 @@ fn parse_embedded(outer: &Parser, mut tokens: Vec<Token>) -> PResult<Expr> {
     Ok(e)
 }
 
+/// Parses a lone expression, such as a built-in parameter's default value
+pub fn parse_expr(src: &[u8]) -> PResult<Expr> {
+    let mut code = b"<?php ".to_vec();
+    code.extend_from_slice(src);
+    code.push(b';');
+    let tokens = crate::lexer::lex(&code).map_err(|e| ParseError { msg: e.msg, line: e.line })?;
+    let mut p = Parser::new(tokens);
+    let e = p.expr()?;
+    if !p.at(&Tok::Semicolon) {
+        return p.unexpected();
+    }
+    Ok(e)
+}
+
 /// Parses a script. Names are resolved against the namespace and imports here,
 /// as php-src does while compiling; the statements of braced namespaces are
 /// flattened into the top level
@@ -1611,13 +1625,30 @@ impl Parser {
         let mut args = Vec::new();
         while !self.eat(&Tok::Op(")")) {
             let spread = self.eat(&Tok::Op("..."));
-            if !spread && args.last().is_some_and(|a: &Arg| a.spread) {
-                return Err(ParseError {
-                    msg: "Cannot use positional argument after argument unpacking".into(),
-                    line: self.line(),
-                });
+            // `name: value`; any identifier works as a name, reserved words included
+            let name = match (self.peek(), self.peek_at(1)) {
+                (Tok::Ident(n), Tok::Op(":")) if !spread && !n.contains('\\') => {
+                    let n = n.clone();
+                    self.next();
+                    self.next();
+                    Some(n)
+                }
+                _ => None,
+            };
+            let fail = |p: &Self, msg: &str| Err(ParseError { msg: msg.into(), line: p.line() });
+            let named_before = args.iter().any(|a: &Arg| a.name.is_some());
+            if spread && named_before {
+                return fail(self, "Cannot use argument unpacking after named arguments");
             }
-            args.push(Arg { value: self.expr()?, spread });
+            if !spread && name.is_none() {
+                if args.last().is_some_and(|a: &Arg| a.spread) {
+                    return fail(self, "Cannot use positional argument after argument unpacking");
+                }
+                if named_before {
+                    return fail(self, "Cannot use positional argument after named argument");
+                }
+            }
+            args.push(Arg { value: self.expr()?, spread, name });
             if !self.eat(&Tok::Op(",")) {
                 self.expect(Tok::Op(")"))?;
                 break;
@@ -1852,7 +1883,7 @@ impl Parser {
             }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("print") => {
                 self.next();
-                ExprKind::Call("print".into(), vec![Arg { value: self.expr_bp(P_ASSIGN)?, spread: false }])
+                ExprKind::Call("print".into(), vec![Arg { value: self.expr_bp(P_ASSIGN)?, spread: false, name: None }])
             }
             _ => return self.postfix_expr(),
         };
