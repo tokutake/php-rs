@@ -1,0 +1,26 @@
+<?php
+echo "-- padding and case\n";
+var_dump(str_pad("5", 3, "0", STR_PAD_LEFT), str_pad("abc", 10, "-=", STR_PAD_BOTH), str_pad("abc", 8, "xy"), str_pad("toolong", 3));
+var_dump(ucwords("hello world-foo bar_baz"), ucwords("hello|world", "|"), lcfirst("ABC"), ucfirst("élan"));
+var_dump(wordwrap("The quick brown fox sat over the lazy dog", 15, "\n", true), wordwrap("A very long woooooooooooord.", 8, "\n", true), wordwrap("A very long woooooooooooord.", 8), wordwrap("short", 10));
+echo "-- replace\n";
+var_dump(str_replace("o", "0", "foo boo"), str_replace(["a", "b"], ["b", "c"], "ab"), str_replace(["a", "b"], "x", ["ab", "ba", 5]), str_replace("", "x", "abc"));
+var_dump(str_replace("l", "L", "hello world", $count), $count);
+var_dump(str_ireplace("HELLO", "bye", "Hello hello"), substr_replace("Hello", "J", 0, 1), substr_replace("Hello", "!!", -1, 0), substr_replace("abc", "X", 1));
+var_dump(strtr("Hi all", "ai", "eo"), strtr("Hi all, I said", ["Hi" => "Hello", "said" => "say", "a" => "A"]));
+var_dump(nl2br("a\nb\r\nc"), htmlspecialchars("<a href='x'>T&amp;C \"q\"</a>"), htmlspecialchars("a & b", ENT_NOQUOTES), addslashes("O'Re\"il\\ly"), stripslashes("O\\'Re\\\\il"));
+echo "-- search\n";
+var_dump(strstr("user@example.com", "@"), strstr("user@example.com", "@", true), stristr("HayStack", "st"), strrchr("a/b/c", "/"), strstr("abc", "z"));
+var_dump(stripos("ABCabc", "c"), strrpos("hello hello", "llo"), strripos("Hello HELLO", "hello"), strrpos("abc", "c", -2), strpos("abc", "d"));
+var_dump(substr_count("hello hello hello", "ll"), substr_count("aaa", "aa"), strpbrk("This is a test", "st"), strspn("42 apples", "0123456789"), strcspn("abcd", "cd"));
+echo "-- compare\n";
+var_dump(strcmp("a", "b"), strcmp("b", "a"), strcmp("a", "a"), strcmp("abc", "ab"), strcasecmp("HELLO", "hello"), strncmp("abcd", "abef", 2), strncasecmp("ABcd", "abCE", 3));
+var_dump(strnatcmp("img12", "img10"), strnatcmp("img2", "img10"), strnatcasecmp("IMG2", "img10"), strcmp("", "a"));
+echo "-- split and join\n";
+var_dump(str_split("abcdef", 4), str_split("abc"), chunk_split("abcdefg", 3, "|"), str_word_count("Hello fri3nd, you're looking good today!"));
+var_dump(implode(",", str_split("12345", 2)), strrev("abc"), str_repeat("ab", 3), similar_text("World", "Word"), levenshtein("kitten", "sitting"));
+echo "-- chars\n";
+var_dump(chr(65), chr(321), ord("A"), ord(""), bin2hex("abc"), hex2bin("616263"), dechex(255), hexdec("ff"), crc32("The quick brown fox jumped over the lazy dog."));
+var_dump(trim("  x  "), rtrim("x\n"), trim("--x--", "-"), trim("abcxcba", "a..c"), ltrim("0012", "0"));
+var_dump(lcfirst(""), ucfirst(""), nl2br(""), str_pad("", 3, "*"), strtolower("ÄBC"), strtoupper("abc"));
+var_dump(str_word_count("a b c", 1), ucwords(""), substr("abc", 1, 1), strlen("héllo"), number_format(1234567.891), number_format(1234567.891, 2), number_format(1234567.891, 2, ',', '.'), number_format(0.5), number_format(-1234.567, 1), number_format(1.005, 2));

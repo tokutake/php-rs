@@ -46,9 +46,13 @@ Early stage. Implemented so far:
 - Traits (`insteadof`/`as` adaptations, static and abstract members, traits using traits)
 - Enums: pure and backed, `cases()`/`from()`/`tryFrom()`, methods, constants, interfaces
 - Warnings, deprecations and uncaught errors in PHP's format, with line numbers and stack traces
-- A small set of built-in functions (`count`, `implode`, `explode`, `usort`, `array_map`, ...)
+- Built-in functions: type checks and conversions (`is_*`, `intval`, `var_export`, ...),
+  strings (`sprintf`/`printf` family, `str_replace`, `str_pad`, `wordwrap`, `strnatcmp`, ...),
+  math (`round`, `max`, `number_format`, base conversion, ...), arrays (`array_slice`,
+  `array_splice`, `array_column`, `array_unique`, the sort functions with flags,
+  `array_walk`, `compact`/`extract`, ...), and the `@` operator
 
-Not yet: most of the standard library. Performance is well behind php-src (roughly 6-10x slower).
+Not yet: regular expressions, JSON, dates, files and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage
 

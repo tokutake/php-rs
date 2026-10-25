@@ -1,0 +1,26 @@
+string(122) "[][     ][42   ][00042][+0042][42   ][003.1][2.500   ][********hi][left      ][   ab][18446744073709551615][A][%][255 255]"
+Ann is 30 years and 99.5%
+1010 100 ff FF 1.234568e+4 1.230000E-4 1.500e+0 1.234e-5 1.0E+20 100000 1.0e+6 0.3
+0 2 0.2 1.00 0.333333 -1.500000 3.1415926536 0.100000000000000
+12 3 1 0 1  1
+   ab|ab   |000ab| -2.2|1.50   |-001.50|+0.0|+0|-3
+a b a 0000000042|42xxxxxxxx
+   42|7   |3.14
+2024-03-07 a=b
+0.000000e+0 1e+3 -1.234500E-5
+0.0001234 1.23457e+8 -1.5e-10 1.0E-5 3.14 0.3333333333
+INF -INF NaN|NaN|INF   |
+
+Warning: Array to string conversion in std_sprintf.php on line 14
+Array
+
+Notice: sprintf(): Requested precision of 60 digits was truncated to PHP maximum of 53 digits in std_sprintf.php on line 15
+1.00000000000000000000000000000000000000000000000000000
+1-2
+int(4)
+ValueError: Missing format specifier at end of string
+ValueError: Unknown format specifier "y"
+ArgumentCountError: 4 arguments are required, 2 given
+3 arguments are required, 2 given
+The arguments array must contain 2 items, 1 given
+Argument number specifier must be greater than zero and less than 2147483647

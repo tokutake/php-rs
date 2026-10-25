@@ -1,0 +1,135 @@
+-- padding and case
+string(3) "005"
+string(10) "-=-abc-=-="
+string(8) "abcxyxyx"
+string(7) "toolong"
+string(23) "Hello World-foo Bar_baz"
+string(11) "Hello|World"
+string(3) "aBC"
+string(5) "élan"
+string(41) "The quick brown
+fox sat over
+the lazy dog"
+string(29) "A very
+long
+wooooooo
+ooooord."
+string(28) "A very
+long
+woooooooooooord."
+string(5) "short"
+-- replace
+string(7) "f00 b00"
+string(2) "cc"
+array(3) {
+  [0]=>
+  string(2) "xx"
+  [1]=>
+  string(2) "xx"
+  [2]=>
+  string(1) "5"
+}
+string(3) "abc"
+string(11) "heLLo worLd"
+int(3)
+string(7) "bye bye"
+string(5) "Jello"
+string(7) "Hell!!o"
+string(2) "aX"
+string(6) "Ho ell"
+string(16) "Hello All, I say"
+string(18) "a<br />
+b<br />
+c"
+string(63) "&lt;a href=&#039;x&#039;&gt;T&amp;amp;C &quot;q&quot;&lt;/a&gt;"
+string(9) "a &amp; b"
+string(13) "O\'Re\"il\\ly"
+string(7) "O'Re\il"
+-- search
+string(12) "@example.com"
+string(4) "user"
+string(5) "Stack"
+string(2) "/c"
+bool(false)
+int(2)
+int(8)
+int(6)
+bool(false)
+bool(false)
+int(3)
+int(1)
+string(11) "s is a test"
+int(2)
+int(2)
+-- compare
+int(-1)
+int(1)
+int(0)
+int(1)
+int(0)
+int(0)
+int(0)
+int(1)
+int(-1)
+int(-1)
+int(-1)
+-- split and join
+array(2) {
+  [0]=>
+  string(4) "abcd"
+  [1]=>
+  string(2) "ef"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+string(10) "abc|def|g|"
+int(7)
+string(7) "12,34,5"
+string(3) "cba"
+string(6) "ababab"
+int(4)
+int(3)
+-- chars
+string(1) "A"
+string(1) "A"
+int(65)
+int(0)
+string(6) "616263"
+string(3) "abc"
+string(2) "ff"
+int(255)
+int(2191738434)
+string(1) "x"
+string(1) "x"
+string(1) "x"
+string(1) "x"
+string(2) "12"
+string(0) ""
+string(0) ""
+string(0) ""
+string(3) "***"
+string(4) "Äbc"
+string(3) "ABC"
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+string(0) ""
+string(1) "b"
+int(6)
+string(9) "1,234,568"
+string(12) "1,234,567.89"
+string(12) "1.234.567,89"
+string(1) "1"
+string(8) "-1,234.6"
+string(4) "1.01"

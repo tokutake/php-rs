@@ -1802,7 +1802,7 @@ impl Parser {
             }
             Tok::Op("@") => {
                 self.next();
-                return self.expr_bp(P_UNARY);
+                ExprKind::Silence(Box::new(self.expr_bp(P_UNARY)?))
             }
             Tok::Op(op @ ("++" | "--")) => {
                 self.next();
@@ -2060,7 +2060,11 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
             free_vars(b, out);
         }
         ExprKind::IncDec { target, .. } => free_vars(target, out),
-        ExprKind::Unary(_, x) | ExprKind::Empty(x) | ExprKind::Throw(x) | ExprKind::Clone(x) => free_vars(x, out),
+        ExprKind::Unary(_, x)
+        | ExprKind::Empty(x)
+        | ExprKind::Throw(x)
+        | ExprKind::Clone(x)
+        | ExprKind::Silence(x) => free_vars(x, out),
         ExprKind::InstanceOf(x, class) => {
             free_vars(x, out);
             class_vars(class, out);

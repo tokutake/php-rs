@@ -1132,6 +1132,7 @@ impl<W: Write> Interp<W> {
                 };
                 Value::Bool(self.is_instance_of(&o.class, &name))
             }
+            ExprKind::Silence(x) => diag::silenced(|| self.expr(x))?,
             ExprKind::Clone(x) => {
                 let v = self.expr(x)?;
                 self.clone_value(v)?
@@ -1478,7 +1479,7 @@ impl<W: Write> Interp<W> {
         }
 
         // Built-ins that take their first argument by reference
-        if builtins::BY_REF.contains(&lname.as_str()) || matches!(lname.as_str(), "usort" | "uasort" | "uksort") {
+        if builtins::is_by_ref(&lname) || matches!(lname.as_str(), "usort" | "uasort" | "uksort" | "array_walk") {
             let Some((first, rest)) = args.split_first() else {
                 return Err(builtins::arg_count(name, 1, 0));
             };
@@ -1493,7 +1494,34 @@ impl<W: Write> Interp<W> {
                 if lname.starts_with('u') {
                     return this.user_sort(&lname, &path, vals, line);
                 }
+                if lname == "array_walk" {
+                    return this.array_walk(&path, vals, line);
+                }
                 this.with_place(&path, false, true, |place| builtins::call_by_ref(&lname, place, vals))
+            });
+        }
+
+        // Built-ins with an output parameter after the first
+        if let Some((pos, param)) = builtins::out_param(&lname)
+            && args.len() > pos
+            && !args.iter().any(|a| a.spread)
+        {
+            if !args[pos].value.is_lvalue() {
+                return Err(Fatal::error(format!(
+                    "{lname}(): Argument #{} (${param}) could not be passed by reference",
+                    pos + 1
+                )));
+            }
+            let mut vals = Vec::with_capacity(args.len());
+            for (i, a) in args.iter().enumerate() {
+                vals.push(if i == pos { Value::Null } else { self.expr(&a.value)? });
+            }
+            let path = self.path(&args[pos].value)?;
+            let shown = vals.clone();
+            return self.internal_call(lname.clone(), None, shown, line, |this| {
+                let (v, out) = this.call_with_out(&lname, vals)?;
+                this.with_place(&path, false, true, |slot| set_slot(slot, out))?;
+                Ok(v)
             });
         }
 
@@ -1502,6 +1530,28 @@ impl<W: Write> Interp<W> {
             return self.call_builtin(name, &lname, vals, line);
         }
         self.internal_call(lname.clone(), None, vals.clone(), line, |this| this.call_builtin(name, &lname, vals, line))
+    }
+
+    /// A built-in with an output parameter: its result and the value for the parameter
+    fn call_with_out(&mut self, lname: &str, vals: Vec<Value>) -> EResult<(Value, Value)> {
+        let mut vals = vals.into_iter();
+        let mut next = || vals.next().unwrap_or(Value::Null);
+        match lname {
+            "str_replace" | "str_ireplace" => {
+                let (search, replace, subject) = (next(), next(), next());
+                let (v, count) = builtins::str_replace(self, lname, search, replace, subject)?;
+                Ok((v, Value::Int(count)))
+            }
+            _ => {
+                let (a, b) = (next(), next());
+                let a = builtins::arg_str(self, lname, 1, "string1", &a)?;
+                let b = builtins::arg_str(self, lname, 2, "string2", &b)?;
+                let sim = builtins::similar_text(&a, &b);
+                let total = a.len() + b.len();
+                let percent = if total == 0 { 0.0 } else { sim as f64 * 2.0 * 100.0 / total as f64 };
+                Ok((Value::Int(sim as i64), Value::Float(percent)))
+            }
+        }
     }
 
     /// Runs a built-in as php-src's internal call frame: an error the built-in
@@ -1542,6 +1592,33 @@ impl<W: Write> Interp<W> {
                     builtins::var_dump(&mut s, v, 1);
                     self.write(&s)?;
                 }
+                Ok(Value::Null)
+            }
+            "printf" | "vprintf" => {
+                let s = if lname == "printf" {
+                    builtins::sprintf(self, lname, vals)?
+                } else {
+                    builtins::vsprintf(self, name, lname, vals)?
+                };
+                self.write(&s)?;
+                Ok(Value::Int(s.len() as i64))
+            }
+            "var_export" => {
+                let [v, ret] = <[Value; 2]>::try_from({
+                    let mut v = vals;
+                    if v.is_empty() || v.len() > 2 {
+                        return Err(builtins::arg_count(lname, 1, v.len()));
+                    }
+                    v.resize(2, Value::Bool(false));
+                    v
+                })
+                .unwrap();
+                let mut s = Vec::new();
+                builtins::var_export(&mut s, &v, 1);
+                if ret.to_bool() {
+                    return Ok(Value::str(s));
+                }
+                self.write(&s)?;
                 Ok(Value::Null)
             }
             "print_r" => {
@@ -1614,6 +1691,93 @@ impl<W: Write> Interp<W> {
             }
             "array_map" => self.array_map(vals, line),
             "iterator_to_array" | "iterator_count" => self.iterator_builtin(lname, vals),
+            "array_reduce" => {
+                if vals.len() < 2 || vals.len() > 3 {
+                    return Err(builtins::arg_count(lname, 2, vals.len()));
+                }
+                let mut vals = vals.into_iter();
+                let arr = vals.next().unwrap();
+                let Value::Array(arr) = arr else {
+                    return Err(Fatal::type_error(format!(
+                        "array_reduce(): Argument #1 ($array) must be of type array, {} given",
+                        arr.value_name()
+                    )));
+                };
+                let cb = self.callback(lname, 2, &vals.next().unwrap())?;
+                let mut carry = vals.next().unwrap_or(Value::Null);
+                for v in arr.values() {
+                    carry = self.call_value(&cb, vec![carry, v.copy_out()], line)?;
+                }
+                Ok(carry)
+            }
+            "compact" => {
+                let mut out = PhpArray::new();
+                let mut names = vals;
+                let mut depth = 0;
+                while !names.is_empty() && depth < 64 {
+                    let mut nested = Vec::new();
+                    for n in names {
+                        match n {
+                            Value::Array(a) => nested.extend(a.values().map(Value::copy_out)),
+                            Value::Str(s) => {
+                                let name = String::from_utf8_lossy(&s).into_owned();
+                                let found = self.frame().vars.get(&name).map(Value::copy_out);
+                                let this = self.ctx().this.clone().filter(|_| name == "this");
+                                match found.or(this.map(Value::Object)) {
+                                    Some(v) => out.insert(Key::Str(s.to_vec().into()), v),
+                                    None => diag::warning(format!("compact(): Undefined variable ${name}")),
+                                }
+                            }
+                            other => diag::warning(format!(
+                                "compact(): Argument #{} must be string or array of strings, {} given",
+                                1,
+                                other.type_name()
+                            )),
+                        }
+                    }
+                    names = nested;
+                    depth += 1;
+                }
+                Ok(Value::Array(Rc::new(out)))
+            }
+            "extract" => {
+                if vals.is_empty() || vals.len() > 3 {
+                    return Err(builtins::arg_count(lname, 1, vals.len()));
+                }
+                let mut vals = vals.into_iter();
+                let arr = vals.next().unwrap();
+                let Value::Array(arr) = arr else {
+                    return Err(Fatal::type_error(format!(
+                        "extract(): Argument #1 ($array) must be of type array, {} given",
+                        arr.value_name()
+                    )));
+                };
+                let flags = vals.next().map_or(0, |f| f.to_int());
+                let prefix = vals.next().map(|p| String::from_utf8_lossy(&p.to_bytes()).into_owned()).unwrap_or_default();
+                let valid = |n: &str| {
+                    let mut chars = n.chars();
+                    chars.next().is_some_and(|c| c == '_' || c.is_ascii_alphabetic() || !c.is_ascii())
+                        && chars.all(|c| c == '_' || c.is_ascii_alphanumeric() || !c.is_ascii())
+                };
+                let mut count = 0;
+                for (k, v) in arr.iter() {
+                    let Key::Str(s) = k else { continue };
+                    let mut name = String::from_utf8_lossy(s).into_owned();
+                    let exists = self.frame().vars.contains_key(&name);
+                    match flags & 0xff {
+                        1 if exists => continue,
+                        2 if exists => name = format!("{prefix}_{name}"),
+                        3 => name = format!("{prefix}_{name}"),
+                        _ => {}
+                    }
+                    if !valid(&name) || name == "this" {
+                        continue;
+                    }
+                    self.frame().vars.insert(name, v.copy_out());
+                    count += 1;
+                }
+                Ok(Value::Int(count))
+            }
             "is_iterable" => {
                 let [v] = <[Value; 1]>::try_from(vals).map_err(|v| builtins::arg_count(lname, 1, v.len()))?;
                 Ok(Value::Bool(self.is_traversable(&v)))
@@ -1927,6 +2091,10 @@ impl<W: Write> Interp<W> {
     }
 
     fn call_value(&mut self, f: &Callable, args: Vec<Value>, line: u32) -> EResult<Value> {
+        match f {
+            Callable::Builtin(_) => {}
+            _ => return self.call_value_args(f, args.into_iter().map(ArgVal::Val).collect(), line),
+        }
         let vals = || args.clone().into_iter().map(ArgVal::Val).collect::<Vec<_>>();
         let v = match f {
             Callable::User(f) => {
@@ -1938,7 +2106,7 @@ impl<W: Write> Interp<W> {
                 self.invoke_closure(c, vals(), line)?
             }
             Callable::Method { this, method, class } => self.call_method(this.clone(), method, vals(), line, class.clone())?,
-            Callable::Builtin(name) if builtins::BY_REF.contains(&name.as_str()) => {
+            Callable::Builtin(name) if builtins::is_by_ref(name) => {
                 // A callback cannot pass a variable by reference, so this works on a copy
                 let mut args = args.clone().into_iter();
                 let mut target = args.next().unwrap_or(Value::Null);
@@ -1954,6 +2122,84 @@ impl<W: Write> Interp<W> {
     }
 
     /// `$f(...)`: closures, invokable objects, and strings or arrays naming a function
+    /// Calls a PHP callable with arguments that may be references
+    fn call_value_args(&mut self, f: &Callable, args: Vec<ArgVal>, line: u32) -> EResult<Value> {
+        let v = match f {
+            Callable::User(f) => {
+                let ctx = CallCtx { name: f.name.clone(), trace_fn: f.name.clone(), ..CallCtx::default() };
+                self.invoke_with(f, ctx, Vec::new(), args, line)?
+            }
+            Callable::Closure(o) => {
+                let c = o.closure().expect("checked when the callable was resolved");
+                self.invoke_closure(c, args, line)?
+            }
+            Callable::Method { this, method, class } => self.call_method(this.clone(), method, args, line, class.clone())?,
+            Callable::Builtin(_) => {
+                let vals = args
+                    .into_iter()
+                    .map(|a| match a {
+                        ArgVal::Val(v) => v,
+                        ArgVal::Ref(r) => value::with_deref(&r, Value::clone),
+                    })
+                    .collect();
+                return self.call_value(f, vals, line);
+            }
+        };
+        diag::set_line(line);
+        Ok(v)
+    }
+
+    /// Whether a callable takes its `n`th parameter by reference
+    fn param_by_ref(f: &Callable, n: usize) -> bool {
+        let decl = match f {
+            Callable::User(f) => Some(f.clone()),
+            Callable::Closure(o) => o.closure().map(|c| c.func.clone()),
+            Callable::Method { method, .. } => match &method.body {
+                object::MethodBody::User(f) => Some(f.clone()),
+                object::MethodBody::Native(_) => None,
+            },
+            Callable::Builtin(_) => None,
+        };
+        decl.is_some_and(|f| f.params.get(n).is_some_and(|p| p.by_ref))
+    }
+
+    fn array_walk(&mut self, path: &Path<'_>, vals: Vec<Value>, line: u32) -> EResult<Value> {
+        let n = vals.len() + 1;
+        let mut vals = vals.into_iter();
+        let Some(cb) = vals.next() else { return Err(builtins::arg_count("array_walk", 2, n)) };
+        let extra = vals.next();
+        let cb = self.callback("array_walk", 2, &cb)?;
+        let by_ref = Self::param_by_ref(&cb, 0);
+        let current = self.with_place(path, false, true, |slot| Ok(slot.clone()))?;
+        let Value::Array(arr) = current else {
+            return Err(Fatal::type_error(format!(
+                "array_walk(): Argument #1 ($array) must be of type array, {} given",
+                current.value_name()
+            )));
+        };
+        let keys: Vec<Key> = arr.keys().cloned().collect();
+        drop(arr);
+        for k in keys {
+            let mut elem = path.clone();
+            elem.dims.push(Some(k.to_value()));
+            // Elements removed by the callback are skipped
+            let value = self.with_place(path, false, true, |slot| {
+                Ok(match slot {
+                    Value::Array(a) => a.get(&k).map(Value::copy_out),
+                    _ => None,
+                })
+            })?;
+            let Some(value) = value else { continue };
+            let first = if by_ref { ArgVal::Ref(self.make_ref(&elem)?) } else { ArgVal::Val(value) };
+            let mut args = vec![first, ArgVal::Val(k.to_value())];
+            if let Some(e) = &extra {
+                args.push(ArgVal::Val(e.clone()));
+            }
+            self.call_value_args(&cb, args, line)?;
+        }
+        Ok(Value::Bool(true))
+    }
+
     fn call_value_expr(&mut self, f: Value, args: &[Arg], line: u32) -> EResult<Value> {
         match &f {
             Value::Object(o) => {
@@ -2726,6 +2972,6 @@ fn constant(name: &str) -> Option<Value> {
         "E_DEPRECATED" => Value::Int(8192),
         "E_USER_DEPRECATED" => Value::Int(16384),
         "E_ALL" => Value::Int(32767),
-        _ => return None,
+        _ => return builtins::constant(name),
     })
 }

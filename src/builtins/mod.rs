@@ -1,5 +1,31 @@
 //! Built-in functions.
 
+mod array;
+mod format;
+mod math;
+mod string;
+mod types;
+
+pub use string::{similar_text, str_replace};
+
+/// Built-ins with a by-reference output parameter other than the first: its
+/// position and name
+pub fn out_param(lname: &str) -> Option<(usize, &'static str)> {
+    match lname {
+        "str_replace" | "str_ireplace" => Some((3, "count")),
+        "similar_text" => Some((2, "percent")),
+        _ => None,
+    }
+}
+pub use types::var_export;
+
+/// Constants defined by built-in function groups
+pub fn constant(name: &str) -> Option<Value> {
+    string::constant(name).or_else(|| math::constant(name)).or_else(|| array::constant(name))
+}
+
+pub use format::{sprintf, vsprintf};
+
 use std::cmp::Ordering;
 use std::rc::Rc;
 
@@ -8,7 +34,7 @@ use crate::diag;
 use crate::object::{unmangle, Internal, Object, Visibility};
 use crate::interp::{strict_types, to_key, EResult, Fatal};
 use crate::value::{
-    float_fits_int, float_to_int_implicit, format_float_repr, loose_cmp, parse_numeric, with_deref, Num, Numeric, Value,
+    float_fits_int, float_to_int_implicit, format_float_repr, parse_numeric, with_deref, Num, Numeric, Value,
 };
 
 /// What built-ins need from the interpreter: converting objects to strings runs
@@ -18,7 +44,11 @@ pub trait Runtime {
 }
 
 /// Built-ins whose first parameter is by reference
-pub const BY_REF: &[&str] = &["sort", "rsort", "array_push", "array_pop"];
+const BY_REF_HERE: &[&str] = &["sort", "rsort", "array_push", "array_pop"];
+
+pub fn is_by_ref(lname: &str) -> bool {
+    BY_REF_HERE.contains(&lname) || array::BY_REF.contains(&lname)
+}
 
 pub const ARRAY_FILTER_USE_BOTH: i64 = 1;
 pub const ARRAY_FILTER_USE_KEY: i64 = 2;
@@ -35,15 +65,57 @@ const NAMES: &[&str] = &[
     "is_subclass_of", "spl_object_id", "spl_object_hash", "strtoupper", "strtolower", "ucfirst", "lcfirst",
     "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
     "substr", "define", "defined", "constant", "trait_exists", "class_uses", "enum_exists",
-    "iterator_to_array", "iterator_count", "is_iterable",
+    "iterator_to_array", "iterator_count", "is_iterable", "var_export", "printf", "vprintf", "array_walk",
+    "array_reduce", "compact", "extract",
 ];
 
+type BuiltinFn = fn(&mut dyn Runtime, &str, &str, Vec<Value>) -> Option<EResult<Value>>;
+
+/// Groups of built-ins in their own modules, with the names each implements
+const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
+    (types::NAMES, types::call),
+    (string::NAMES, string::call),
+    (math::NAMES, math::call),
+    (format::NAMES, format::call),
+    (array::NAMES, array::call),
+];
+
+pub fn next_occupied() -> Fatal {
+    Fatal::error("Cannot add element to the array as the next element is already occupied")
+}
+
+/// For conversions inside by-reference built-ins, which cannot call back into
+/// PHP code (objects convert without __toString)
+struct NoRuntime;
+
+impl Runtime for NoRuntime {
+    fn stringify(&mut self, v: &Value) -> EResult<Vec<u8>> {
+        Ok(v.to_bytes())
+    }
+}
+
 pub fn exists(lname: &str) -> bool {
-    NAMES.contains(&lname)
+    NAMES.contains(&lname) || SUBMODULES.iter().any(|(names, _)| names.contains(&lname))
+}
+
+fn undefined_function(name: &str) -> Fatal {
+    Fatal::error(format!("Call to undefined function {name}()"))
 }
 
 /// PHP refuses ranges with more elements than this (HT_MAX_SIZE on 64-bit)
 const MAX_ARRAY_SIZE: u64 = 1 << 30;
+
+fn count_recursive(a: &PhpArray, depth: usize) -> i64 {
+    let mut n = a.len() as i64;
+    if depth < 256 {
+        for v in a.values() {
+            if let Value::Array(inner) = v.copy_out() {
+                n += count_recursive(&inner, depth + 1);
+            }
+        }
+    }
+    n
+}
 
 pub fn arg_count(name: &str, min: usize, given: usize) -> Fatal {
     Fatal::new(
@@ -176,6 +248,11 @@ fn list(values: impl IntoIterator<Item = Value>) -> Value {
 }
 
 pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
+    for (names, f) in SUBMODULES {
+        if names.contains(&lname) {
+            return f(rt, name, lname, vals).unwrap_or_else(|| Err(undefined_function(name)));
+        }
+    }
     match lname {
         "strtoupper" | "strtolower" | "ucfirst" | "lcfirst" | "strrev" => {
             let [s] = args::<1, 1>(name, vals)?;
@@ -197,7 +274,8 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
                 Some(c) => arg_str(rt, lname, 2, "characters", &c)?,
                 None => b" \n\r\t\x0b\0".to_vec(),
             };
-            let strip = |b: &u8| chars.contains(b);
+            let mask = string::char_mask(lname, &chars);
+            let strip = |b: &u8| mask[*b as usize];
             let start = if lname == "rtrim" || lname == "chop" { 0 } else { s.iter().position(|b| !strip(b)).unwrap_or(s.len()) };
             let end = if lname == "ltrim" { s.len() } else { s.iter().rposition(|b| !strip(b)).map_or(start, |i| i + 1) };
             Ok(Value::str(s[start..end.max(start)].to_vec()))
@@ -273,8 +351,16 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
                 .ok_or_else(|| Fatal::new("ArithmeticError", "Division of PHP_INT_MIN by -1 is not an integer"))
         }
         "count" | "sizeof" => {
-            let [v, _mode] = args::<1, 2>(name, vals)?;
+            let [v, mode] = args::<1, 2>(name, vals)?;
+            let mode = match mode {
+                Some(m) => arg_int(lname, 2, "mode", &m)?,
+                None => 0,
+            };
+            if mode != 0 && mode != 1 {
+                return Err(Fatal::value_error(format!("{lname}(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE")));
+            }
             match v.unwrap() {
+                Value::Array(a) if mode == 1 => Ok(Value::Int(count_recursive(&a, 0))),
                 Value::Array(a) => Ok(Value::Int(a.len() as i64)),
                 other => Err(Fatal::type_error(format!(
                     "{lname}(): Argument #1 ($value) must be of type Countable|array, {} given",
@@ -357,9 +443,15 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
             Ok(list(parts.into_iter().map(Value::str)))
         }
         "array_keys" => {
-            let [a] = args::<1, 1>(name, vals)?;
+            let [a, filter, strict] = args::<1, 3>(name, vals)?;
             let arr = expect_array(lname, 1, "array", &a.unwrap())?;
-            Ok(list(arr.keys().map(Key::to_value)))
+            let Some(filter) = filter else { return Ok(list(arr.keys().map(Key::to_value))) };
+            let strict = match strict {
+                Some(s) => arg_bool(lname, 3, "strict", &s)?,
+                None => false,
+            };
+            let matches = |v: &Value| if strict { v.strict_eq(&filter) } else { v.loose_eq(&filter) };
+            Ok(list(arr.iter().filter(|(_, v)| matches(v)).map(|(k, _)| k.to_value())))
         }
         "array_values" => {
             let [a] = args::<1, 1>(name, vals)?;
@@ -438,7 +530,7 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
             let [start, end, step] = args::<2, 3>(name, vals)?;
             range(start.unwrap(), end.unwrap(), step.unwrap_or(Value::Int(1)))
         }
-        _ => Err(Fatal::error(format!("Call to undefined function {name}()"))),
+        _ => Err(undefined_function(name)),
     }
 }
 
@@ -450,17 +542,8 @@ pub fn call_by_ref(lname: &str, target: &mut Value, vals: Vec<Value>) -> EResult
         )));
     };
     match lname {
-        "sort" | "rsort" => {
-            let mut values: Vec<Value> = arr.values().cloned().collect();
-            let reverse = lname == "rsort";
-            // Uncomparable pairs count as "greater", as zend_compare reports 1 for them
-            merge_sort(&mut values, |a, b| {
-                let ord = loose_cmp(a, b).unwrap_or(Ordering::Greater);
-                if reverse { ord.reverse() } else { ord }
-            });
-            *arr = Rc::new(PhpArray::from_values(values));
-            Ok(Value::Bool(true))
-        }
+        "sort" | "rsort" => array::call_by_ref(&mut NoRuntime, lname, arr, vals),
+        l if array::BY_REF.contains(&l) => array::call_by_ref(&mut NoRuntime, lname, arr, vals),
         "array_push" => {
             let arr = Rc::make_mut(arr);
             for v in vals {

@@ -1,0 +1,50 @@
+0: ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+1: ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
+2: ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0
+3: ValueError: str_split(): Argument #2 ($length) must be greater than 0
+4: ValueError: array_chunk(): Argument #2 ($length) must be greater than 0
+5: ValueError: array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements
+6: ValueError: array_fill(): Argument #2 ($count) must be greater than or equal to 0
+7: ValueError: max(): Argument #1 ($value) must contain at least one element
+8: ArgumentCountError: max() expects at least 1 argument, 0 given
+9: TypeError: max(): Argument #1 ($value) must be of type array, int given
+10: ValueError: round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)
+11: ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+12: ValueError: strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+13: ValueError: substr_count(): Argument #2 ($needle) cannot be empty
+int(0)
+15: ValueError: base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)
+16: ValueError: log(): Argument #2 ($base) must be greater than 0
+17: ValueError: Unknown format specifier "z"
+18: ArgumentCountError: 2 arguments are required, 1 given
+19: ArgumentCountError: 3 arguments are required, 2 given
+20: TypeError: str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string
+21: ValueError: strncmp(): Argument #3 ($length) must be greater than or equal to 0
+22: TypeError: array_slice(): Argument #1 ($array) must be of type array, string given
+23: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+24: TypeError: abs(): Argument #1 ($num) must be of type int|float, string given
+25: ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
+26: ValueError: chunk_split(): Argument #2 ($length) must be greater than 0
+27: ValueError: strpbrk(): Argument #2 ($characters) must be a non-empty string
+28: TypeError: array_walk(): Argument #1 ($array) must be of type array, null given
+
+Warning: hex2bin(): Hexadecimal input string must have an even length in std_errors.php on line 40
+
+Warning: hex2bin(): Input string must be hexadecimal string in std_errors.php on line 40
+
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored in std_errors.php on line 40
+
+Warning: array_flip(): Can only flip string and integer values, entry skipped in std_errors.php on line 40
+
+Warning: array_count_values(): Can only count string and integer values, entry skipped in std_errors.php on line 40
+
+Warning: compact(): Undefined variable $nope in std_errors.php on line 40
+bool(false)
+bool(false)
+int(1)
+array(0) {
+}
+array(0) {
+}
+array(0) {
+}

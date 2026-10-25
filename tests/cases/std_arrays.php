@@ -1,0 +1,77 @@
+<?php
+function show($label, $v) { echo $label, ": ", json_like($v), "\n"; }
+function json_like($v) {
+    if (is_array($v)) {
+        $parts = [];
+        foreach ($v as $k => $x) $parts[] = (is_int($k) ? $k : "'$k'") . "=>" . json_like($x);
+        return "[" . implode(", ", $parts) . "]";
+    }
+    return var_export($v, true);
+}
+$a = ['x' => 1, 'y' => 2, 3, 4, 'z' => 5];
+show("slice", array_slice($a, 1, 3));
+show("slice keep", array_slice($a, 1, 3, true));
+show("slice neg", array_slice([1, 2, 3, 4, 5], -2));
+show("slice neg len", array_slice([1, 2, 3, 4, 5], 1, -1));
+show("search", array_search(2, $a));
+show("search strict", array_search("2", $a, true));
+show("search none", array_search(9, $a));
+show("unique", array_unique([1, "1", 2, 2.0, 'a', 'A', 'a', 3]));
+show("unique keys", array_unique(['a' => 'x', 'b' => 'y', 'c' => 'x']));
+show("combine", array_combine(['a', 'b'], [1, 2]));
+show("fill", array_fill(5, 3, 'v'));
+show("fill neg", array_fill(-3, 3, 0));
+show("fill_keys", array_fill_keys(['a', 5, 'c'], 0));
+show("flip", array_flip(['a', 'b', 'a']));
+show("key_first", [array_key_first($a), array_key_last($a), array_key_first([])]);
+$rows = [['id' => 3, 'name' => 'c', 'g' => 'x'], ['id' => 1, 'name' => 'a', 'g' => 'y'], ['id' => 2, 'g' => 'x']];
+show("column", array_column($rows, 'name'));
+show("column idx", array_column($rows, 'name', 'id'));
+show("column rows", array_column($rows, null, 'id'));
+show("chunk", array_chunk([1, 2, 3, 4, 5], 2));
+show("chunk keys", array_chunk(['a' => 1, 'b' => 2, 'c' => 3], 2, true));
+show("pad", array_pad([1, 2], 4, 0));
+show("pad left", array_pad([1, 2], -4, 0));
+show("count_values", array_count_values(['a', 'b', 'a', 1, '1']));
+show("diff", array_diff([1, 2, 3, 4, "5"], [2, 4], [5]));
+show("diff_key", array_diff_key(['a' => 1, 'b' => 2, 'c' => 3], ['a' => 9]));
+show("diff_assoc", array_diff_assoc(['a' => 1, 'b' => 2, 0 => 3], ['a' => 1, 'b' => 3, 1 => 3]));
+show("intersect", array_intersect([1, 2, 3, 4], [2, 4, 6], [4, 2]));
+show("intersect_key", array_intersect_key(['a' => 1, 'b' => 2, 'c' => 3], ['a' => 0, 'c' => 0]));
+show("replace", array_replace([1, 2, 3], [1 => 'b'], [3 => 'd']));
+show("is_list", [array_is_list([1, 2]), array_is_list([1 => 1]), array_is_list([])]);
+show("merge_recursive", array_merge_recursive(['a' => [1], 'b' => 2], ['a' => [3], 'b' => 4]));
+show("range", range('a', 'e', 2));
+show("keys search", array_keys(['a' => 1, 'b' => 2, 'c' => 1], 1));
+show("values", array_values(array_filter([1, 0, 2, null, 3])));
+show("reverse", array_reverse(['a' => 1, 2, 3], true));
+show("walk", (function () { $arr = ['a' => 1, 'b' => 2]; array_walk($arr, function (&$v, $k, $p) { $v = "$p$k$v"; }, '>'); return $arr; })());
+show("reduce", array_reduce([1, 2, 3, 4], fn($c, $i) => $c + $i, 10));
+show("reduce empty", array_reduce([], fn($c, $i) => $c + $i));
+$name = "n"; $age = 3;
+show("compact", compact('name', ['age']));
+extract(['ex1' => 'one', 'ex2' => 'two']);
+show("extract", [$ex1, $ex2]);
+echo "-- by reference\n";
+$s = [3, 1, 2]; show("shift", [array_shift($s), $s]);
+$s = ['a' => 1, 5 => 2, 9 => 3]; array_shift($s); show("shift renumber", $s);
+$s = [1, 2]; show("unshift", [array_unshift($s, 'x', 'y'), $s]);
+$s = [1, 2, 3, 4, 5]; show("splice", [array_splice($s, 1, 2), $s]);
+$s = [1, 2, 3]; array_splice($s, 1, 0, ['a', 'b']); show("splice insert", $s);
+$s = [1, 2, 3, 4]; array_splice($s, -1, 1, 'z'); show("splice repl", $s);
+$s = ['b' => 2, 'a' => 1, 'c' => 3]; ksort($s); show("ksort", $s);
+krsort($s); show("krsort", $s);
+asort($s); show("asort", $s);
+arsort($s); show("arsort", $s);
+$s = ["10", 9, "9a", 1.5, true]; sort($s); show("sort mixed", $s);
+$s = ["b", "a", "C"]; sort($s, SORT_STRING); show("sort string", $s);
+$s = ["b", "a", "C"]; sort($s, SORT_STRING | SORT_FLAG_CASE); show("sort flag_case", $s);
+$s = ["img12", "img10", "img2"]; sort($s, SORT_NATURAL); show("sort natural", $s);
+$s = ["10", "9", "2"]; rsort($s, SORT_STRING); show("rsort string", $s);
+$s = ["x" => "10", "y" => "9"]; asort($s, SORT_NUMERIC); show("asort numeric", $s);
+show("sum/product", [array_sum([]), array_product(["2", 3.5])]);
+show("in_array", [in_array("1e1", ["10"]), in_array(0, ["a"]), in_array(null, [0], true)]);
+show("array_flip bad", @array_flip([1.5, true]));
+show("min/max arr", [min([3, 1, 2]), max(['a' => 1, 'b' => 5])]);
+show("list keys", array_keys([5 => 'a', 'k' => 'b']));
+show("count recursive", count([1, [2, 3]], COUNT_RECURSIVE));

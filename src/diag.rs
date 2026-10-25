@@ -9,6 +9,7 @@ use std::cell::{Cell, RefCell};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Level {
     Warning,
+    Notice,
     Deprecated,
 }
 
@@ -16,6 +17,7 @@ impl Level {
     pub fn label(self) -> &'static str {
         match self {
             Level::Warning => "Warning",
+            Level::Notice => "Notice",
             Level::Deprecated => "Deprecated",
         }
     }
@@ -31,6 +33,16 @@ pub struct Diag {
 thread_local! {
     static LINE: Cell<u32> = const { Cell::new(0) };
     static PENDING: RefCell<Vec<Diag>> = const { RefCell::new(Vec::new()) };
+    /// Nesting of `@` operators being evaluated
+    static SILENCED: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Runs `f` with diagnostics suppressed, as the `@` operator does
+pub fn silenced<T>(f: impl FnOnce() -> T) -> T {
+    SILENCED.with(|s| s.set(s.get() + 1));
+    let out = f();
+    SILENCED.with(|s| s.set(s.get() - 1));
+    out
 }
 
 pub fn set_line(line: u32) {
@@ -42,12 +54,19 @@ pub fn line() -> u32 {
 }
 
 fn push(level: Level, msg: String) {
+    if SILENCED.with(Cell::get) > 0 {
+        return;
+    }
     let line = line();
     PENDING.with(|p| p.borrow_mut().push(Diag { level, msg, line }));
 }
 
 pub fn warning(msg: impl Into<String>) {
     push(Level::Warning, msg.into());
+}
+
+pub fn notice(msg: impl Into<String>) {
+    push(Level::Notice, msg.into());
 }
 
 pub fn deprecated(msg: impl Into<String>) {

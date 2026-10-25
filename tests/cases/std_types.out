@@ -1,0 +1,110 @@
+integer  int:1 float:0 string:0 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:int
+integer  int:1 float:0 string:0 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:int
+integer  int:1 float:0 string:0 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:int
+double   int:0 float:1 string:0 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:float
+double   int:0 float:1 string:0 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:float
+double   int:0 float:1 string:0 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:float
+double   int:0 float:1 string:0 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:float
+string   int:0 float:0 string:1 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:string
+string   int:0 float:0 string:1 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:string
+string   int:0 float:0 string:1 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:string
+string   int:0 float:0 string:1 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:string
+string   int:0 float:0 string:1 bool:0 null:0 numeric:1 scalar:1 countable:0 debug:string
+string   int:0 float:0 string:1 bool:0 null:0 numeric:0 scalar:1 countable:0 debug:string
+string   int:0 float:0 string:1 bool:0 null:0 numeric:0 scalar:1 countable:0 debug:string
+string   int:0 float:0 string:1 bool:0 null:0 numeric:0 scalar:1 countable:0 debug:string
+NULL     int:0 float:0 string:0 bool:0 null:1 numeric:0 scalar:0 countable:0 debug:null
+boolean  int:0 float:0 string:0 bool:1 null:0 numeric:0 scalar:1 countable:0 debug:bool
+boolean  int:0 float:0 string:0 bool:1 null:0 numeric:0 scalar:1 countable:0 debug:bool
+array    int:0 float:0 string:0 bool:0 null:0 numeric:0 scalar:0 countable:1 debug:array
+array    int:0 float:0 string:0 bool:0 null:0 numeric:0 scalar:0 countable:1 debug:array
+object   int:0 float:0 string:0 bool:0 null:0 numeric:0 scalar:0 countable:0 debug:stdClass
+bool(true)
+bool(true)
+bool(true)
+-- intval
+'42' => 42
+'042' => 42
+'0x1A' => 0
+'0b11' => 0
+'1e3' => 1000
+'12abc' => 12
+' 7' => 7
+'abc' => 0
+3.99 => 3
+-3.99 => -3
+true => 1
+NULL => 0
+array (
+) => 0
+array (
+  0 => 0,
+) => 1
+int(34)
+int(26)
+int(26)
+int(10)
+int(5)
+int(35)
+int(255)
+float(1500)
+float(0)
+float(2.5)
+float(3)
+bool(false)
+bool(false)
+bool(true)
+string(1) "1"
+string(3) "0.3"
+string(1) "1"
+string(0) ""
+-- var_export
+1
+-1.5
+1.0
+0.30000000000000004
+1.0E+100
+-0.0
+'it\'s a \\ test'
+'nul' . "\0" . 'byte'
+NULL
+false
+array (
+)
+array (
+  0 => 1,
+  'a' => 
+  array (
+    0 => true,
+    1 => NULL,
+  ),
+  'b' => 
+  array (
+    'x' => 'y',
+  ),
+)
+\P::__set_state(array(
+   'a' => 1,
+   'b' => 
+  array (
+    0 => 2,
+  ),
+   'c' => 'three',
+))
+(object) array(
+   'x' => 1,
+   'list' => 
+  array (
+    0 => 1,
+    1 => 2,
+  ),
+)
+\Suit::Hearts
+array (
+  0 => 
+  \Suit::Hearts,
+)
+29
+INF
+NAN
+-9223372036854775807-1
