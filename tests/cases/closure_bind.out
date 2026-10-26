@@ -1,0 +1,63 @@
+
+Warning: Cannot bind an instance to a static closure in closure_bind.php on line 8
+NULL
+
+Warning: Cannot rebind scope of closure created from function in closure_bind.php on line 9
+NULL
+
+Warning: Cannot bind method P::m() to object of class stdClass in closure_bind.php on line 10
+NULL
+
+Warning: Cannot unbind $this of method in closure_bind.php on line 11
+NULL
+
+Warning: Cannot unbind $this of closure using $this in closure_bind.php on line 12
+NULL
+
+Warning: Cannot bind closure to scope of internal class stdClass in closure_bind.php on line 13
+NULL
+
+Warning: Class "Nope" not found in closure_bind.php on line 14
+NULL
+bool(true)
+Cannot access private property P::$secret
+s
+
+Warning: Undefined property: Q::$secret in closure_bind.php on line 16
+
+static secret
+ArgumentCountError: Closure::bind() expects at least 2 arguments, 0 given
+ArgumentCountError: Closure::bindTo() expects at least 1 argument, 0 given
+ArgumentCountError: Closure::call() expects at least 1 argument, 0 given
+TypeError: Closure::bindTo(): Argument #1 ($newThis) must be of type ?object, int given
+TypeError: Closure::bindTo(): Argument #2 ($newScope) must be of type object|string|null, array given
+TypeError: Closure::bind(): Argument #1 ($closure) must be of type Closure, int given
+TypeError: Closure::call(): Argument #1 ($newThis) must be of type object, int given
+array(3) {
+  [0]=>
+  string(1) "Q"
+  [1]=>
+  string(1) "P"
+  [2]=>
+  string(1) "Q"
+}
+int(2)
+
+Warning: Cannot bind closure to scope of internal class stdClass in closure_bind.php on line 39
+NULL
+
+Warning: Cannot bind closure to scope of internal class stdClass in closure_bind.php on line 41
+
+Warning: foreach() argument must be of type array|object, null given in closure_bind.php on line 41
+string(2) "iv"
+string(7) "no this"
+string(2) "iv"
+string(7) "no this"
+
+Warning: Cannot unbind $this of closure using $this in closure_bind.php on line 57
+NULL
+string(7) "no this"
+string(2) "iv"
+s
+s
+s

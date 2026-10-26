@@ -1,0 +1,139 @@
+-- without a buffer
+
+Notice: ob_get_flush(): Failed to delete and flush buffer. No buffer to delete or flush in output_buffering.php on line 5
+int(0)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+
+Notice: ob_end_clean(): Failed to delete buffer. No buffer to delete in output_buffering.php on line 6
+
+Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush in output_buffering.php on line 6
+
+Notice: ob_clean(): Failed to delete buffer. No buffer to delete in output_buffering.php on line 6
+
+Notice: ob_flush(): Failed to flush buffer. No buffer to flush in output_buffering.php on line 6
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+-- capturing and nesting
+string(5) "hello"
+string(8) "bint(2)
+"
+string(10) "abint(2)
+c"
+int(10)
+-- handlers
+X[5]Z[8]
+12345string(1) "6"
+<M(ARRAY
+(
+    [0] => WRAP
+    [1] => UPPER::__INVOKE
+    [2] => UPPER::M
+    [3] => CLOSURE::__INVOKE
+)
+)>
+-- printing functions and diagnostics go to the buffer
+string(98) "p-5 printed bool(true)
+
+Warning: Undefined variable $undefined in output_buffering.php on line 59
+"
+STDOUT bypasses buffers
+string(21) "php://output does not"
+-- status and flags
+array (
+  0 => 
+  array (
+    'name' => 'default output handler',
+    'type' => 0,
+    'flags' => 112,
+    'level' => 0,
+    'chunk_size' => 0,
+    'buffer_size' => 16384,
+    'buffer_used' => 3,
+  ),
+  1 => 
+  array (
+    0 => 
+    array (
+      'name' => 'default output handler',
+      'type' => 0,
+      'flags' => 112,
+      'level' => 0,
+      'chunk_size' => 0,
+      'buffer_size' => 16384,
+      'buffer_used' => 3,
+    ),
+    1 => 
+    array (
+      'name' => 'Closure::__invoke',
+      'type' => 1,
+      'flags' => 113,
+      'level' => 1,
+      'chunk_size' => 10,
+      'buffer_size' => 4096,
+      'buffer_used' => 1,
+    ),
+  ),
+)
+
+Notice: ob_clean(): Failed to delete buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_flush(): Failed to flush buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_end_flush(): Failed to send buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_end_clean(): Failed to discard buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_get_clean(): Failed to discard buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_get_clean(): Failed to delete buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_get_flush(): Failed to send buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_get_flush(): Failed to delete buffer of default output handler (0) in output_buffering.php on line 81
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+string(446) "
+Notice: ob_clean(): Failed to delete buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_flush(): Failed to flush buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_end_flush(): Failed to send buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_end_clean(): Failed to discard buffer of default output handler (0) in output_buffering.php on line 81
+"
+string(675) "
+Notice: ob_clean(): Failed to delete buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_flush(): Failed to flush buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_end_flush(): Failed to send buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_end_clean(): Failed to discard buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_get_clean(): Failed to discard buffer of default output handler (0) in output_buffering.php on line 81
+
+Notice: ob_get_clean(): Failed to delete buffer of default output handler (0) in output_buffering.php on line 81
+"
+bool(true)
+
+Warning: ob_start(): function "nope" not found or invalid function name in output_buffering.php on line 85
+
+Notice: ob_start(): Failed to create buffer in output_buffering.php on line 85
+
+Warning: ob_start(): first array member is not a valid class name or object in output_buffering.php on line 86
+
+Notice: ob_start(): Failed to create buffer in output_buffering.php on line 86
+int(2)
+-- handler exceptions
+boomhandler: 9
+#0 [internal function]: h('boom', 9)
+#1 output_buffering.php(99): ob_end_flush()
+#2 {main}
+[9:9]

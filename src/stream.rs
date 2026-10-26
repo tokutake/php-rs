@@ -78,7 +78,10 @@ pub enum Backend {
 
 /// Where a stream writes standard output to: the interpreter's output
 pub trait Sink {
+    /// php://output: the script's output, through output buffers
     fn out(&mut self, bytes: &[u8]);
+    /// php://stdout
+    fn out_direct(&mut self, bytes: &[u8]);
     fn flush_out(&mut self);
 }
 
@@ -353,7 +356,8 @@ impl Stream {
                 data[*pos..end].copy_from_slice(bytes);
                 *pos = end;
             }
-            Backend::Stdout | Backend::Output => sink.out(bytes),
+            Backend::Stdout => sink.out_direct(bytes),
+            Backend::Output => sink.out(bytes),
             Backend::Stderr => {
                 sink.flush_out();
                 let mut e = io::stderr().lock();

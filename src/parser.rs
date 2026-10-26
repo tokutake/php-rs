@@ -513,7 +513,7 @@ impl Parser {
     ) -> PResult<Rc<FuncDecl>> {
         let Some(yield_line) = self.yield_line else {
             let file = self.file.clone();
-            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, file }));
+            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, is_static: false, file }));
         };
         if let Some(ty) = &ret {
             let ok = ty.types.iter().any(|t| {
@@ -526,7 +526,7 @@ impl Parser {
         }
         let body = crate::genlower::lower(body)?;
         let file = self.file.clone();
-        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true, file }))
+        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true, is_static: false, file }))
     }
 
     fn peek(&self) -> &Tok {
@@ -1409,7 +1409,9 @@ impl Parser {
     fn static_member(&mut self, class: ClassRef) -> PResult<ExprKind> {
         Ok(match self.next() {
             Tok::Variable(name) => ExprKind::StaticProp { class, name },
-            Tok::Ident(name) if self.eat(&Tok::Op("(")) => ExprKind::StaticCall { class, name, args: self.call_args()? },
+            Tok::Ident(name) if self.eat(&Tok::Op("(")) => {
+                self.call_or_callable(|args| ExprKind::StaticCall { class, name, args })?
+            }
             Tok::Ident(name) => ExprKind::ClassConst { class, name },
             _ => {
                 self.pos -= 1;
@@ -1628,6 +1630,23 @@ impl Parser {
         })
     }
 
+    /// Whether the arguments after `(` are `...)`, which makes a closure of the callee
+    fn at_callable_args(&self) -> bool {
+        matches!(self.peek(), Tok::Op("...")) && matches!(self.peek_at(1), Tok::Op(")"))
+    }
+
+    /// A call after its `(`: `make` builds it from the arguments. With `(...)`
+    /// the call is not made: it becomes a closure of what it would call
+    fn call_or_callable(&mut self, make: impl FnOnce(Vec<Arg>) -> ExprKind) -> PResult<ExprKind> {
+        if self.at_callable_args() {
+            let line = self.line();
+            self.next();
+            self.next();
+            return Ok(ExprKind::CallableFrom(Box::new(Expr::new(make(Vec::new()), line))));
+        }
+        Ok(make(self.call_args()?))
+    }
+
     /// Call arguments after `(`, through the closing `)`. Trailing commas are allowed
     fn call_args(&mut self) -> PResult<Vec<Arg>> {
         let mut args = Vec::new();
@@ -1801,15 +1820,20 @@ impl Parser {
                         }
                     };
                     if self.eat(&Tok::Op("(")) {
-                        let args = self.call_args()?;
-                        ExprKind::MethodCall { object: Box::new(e), name, args, nullsafe }
+                        if nullsafe && self.at_callable_args() {
+                            return Err(ParseError {
+                                msg: "Cannot combine nullsafe operator with Closure creation".into(),
+                                line: self.line(),
+                            });
+                        }
+                        self.call_or_callable(|args| ExprKind::MethodCall { object: Box::new(e), name, args, nullsafe })?
                     } else {
                         ExprKind::Prop { object: Box::new(e), name, nullsafe }
                     }
                 }
                 Tok::Op("(") => {
                     self.next();
-                    ExprKind::CallValue(Box::new(e), self.call_args()?)
+                    self.call_or_callable(|args| ExprKind::CallValue(Box::new(e), args))?
                 }
                 Tok::Op("::") => {
                     self.next();
@@ -1860,13 +1884,19 @@ impl Parser {
                 self.next();
                 ExprKind::Throw(Box::new(self.expr_bp(0)?))
             }
-            // `static function` / `static fn`: there is no $this to leave unbound yet
+            // `static function` / `static fn`: a closure without `$this`
             Tok::Ident(kw)
                 if kw.eq_ignore_ascii_case("static")
                     && matches!(self.peek_at(1), Tok::Ident(f) if f.eq_ignore_ascii_case("function") || f.eq_ignore_ascii_case("fn")) =>
             {
                 self.next();
-                return self.prefix();
+                let mut e = self.prefix()?;
+                if let ExprKind::Closure(f) = &mut e.kind
+                    && let Some(f) = Rc::get_mut(f)
+                {
+                    f.is_static = true;
+                }
+                return Ok(e);
             }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("yield") => {
                 self.next();
@@ -1968,6 +1998,9 @@ impl Parser {
                     return Err(ParseError { msg: "Anonymous classes are not supported yet".into(), line });
                 }
                 let class = self.class_ref()?;
+                if self.at(&Tok::Op("(")) && matches!(self.peek_at(1), Tok::Op("...")) && matches!(self.peek_at(2), Tok::Op(")")) {
+                    return Err(ParseError { msg: "Cannot create Closure for new expression".into(), line });
+                }
                 let args = if self.eat(&Tok::Op("(")) { self.call_args()? } else { Vec::new() };
                 ExprKind::New(class, args)
             }
@@ -2001,11 +2034,11 @@ impl Parser {
                     return Ok(Expr::new(kind, line));
                 }
                 if self.eat(&Tok::Op("(")) {
-                    let args = self.call_args()?;
-                    let kind = match self.resolve_symbol(&name, UseKind::Function) {
+                    let resolved = self.resolve_symbol(&name, UseKind::Function);
+                    let kind = self.call_or_callable(|args| match resolved {
                         (name, None) => ExprKind::Call(name, args),
                         (name, Some(global)) => ExprKind::NsCall(name, global, args),
-                    };
+                    })?;
                     return Ok(Expr::new(kind, line));
                 }
                 match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
@@ -2131,6 +2164,7 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
         | ExprKind::Throw(x)
         | ExprKind::Clone(x)
         | ExprKind::Silence(x)
+        | ExprKind::CallableFrom(x)
         | ExprKind::Include(_, x) => free_vars(x, out),
         ExprKind::Exit(x) => x.iter().for_each(|x| free_vars(x, out)),
         ExprKind::InstanceOf(x, class) => {

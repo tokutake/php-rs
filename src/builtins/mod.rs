@@ -64,6 +64,8 @@ pub trait Runtime {
     fn call_callback(&mut self, cb: &Value, args: Vec<Value>) -> EResult<Value>;
     /// Writes to the script's output, as echo does
     fn echo(&mut self, bytes: &[u8]);
+    /// Writes to standard output itself, past any output buffers (STDOUT)
+    fn echo_direct(&mut self, bytes: &[u8]);
     fn flush_out(&mut self);
     /// fclose(STDOUT): later output is discarded
     fn close_stdout(&mut self);
@@ -92,7 +94,9 @@ const NAMES: &[&str] = &[
     "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
     "substr", "define", "defined", "constant", "trait_exists", "class_uses", "enum_exists",
     "iterator_to_array", "iterator_count", "is_iterable", "var_export", "printf", "vprintf", "array_walk",
-    "array_reduce", "compact", "extract",
+    "array_reduce", "compact", "extract", "ob_start", "ob_get_clean", "ob_get_contents", "ob_get_length",
+    "ob_get_level", "ob_flush", "ob_clean", "ob_end_flush", "ob_end_clean", "ob_get_flush", "ob_list_handlers",
+    "ob_get_status", "ob_implicit_flush", "flush",
 ];
 
 /// A built-in's parameter, for named arguments
@@ -160,6 +164,8 @@ impl Runtime for NoRuntime {
     }
 
     fn echo(&mut self, _bytes: &[u8]) {}
+
+    fn echo_direct(&mut self, _bytes: &[u8]) {}
 
     fn flush_out(&mut self) {}
 
@@ -440,6 +446,7 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
             match v.unwrap() {
                 Value::Array(a) if mode == 1 => Ok(Value::Int(count_recursive(&a, 0))),
                 Value::Array(a) => Ok(Value::Int(a.len() as i64)),
+                Value::Object(o) if o.class.is_subclass_of("Countable") => Ok(Value::Int(rt.call_method0(&o, "count")?.to_int())),
                 other => Err(Fatal::type_error(format!(
                     "{lname}(): Argument #1 ($value) must be of type Countable|array, {} given",
                     other.value_name()
@@ -787,11 +794,12 @@ struct DebugProp {
 fn debug_props(o: &Object) -> Vec<DebugProp> {
     let prop = |name: &str, value: Value| DebugProp { key: Key::Str(name.as_bytes().into()), value: Some(value), ty: String::new() };
     if let Internal::Closure(c) = &o.internal {
-        let mut props = vec![
-            prop("name", Value::str(c.name.clone())),
-            prop("file", Value::str(c.file.clone())),
-            prop("line", Value::Int(c.func.line as i64)),
-        ];
+        let mut props = vec![prop("name", Value::str(c.name.clone()))];
+        // A closure of a built-in function has no location
+        if !c.file.is_empty() {
+            props.push(prop("file", Value::str(c.file.clone())));
+            props.push(prop("line", Value::Int(c.func.line as i64)));
+        }
         if !c.bound.is_empty() {
             let vars = c.bound.iter().map(|(k, v)| (Key::from_bytes(k.as_bytes()), v.clone())).collect();
             props.push(prop("static", Value::Array(Rc::new(vars))));

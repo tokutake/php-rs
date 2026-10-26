@@ -124,6 +124,10 @@ pub enum Native {
     GetTraceAsString,
     ThrowableToString,
     ClosureInvoke,
+    ClosureFromCallable,
+    ClosureBind,
+    ClosureBindTo,
+    ClosureCall,
     EnumCases,
     EnumFrom,
     EnumTryFrom,
@@ -178,6 +182,8 @@ pub struct ClassEntry {
     pub traits: Vec<&'static str>,
     /// Built-ins like Closure that `new` refuses
     pub internal_only: bool,
+    /// A built-in class, whose scope closures cannot be bound to
+    pub is_internal: bool,
     pub is_throwable: bool,
     pub allow_dynamic: bool,
     /// Instance properties in layout order, inherited ones first
@@ -260,6 +266,21 @@ pub struct Closure {
     pub file: String,
     pub this: Option<Rc<Object>>,
     pub scope: Option<Rc<ClassEntry>>,
+    /// For a closure made from a callable (`strlen(...)`, Closure::fromCallable),
+    /// what it calls. `func` then only describes the parameters
+    pub forward: Option<Forward>,
+}
+
+/// What a closure made from a callable calls
+#[derive(Debug, Clone)]
+pub enum Forward {
+    /// A user or built-in function, by name
+    Function(String),
+    /// A method, with the class `static` refers to in it. The object is the closure's `this`
+    Method(Rc<Method>, Rc<ClassEntry>),
+    /// A method that is missing or not accessible, so `__call` (with `this`) or
+    /// `__callStatic` of the class gets its name
+    Magic(String, Rc<ClassEntry>),
 }
 
 impl std::fmt::Debug for Object {
@@ -525,6 +546,13 @@ fn native(name: &str, class: &'static str, body: Native, is_final: bool) -> (Str
     (name.to_ascii_lowercase(), Rc::new(m))
 }
 
+fn static_native(name: &str, class: &'static str, body: Native) -> (String, Rc<Method>) {
+    let (key, m) = native(name, class, body, false);
+    let mut m = Rc::try_unwrap(m).expect("just created");
+    m.is_static = true;
+    (key, Rc::new(m))
+}
+
 /// The Throwable base classes, Exception and Error, with their properties and methods
 fn throwable_base(name: &'static str) -> ClassEntry {
     use Visibility::*;
@@ -587,7 +615,8 @@ pub fn plain_subclass(name: &'static str, parent: &Rc<ClassEntry>) -> ClassEntry
 /// Built-in classes by lowercase name
 pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     let mut map: HashMap<String, Rc<ClassEntry>> = HashMap::new();
-    let mut put = |c: ClassEntry| {
+    let mut put = |mut c: ClassEntry| {
+        c.is_internal = true;
         let c = Rc::new(c);
         map.insert(c.name.to_ascii_lowercase(), c.clone());
         c
@@ -654,6 +683,21 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         ..Default::default()
     });
     put(ClassEntry {
+        name: "ArrayAccess",
+        is_interface: true,
+        methods: ["offsetExists", "offsetGet", "offsetSet", "offsetUnset"]
+            .iter()
+            .map(|m| abstract_method(m, "ArrayAccess"))
+            .collect(),
+        ..Default::default()
+    });
+    put(ClassEntry {
+        name: "Countable",
+        is_interface: true,
+        methods: [abstract_method("count", "Countable")].into_iter().collect(),
+        ..Default::default()
+    });
+    put(ClassEntry {
         name: "JsonSerializable",
         is_interface: true,
         methods: [abstract_method("jsonSerialize", "JsonSerializable")].into_iter().collect(),
@@ -676,12 +720,18 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         methods: generator_methods.iter().map(|(m, n)| native(m, "Generator", *n, true)).collect(),
         ..Default::default()
     });
-    let invoke = native("__invoke", "Closure", Native::ClosureInvoke, false);
+    let methods = [
+        native("__invoke", "Closure", Native::ClosureInvoke, false),
+        static_native("fromCallable", "Closure", Native::ClosureFromCallable),
+        static_native("bind", "Closure", Native::ClosureBind),
+        native("bindTo", "Closure", Native::ClosureBindTo, false),
+        native("call", "Closure", Native::ClosureCall, false),
+    ];
     put(ClassEntry {
         name: "Closure",
         is_final: true,
         internal_only: true,
-        methods: [invoke].into_iter().collect(),
+        methods: methods.into_iter().collect(),
         ..Default::default()
     });
     map

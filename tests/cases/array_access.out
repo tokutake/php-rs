@@ -1,0 +1,137 @@
+set('a')
+set(NULL)
+get('a')
+int(1)
+exists('a')
+exists('zz')
+exists('a')
+get('a')
+exists('zz')
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+exists('a')
+get('a')
+exists('zz')
+int(1)
+string(7) "default"
+get('a')
+set('a')
+set('n')
+get('n')
+set('n')
+get('a')
+get('n')
+string(2) "1x"
+int(15)
+unset('a')
+int(2)
+int(2)
+bool(true)
+bool(true)
+-- indirect modification
+set('arr')
+get('arr')
+
+Notice: Indirect modification of overloaded element of Coll has no effect in array_access.php on line 35
+get('arr')
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+get('n')
+
+Notice: Indirect modification of overloaded element of Coll has no effect in array_access.php on line 37
+get('n')
+int(15)
+int(15)
+get('arr')
+
+Notice: Indirect modification of overloaded element of Coll has no effect in array_access.php on line 39
+get('ref')
+
+Notice: Indirect modification of overloaded element of Coll has no effect in array_access.php on line 40
+get('arr')
+
+Notice: Indirect modification of overloaded element of Coll has no effect in array_access.php on line 41
+get('arr')
+
+Notice: Indirect modification of overloaded element of Coll has no effect in array_access.php on line 42
+get('r')
+
+Notice: Indirect modification of overloaded element of Coll has no effect in array_access.php on line 46
+Error: Cannot assign by reference to an array dimension of an object
+-- nested objects
+set('o')
+get('o')
+set('x')
+get('o')
+get('x')
+int(5)
+exists('o')
+get('o')
+exists('x')
+exists('o')
+get('o')
+exists('nope')
+bool(true)
+bool(false)
+set('z')
+get('z')
+int(3)
+set('k')
+get('k')
+int(2)
+-- ??= and destructuring
+exists('q')
+set('q')
+string(6) "filled"
+set(0)
+set(1)
+get(0)
+get(1)
+get('missing')
+string(4) "zero"
+string(3) "one"
+NULL
+-- offsets of any type
+object(stdClass)#2 (0) {
+}
+bool(true)
+float(1.5)
+NULL
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+NULL
+string(1) "u"
+-- evaluation order
+f
+g
+get('k')
+
+Notice: Indirect modification of overloaded element of Coll has no effect in array_access.php on line 96
+-- errors
+Error: Cannot use object of type stdClass as array
+Error: Cannot use object of type stdClass as array
+Error: Cannot use object of type stdClass as array
+Error: Cannot use object of type stdClass as array
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, stdClass given
+Error: Cannot use object of type stdClass as array
+no 5
+#0 array_access.php(123): Thrower->offsetGet(5)
+#1 array_access.php(126): read_it()
+#2 {main}
+-- plain arrays holding objects
+int(1)
+array(1) {
+  ["x"]=>
+  int(1)
+}
+string(3) "aSc"

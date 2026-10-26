@@ -54,6 +54,10 @@ pub enum ExprKind {
     NsCall(String, String, Vec<Arg>),
     /// Calling the value of an expression: `$f(1)`, `(function () {})()`
     CallValue(Box<Expr>, Vec<Arg>),
+    /// `f(...)`, `$o->m(...)`, `A::m(...)`, `$f(...)`: a closure of what the
+    /// call (a Call, NsCall, MethodCall, StaticCall or CallValue without
+    /// arguments) would run
+    CallableFrom(Box<Expr>),
     /// `function () use ($x) {}` and `fn () => ...`
     Closure(Rc<FuncDecl>),
     New(ClassRef, Vec<Arg>),
@@ -331,6 +335,8 @@ pub struct FuncDecl {
     /// Contains `yield`: calling it creates a Generator, and the body is lowered
     /// (see genlower)
     pub is_generator: bool,
+    /// `static function` / `static fn`, which never has a `$this`
+    pub is_static: bool,
     /// Where it is declared, which decides the file of its diagnostics and its strict_types
     pub file: Rc<SourceFile>,
 }

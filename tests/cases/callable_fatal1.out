@@ -1,0 +1,4 @@
+
+Fatal error: Cannot combine nullsafe operator with Closure creation in callable_fatal1.php on line 3
+Stack trace:
+#0 {main}

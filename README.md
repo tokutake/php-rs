@@ -31,6 +31,10 @@ Early stage. Implemented so far:
   built-in Throwable hierarchy, chained previous exceptions
 - Closures and arrow functions (`use`, by-reference captures, auto-capture),
   callables, `?->`, `instanceof`
+- First-class callable syntax (`strlen(...)`, `$obj->method(...)`, `A::method(...)`,
+  `$f(...)`, through `__call`/`__callStatic` too) and `Closure::fromCallable()`
+- `Closure::bind()`, `bindTo()` and `call()` with php-src's binding rules, and
+  `static` closures
 - Classes and interfaces: inheritance, abstract/final, visibility, typed and
   readonly properties, constructor promotion, static members, constants,
   `self`/`parent`/`static` (late static binding), magic methods (`__get`,
@@ -43,6 +47,9 @@ Early stage. Implemented so far:
   when a suspended generator is destroyed
 - `Iterator`, `IteratorAggregate` and `Traversable` in foreach, `iterator_to_array()`,
   `iterator_count()`
+- `ArrayAccess` (reads, writes, `isset`/`empty`/`??`, `unset`, compound assignment,
+  destructuring, nested objects, and PHP's "Indirect modification" notices) and
+  `Countable` for `count()`
 - `include` / `require` (and `_once`), with each file's own namespace, strict_types,
   `__FILE__` and locations in diagnostics and traces; `exit` / `die`; `$GLOBALS`,
   `$argv` / `$argc` and the superglobals (`$_SERVER`, `$_ENV`, `$_GET`, ...)
@@ -69,6 +76,10 @@ Early stage. Implemented so far:
   `scandir`, `glob`), `unlink`/`mkdir`/`rename`/`copy`/`touch`/`stat` and friends.
   Reads stop at php-src's default memory limit, so an endless stream cannot
   exhaust memory
+- Output buffering: `ob_start()` with handlers, chunk sizes and flags, `ob_get_clean()`,
+  `ob_end_flush()` and the rest of the ob_* functions. Diagnostics and uncaught errors
+  go to the buffers, writes to `STDOUT` bypass them, and buffers left open are
+  flushed after the destructors
 - Regular expressions: the preg_* functions (`preg_match`, `preg_match_all`,
   `preg_replace`, `preg_replace_callback(_array)`, `preg_split`, `preg_grep`,
   `preg_quote`, ...) on a PCRE2-compatible engine of its own: PCRE2's syntax

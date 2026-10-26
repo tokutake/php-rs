@@ -84,6 +84,10 @@ impl Sink for Out<'_> {
         self.0.echo(bytes);
     }
 
+    fn out_direct(&mut self, bytes: &[u8]) {
+        self.0.echo_direct(bytes);
+    }
+
     fn flush_out(&mut self) {
         self.0.flush_out();
     }

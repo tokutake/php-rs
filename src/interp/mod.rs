@@ -2,7 +2,9 @@
 //! Class and object handling lives in the `oop` submodule.
 
 pub(crate) mod generator;
+mod closure;
 mod oop;
+mod output;
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -127,6 +129,9 @@ enum Base<'e> {
     Prop(Rc<Object>, String),
     /// A static property's storage, with its declared type and `Class::$name` for messages
     Cell(RefCellValue, Option<(TypeHint, String)>),
+    /// `$obj[dim]` on an object, which goes through ArrayAccess. Always the
+    /// last step of a path (see resolve_offsets)
+    Offset(Rc<Object>, Option<Value>),
 }
 
 /// A write target: a base plus evaluated offsets (None for `[]`)
@@ -294,6 +299,13 @@ pub struct Interp<W: Write> {
     /// Included files' code by path, parsed once like php-src's compiled file cache.
     /// Their functions and classes refer to it
     programs: HashMap<String, Rc<Program>>,
+    /// Output buffers from ob_start(), innermost last
+    ob: Vec<output::OutBuffer>,
+    /// An output handler is running: its own output is dropped
+    ob_running: bool,
+    /// A class implementing ArrayAccess exists. Until then write paths need
+    /// not look for objects, which only fail as arrays
+    array_access_declared: bool,
 }
 
 fn undefined_constant(name: &str) -> Fatal {
@@ -333,6 +345,11 @@ impl<W: Write> Runtime for Interp<W> {
 
     fn echo(&mut self, bytes: &[u8]) {
         let _ = self.write(bytes);
+    }
+
+    fn echo_direct(&mut self, bytes: &[u8]) {
+        self.flush_diags();
+        let _ = self.raw_out(bytes);
     }
 
     fn flush_out(&mut self) {
@@ -393,6 +410,9 @@ impl<W: Write> Interp<W> {
             builtin_defaults: HashMap::new(),
             included: HashSet::new(),
             programs: HashMap::new(),
+            ob: Vec::new(),
+            ob_running: false,
+            array_access_declared: false,
         }
     }
 
@@ -542,6 +562,8 @@ impl<W: Write> Interp<W> {
                 // A fatal error ends the script without destructors, an uncaught exception does not
                 if fatal {
                     object::disable_destructors();
+                    self.ob_end_all();
+                    self.flush_diags();
                     return status;
                 }
             }
@@ -555,6 +577,8 @@ impl<W: Write> Interp<W> {
             }
         }
         object::disable_destructors();
+        self.flush_diags();
+        self.ob_end_all();
         self.flush_diags();
         status
     }
@@ -604,7 +628,7 @@ impl<W: Write> Interp<W> {
                 let file = String::from_utf8_lossy(&ex.get("\0*\0file").to_bytes()).into_owned();
                 let msg = String::from_utf8_lossy(&ex.get("\0*\0message").to_bytes()).into_owned();
                 let line = ex.get("\0*\0line").to_int();
-                let _ = self.out.write_all(format!("\nParse error: {msg} in {file} on line {line}\n").as_bytes());
+                self.emit_quiet(format!("\nParse error: {msg} in {file} on line {line}\n").as_bytes());
                 return;
             }
             // Uncaught output goes through __toString, which a subclass may override
@@ -617,7 +641,7 @@ impl<W: Write> Interp<W> {
             let line = ex.get("\0*\0line").to_int();
             format!("\nFatal error: Uncaught {}\n  thrown in {file} on line {line}\n", String::from_utf8_lossy(&text))
         };
-        let _ = self.out.write_all(msg.as_bytes());
+        self.emit_quiet(msg.as_bytes());
     }
 
     /// Calls the destructors of the objects released since the last call
@@ -735,22 +759,15 @@ impl<W: Write> Interp<W> {
     }
 
     fn flush_diags(&mut self) {
-        let diags = diag::take();
-        if self.stdout_closed {
-            return;
-        }
-        for d in diags {
+        for d in diag::take() {
             let msg = format!("\n{}: {} in {} on line {}\n", d.level.label(), d.msg, d.file, d.line);
-            let _ = self.out.write_all(msg.as_bytes());
+            self.emit_quiet(msg.as_bytes());
         }
     }
 
     fn write(&mut self, bytes: &[u8]) -> EResult<()> {
         self.flush_diags();
-        if self.stdout_closed {
-            return Ok(());
-        }
-        self.out.write_all(bytes).map_err(|e| Fatal::error(format!("write failed: {e}")))
+        self.emit(bytes)
     }
 
     fn frame(&mut self) -> &mut Frame {
@@ -867,6 +884,7 @@ impl<W: Write> Interp<W> {
             }
             Stmt::Foreach { subject, key, value, body, .. } => {
                 let path = self.path(subject)?;
+                let path = self.fetch_offset(path)?;
                 let keys = self.with_place(&path, false, true, |slot| {
                     Ok(match slot {
                         Value::Array(arr) => Ok(arr.keys().cloned().collect::<Vec<_>>()),
@@ -1222,7 +1240,10 @@ impl<W: Write> Interp<W> {
             ExprKind::Index(base, Some(index)) => {
                 let b = self.expr(base)?;
                 let i = self.expr(index)?;
-                read_dim(&b, &i)?
+                match &b {
+                    Value::Object(o) => self.offset_get(o, Some(&i))?,
+                    _ => read_dim(&b, &i)?,
+                }
             }
             ExprKind::Assign(target, rhs) => match &target.kind {
                 ExprKind::List(items) if has_ref(items) => {
@@ -1270,6 +1291,19 @@ impl<W: Write> Interp<W> {
                         binary(op, &cur, &r)?
                     };
                     self.write_prop(&obj, &name, new.clone())?;
+                    return Ok(new);
+                }
+                // Likewise an ArrayAccess element is read with offsetGet and written with offsetSet
+                if let Base::Offset(obj, dim) = &path.base {
+                    let cur = self.offset_get(obj, dim.as_ref())?;
+                    let new = if *op == "." {
+                        let mut s = self.stringify(&cur)?;
+                        s.extend_from_slice(&self.stringify(&r)?);
+                        Value::str(s)
+                    } else {
+                        binary(op, &cur, &r)?
+                    };
+                    self.offset_set(obj, dim.as_ref(), new.clone())?;
                     return Ok(new);
                 }
                 // String conversion may run __toString, so it happens before the write
@@ -1390,6 +1424,7 @@ impl<W: Write> Interp<W> {
                 v
             }
             ExprKind::Closure(f) => self.make_closure(f)?,
+            ExprKind::CallableFrom(call) => self.callable_from(call)?,
             ExprKind::New(class, args) => {
                 let class = self.resolve_class(class)?;
                 let v = self.instantiate(&class, args, e.line)?;
@@ -1506,6 +1541,12 @@ impl<W: Write> Interp<W> {
                 let i = self.expr(index)?;
                 Ok(match &b {
                     Value::Array(arr) => arr.get(&to_key(&i, "array")?).map(Value::copy_out),
+                    // isset() itself only asks offsetExists; anything else reads the value too
+                    Value::Object(o) => match self.offset_exists(o, &i)? {
+                        false => None,
+                        true if need_value => Some(self.offset_get(o, Some(&i))?),
+                        true => Some(Value::Bool(true)),
+                    },
                     Value::Str(s) => {
                         let off = match &i {
                             Value::Str(t) => match parse_numeric(t) {
@@ -1540,6 +1581,67 @@ impl<W: Write> Interp<W> {
     /// property step is evaluated as a value: objects are handles, so writing
     /// through them needs no write access to the variable holding them
     fn path<'e>(&mut self, target: &'e Expr) -> EResult<Path<'e>> {
+        let path = self.raw_path(target)?;
+        self.resolve_offsets(path)
+    }
+
+    /// Rewrites a path whose offsets run into an object, so that they go through
+    /// ArrayAccess. The object's offset becomes the last step. Offsets below it
+    /// are reached with offsetGet: unless that gives an object, the write lands in
+    /// a copy that is thrown away, as in PHP
+    fn resolve_offsets<'e>(&mut self, mut path: Path<'e>) -> EResult<Path<'e>> {
+        if !self.array_access_declared {
+            return Ok(path);
+        }
+        while let Some((k, obj)) = self.find_object(&path) {
+            let mut rest = path.dims.split_off(k);
+            let dim = rest.remove(0);
+            if rest.is_empty() {
+                return Ok(Path { base: Base::Offset(obj, dim), dims: Vec::new() });
+            }
+            let v = self.offset_get_indirect(&obj, dim.as_ref())?;
+            path = Path { base: Base::Cell(Rc::new(RefCell::new(v)), None), dims: rest };
+        }
+        Ok(path)
+    }
+
+    /// For a path used more than once: an ArrayAccess element is fetched once
+    /// into a copy, which the uses then share
+    fn fetch_offset<'e>(&mut self, path: Path<'e>) -> EResult<Path<'e>> {
+        match &path.base {
+            Base::Offset(obj, dim) => {
+                let v = self.offset_get_indirect(obj, dim.as_ref())?;
+                Ok(Path { base: Base::Cell(Rc::new(RefCell::new(v)), None), dims: path.dims })
+            }
+            _ => Ok(path),
+        }
+    }
+
+    /// The first object that an offset of the path is applied to, with the
+    /// position of that offset. Only looks, without creating anything
+    fn find_object(&mut self, path: &Path<'_>) -> Option<(usize, Rc<Object>)> {
+        if path.dims.is_empty() {
+            return None;
+        }
+        let dims = &path.dims;
+        match &path.base {
+            Base::Var(name) => self.frames.last().unwrap().vars.get(name).and_then(|v| probe_object(v, dims, 0)),
+            Base::Global(name) => self.frames[0].vars.get(name).and_then(|v| probe_object(v, dims, 0)),
+            Base::Prop(obj, name) => {
+                let key = match self.find_prop(&obj.class, name) {
+                    oop::PropLookup::Declared(p) => p.key,
+                    oop::PropLookup::Dynamic => Key::Str(name.as_bytes().into()),
+                    oop::PropLookup::Inaccessible(_) => return None,
+                };
+                let props = obj.props.try_borrow().ok()?;
+                probe_object(props.get(&key)?, dims, 0)
+            }
+            Base::Cell(cell, _) => probe_object(&*cell.try_borrow().ok()?, dims, 0),
+            Base::Offset(..) => None,
+        }
+    }
+
+    fn raw_path<'e>(&mut self, target: &'e Expr) -> EResult<Path<'e>> {
         diag::set_line(target.line);
         match &target.kind {
             ExprKind::Var(name) if Self::is_superglobal(name) => {
@@ -1552,7 +1654,7 @@ impl<W: Write> Interp<W> {
                 Ok(Path { base: Base::Global(name), dims: Vec::new() })
             }
             ExprKind::Index(base, index) => {
-                let mut path = self.path(base)?;
+                let mut path = self.raw_path(base)?;
                 path.dims.push(match index {
                     Some(i) => Some(self.expr(i)?),
                     None => None,
@@ -1615,6 +1717,10 @@ impl<W: Write> Interp<W> {
                 let mut slot = cell.try_borrow_mut().map_err(|_| recursive_reference())?;
                 descend(&mut slot, &path.dims, read, deref_last, f)
             }
+            Base::Offset(obj, dim) => {
+                let mut copy = self.offset_get_indirect(obj, dim.as_ref())?;
+                descend(&mut copy, &path.dims, read, deref_last, f)
+            }
         }
     }
 
@@ -1632,6 +1738,10 @@ impl<W: Write> Interp<W> {
         if let (Base::Cell(..), true) = (&path.base, path.dims.is_empty()) {
             return Err(Fatal::error("Binding static properties by reference is not supported yet"));
         }
+        if let Base::Offset(obj, dim) = &path.base {
+            self.offset_get_indirect(obj, dim.as_ref())?;
+            return Err(Fatal::error("Cannot assign by reference to an array dimension of an object"));
+        }
         self.with_place(&path, false, false, |slot| {
             *slot = Value::Ref(r);
             Ok(())
@@ -1645,6 +1755,9 @@ impl<W: Write> Interp<W> {
         let mut path = self.path(target)?;
         if let (Base::Prop(obj, name), true) = (&path.base, path.dims.is_empty()) {
             return self.write_prop(obj, name, v);
+        }
+        if let Base::Offset(obj, dim) = &path.base {
+            return self.offset_set(obj, dim.as_ref(), v);
         }
         if let (Base::Cell(cell, ty), true) = (&path.base, path.dims.is_empty()) {
             let v = match ty {
@@ -1663,16 +1776,29 @@ impl<W: Write> Interp<W> {
         if let Some(Some(index)) = path.dims.last() {
             let index = index.clone();
             path.dims.pop();
-            // A string offset needs the value converted first; doing it here keeps
-            // __toString out of the borrowed write path
-            let as_str = if matches!(v, Value::Object(_)) { Some(self.stringify(&v)?) } else { None };
-            return self.with_place(&path, false, true, |parent| {
+            // An object written to a string offset is converted with __toString,
+            // which cannot run in the borrowed write path: the write is retried
+            // with the converted value
+            let obj = matches!(v, Value::Object(_)).then(|| v.clone());
+            let needs_str = self.with_place(&path, false, true, |parent| {
                 if let Value::Str(s) = parent {
-                    let v = as_str.map_or(v, Value::str);
-                    return assign_string_offset(Rc::make_mut(s), &index, &v);
+                    if obj.is_some() {
+                        return Ok(true);
+                    }
+                    assign_string_offset(Rc::make_mut(s), &index, &v)?;
+                    return Ok(false);
                 }
-                set_slot(write_dim(parent, Some(&index), false)?, v)
-            });
+                set_slot(write_dim(parent, Some(&index), false)?, v)?;
+                Ok(false)
+            })?;
+            if let (true, Some(obj)) = (needs_str, obj) {
+                let v = Value::str(self.stringify(&obj)?);
+                return self.with_place(&path, false, true, |parent| match parent {
+                    Value::Str(s) => assign_string_offset(Rc::make_mut(s), &index, &v),
+                    _ => set_slot(write_dim(parent, Some(&index), false)?, v),
+                });
+            }
+            return Ok(());
         }
         self.with_place(&path, false, true, |slot| {
             *slot = v;
@@ -1692,6 +1818,7 @@ impl<W: Write> Interp<W> {
             let key = self.list_key(item, &mut next)?;
             let elem = match &v {
                 Value::Array(_) => read_dim(&v, &key)?,
+                Value::Object(o) => self.offset_get(o, Some(&key))?,
                 _ => Value::Null,
             };
             self.assign(&item.target, elem)?;
@@ -1720,6 +1847,7 @@ impl<W: Write> Interp<W> {
                     let container = self.with_place(source, false, true, |slot| Ok(slot.clone()))?;
                     let v = match &container {
                         Value::Array(_) => read_dim(&container, &key)?,
+                        Value::Object(o) => self.offset_get(o, Some(&key))?,
                         _ => Value::Null,
                     };
                     self.assign(&item.target, v)?;
@@ -1777,6 +1905,7 @@ impl<W: Write> Interp<W> {
                 }
                 Base::Prop(obj, name) => self.unset_prop(obj, name),
                 Base::Cell(..) => Err(Fatal::error("Attempt to unset static property")),
+                Base::Offset(obj, dim) => self.offset_unset(obj, dim.as_ref()),
             };
         };
         match &path.base {
@@ -1802,6 +1931,10 @@ impl<W: Write> Interp<W> {
             Base::Cell(cell, _) => {
                 let mut slot = cell.try_borrow_mut().map_err(|_| recursive_reference())?;
                 unset_in(&mut slot, &path.dims, last)
+            }
+            Base::Offset(obj, dim) => {
+                let mut copy = self.offset_get_indirect(obj, dim.as_ref())?;
+                unset_in(&mut copy, &path.dims, last)
             }
         }
     }
@@ -1876,6 +2009,7 @@ impl<W: Write> Interp<W> {
                 return Err(Fatal::error(format!("{lname}(): Argument #1 ($array) could not be passed by reference")));
             }
             let path = self.path(&first.value)?;
+            let path = self.fetch_offset(path)?;
             let vals = self.eval_args(rest)?;
             let mut shown = vec![self.with_place(&path, false, true, |slot| Ok(slot.clone()))?];
             shown.extend(vals.iter().cloned());
@@ -2191,6 +2325,7 @@ impl<W: Write> Interp<W> {
                 Ok(Value::Bool(self.is_traversable(&v)))
             }
             "array_filter" => self.array_filter(vals, line),
+            _ if lname.starts_with("ob_") || lname == "flush" => self.output_builtin(lname, vals),
             _ => {
                 if let Some(v) = self.object_builtin(lname, &vals)? {
                     return Ok(v);
@@ -2436,10 +2571,14 @@ impl<W: Write> Interp<W> {
     }
 
     fn invoke_closure(&mut self, closure: &Closure, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
+        if let Some(f) = &closure.forward {
+            return self.call_forward(closure, f, args, call_line);
+        }
         let ctx = CallCtx {
             name: closure.name.clone(),
             trace_fn: closure.name.clone(),
-            trace_class: None,
+            // A closure with a class scope shows in traces like a method of the class
+            trace_class: closure.scope.as_ref().map(|s| (s.name.to_string(), if closure.this.is_some() { "->" } else { "::" })),
             this: closure.this.clone(),
             scope: closure.scope.clone(),
             static_class: closure.this.as_ref().map(|t| t.class.clone()).or_else(|| closure.scope.clone()),
@@ -2708,11 +2847,7 @@ impl<W: Write> Interp<W> {
         if let Some(c) = self.callable(v)? {
             return Ok(c);
         }
-        let detail = match v {
-            Value::Str(s) => format!("function \"{}\" not found or invalid function name", String::from_utf8_lossy(s)),
-            Value::Array(_) => "array callback must have exactly two members".to_string(),
-            _ => "no array or string given".to_string(),
-        };
+        let detail = self.not_callable_reason(v)?;
         Err(Fatal::type_error(format!("{fname}(): Argument #{n} ($callback) must be a valid callback, {detail}")))
     }
 
@@ -2824,8 +2959,14 @@ impl<W: Write> Interp<W> {
         match &f {
             Value::Object(o) => {
                 if let Some(c) = o.closure() {
+                    if let Some(fw) = &c.forward {
+                        return self.call_forward_ast(c, fw, args, line);
+                    }
                     let bound = self.bind_args(&c.func, &c.name, args)?;
                     return self.invoke_closure(c, bound, line);
+                }
+                if o.class.find_method("__invoke").is_none() {
+                    return Err(Fatal::error(format!("Object of type {} is not callable", o.class.name)));
                 }
                 self.method_call(f.clone(), "__invoke", args, line)
             }
@@ -2842,7 +2983,7 @@ impl<W: Write> Interp<W> {
                 let vals = self.eval_args(args)?;
                 self.call_value(&c, vals, line)
             }
-            _ => Err(Fatal::error("Value not callable")),
+            _ => Err(Fatal::error(format!("Value of type {} is not callable", f.type_name()))),
         }
     }
 
@@ -2979,9 +3120,10 @@ impl<W: Write> Interp<W> {
             }
         }
         let name = format!("{{closure:{}:{}}}", self.file.path, f.line);
-        // Closures created in a method keep its $this and class scope
-        let (this, scope) = (self.ctx().this.clone(), self.ctx().scope.clone());
-        let closure = Closure { func: f.clone(), bound, name, file: self.file.path.to_string(), this, scope };
+        // Closures created in a method keep its $this (unless static) and class scope
+        let this = if f.is_static { None } else { self.ctx().this.clone() };
+        let scope = self.ctx().scope.clone();
+        let closure = Closure { func: f.clone(), bound, name, file: self.file.path.to_string(), this, scope, forward: None };
         Ok(Value::Object(Object::new(self.classes["closure"].clone(), Internal::Closure(closure))))
     }
 }
@@ -3099,6 +3241,34 @@ fn descend<T>(
     }
 }
 
+/// Walks `dims` from `v` through arrays, looking for an object that one of the
+/// offsets is applied to. `depth` is the position of the offset applied to `v`
+fn probe_object(v: &Value, dims: &[Option<Value>], depth: usize) -> Option<(usize, Rc<Object>)> {
+    match v {
+        Value::Ref(r) => probe_object(&*r.try_borrow().ok()?, dims, depth),
+        Value::Object(o) if depth < dims.len() => Some((depth, o.clone())),
+        // The element the last offset lands on is not indexed itself, so it is not looked up
+        Value::Array(a) if depth + 1 < dims.len() => {
+            let key = peek_key(dims[depth].as_ref()?)?;
+            probe_object(a.get(&key)?, dims, depth + 1)
+        }
+        _ => None,
+    }
+}
+
+/// The array key a value converts to, without the diagnostics of to_key
+fn peek_key(v: &Value) -> Option<Key> {
+    Some(match v {
+        Value::Int(i) => Key::Int(*i),
+        Value::Str(s) => Key::from_bytes(s),
+        Value::Bool(b) => Key::Int(*b as i64),
+        Value::Float(f) if float_fits_int(*f) => Key::Int(*f as i64),
+        Value::Null => Key::Str(Rc::from(&b""[..])),
+        Value::Ref(r) => return peek_key(&*r.try_borrow().ok()?),
+        _ => return None,
+    })
+}
+
 /// Converts a slot into a reference holding its old value, or returns its existing reference
 fn make_ref_slot(slot: &mut Value) -> RefCellValue {
     if let Value::Ref(r) = slot {
@@ -3138,6 +3308,7 @@ fn unset_in(slot: &mut Value, dims: &[Option<Value>], last: Option<Value>) -> ER
                 }
             }
             (Value::Str(_), _) => Err(Fatal::error("Cannot unset string offsets")),
+            (Value::Object(o), _) => Err(Fatal::error(format!("Cannot use object of type {} as array", o.class.name))),
             _ => Ok(()),
         },
         None => match (slot, last) {
@@ -3150,6 +3321,7 @@ fn unset_in(slot: &mut Value, dims: &[Option<Value>], last: Option<Value>) -> ER
             }
             (_, None) => Err(Fatal::error("Cannot use [] for unsetting")),
             (Value::Str(_), _) => Err(Fatal::error("Cannot unset string offsets")),
+            (Value::Object(o), _) => Err(Fatal::error(format!("Cannot use object of type {} as array", o.class.name))),
             _ => Ok(()),
         },
     }
@@ -3628,6 +3800,7 @@ fn constant(name: &str) -> Option<Value> {
         "INF" => Value::Float(f64::INFINITY),
         "ARRAY_FILTER_USE_KEY" => Value::Int(builtins::ARRAY_FILTER_USE_KEY),
         "ARRAY_FILTER_USE_BOTH" => Value::Int(builtins::ARRAY_FILTER_USE_BOTH),
+        _ if name.starts_with("PHP_OUTPUT_HANDLER_") => Value::Int(output::output_constant(name)?),
         "PHP_VERSION" => Value::str(b"8.5.0".to_vec()),
         "PHP_MAJOR_VERSION" => Value::Int(8),
         "PHP_MINOR_VERSION" => Value::Int(5),

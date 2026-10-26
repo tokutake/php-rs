@@ -1,0 +1,64 @@
+int(11)
+int(3)
+int(6)
+int(5)
+array(2) {
+  [0]=>
+  string(1) "A"
+  [1]=>
+  string(1) "B"
+}
+int(6)
+string(2) "B!"
+string(4) "priv"
+string(20) "__call undefined 1,2"
+string(20) "__callStatic undef 3"
+int(15)
+bool(true)
+bool(true)
+int(12)
+int(12)
+string(2) "A?"
+int(42)
+#0 first_class_callable.php(44): A->thrower()
+#1 {main}
+Error: Call to undefined function nope()
+Error: Class "Nope" not found
+TypeError: Failed to create closure from callable: function "nope" not found or invalid function name
+ArgumentCountError: strlen() expects exactly 1 argument, 0 given
+ArgumentCountError: Too few arguments to function add(), 0 passed in first_class_callable.php on line 49 and at least 1 expected
+TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+string(3) "cba"
+int(15)
+int(1)
+int(14)
+-- invalid callables
+Failed to create closure from callable: function "nope" not found or invalid function name
+call_user_func(): Argument #1 ($callback) must be a valid callback, function "nope" not found or invalid function name
+Failed to create closure from callable: class P2 does not have a method "nope"
+call_user_func(): Argument #1 ($callback) must be a valid callback, class P2 does not have a method "nope"
+Failed to create closure from callable: cannot access private method P2::x()
+call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method P2::x()
+Failed to create closure from callable: class "Nope" not found
+call_user_func(): Argument #1 ($callback) must be a valid callback, class "Nope" not found
+Failed to create closure from callable: array callback must have exactly two members
+call_user_func(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+Failed to create closure from callable: no array or string given
+call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given
+Failed to create closure from callable: class R does not have a method "nope"
+call_user_func(): Argument #1 ($callback) must be a valid callback, class R does not have a method "nope"
+Failed to create closure from callable: non-static method R::inst() cannot be called statically
+call_user_func(): Argument #1 ($callback) must be a valid callback, non-static method R::inst() cannot be called statically
+Failed to create closure from callable: class "Nope" not found
+call_user_func(): Argument #1 ($callback) must be a valid callback, class "Nope" not found
+Failed to create closure from callable: second array member is not a valid method
+call_user_func(): Argument #1 ($callback) must be a valid callback, second array member is not a valid method
+Failed to create closure from callable: non-static method R::inst() cannot be called statically
+call_user_func(): Argument #1 ($callback) must be a valid callback, non-static method R::inst() cannot be called statically
+bool(true)
+called
+Value of type int is not callable
+Value of type int is not callable
+Object of type R is not callable
+Object of type R is not callable
+end
