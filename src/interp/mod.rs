@@ -4,6 +4,7 @@
 pub(crate) mod generator;
 mod closure;
 mod oop;
+mod output;
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -298,6 +299,10 @@ pub struct Interp<W: Write> {
     /// Included files' code by path, parsed once like php-src's compiled file cache.
     /// Their functions and classes refer to it
     programs: HashMap<String, Rc<Program>>,
+    /// Output buffers from ob_start(), innermost last
+    ob: Vec<output::OutBuffer>,
+    /// An output handler is running: its own output is dropped
+    ob_running: bool,
 }
 
 fn undefined_constant(name: &str) -> Fatal {
@@ -337,6 +342,11 @@ impl<W: Write> Runtime for Interp<W> {
 
     fn echo(&mut self, bytes: &[u8]) {
         let _ = self.write(bytes);
+    }
+
+    fn echo_direct(&mut self, bytes: &[u8]) {
+        self.flush_diags();
+        let _ = self.raw_out(bytes);
     }
 
     fn flush_out(&mut self) {
@@ -397,6 +407,8 @@ impl<W: Write> Interp<W> {
             builtin_defaults: HashMap::new(),
             included: HashSet::new(),
             programs: HashMap::new(),
+            ob: Vec::new(),
+            ob_running: false,
         }
     }
 
@@ -546,6 +558,8 @@ impl<W: Write> Interp<W> {
                 // A fatal error ends the script without destructors, an uncaught exception does not
                 if fatal {
                     object::disable_destructors();
+                    self.ob_end_all();
+                    self.flush_diags();
                     return status;
                 }
             }
@@ -559,6 +573,8 @@ impl<W: Write> Interp<W> {
             }
         }
         object::disable_destructors();
+        self.flush_diags();
+        self.ob_end_all();
         self.flush_diags();
         status
     }
@@ -608,7 +624,7 @@ impl<W: Write> Interp<W> {
                 let file = String::from_utf8_lossy(&ex.get("\0*\0file").to_bytes()).into_owned();
                 let msg = String::from_utf8_lossy(&ex.get("\0*\0message").to_bytes()).into_owned();
                 let line = ex.get("\0*\0line").to_int();
-                let _ = self.out.write_all(format!("\nParse error: {msg} in {file} on line {line}\n").as_bytes());
+                self.emit_quiet(format!("\nParse error: {msg} in {file} on line {line}\n").as_bytes());
                 return;
             }
             // Uncaught output goes through __toString, which a subclass may override
@@ -621,7 +637,7 @@ impl<W: Write> Interp<W> {
             let line = ex.get("\0*\0line").to_int();
             format!("\nFatal error: Uncaught {}\n  thrown in {file} on line {line}\n", String::from_utf8_lossy(&text))
         };
-        let _ = self.out.write_all(msg.as_bytes());
+        self.emit_quiet(msg.as_bytes());
     }
 
     /// Calls the destructors of the objects released since the last call
@@ -739,22 +755,15 @@ impl<W: Write> Interp<W> {
     }
 
     fn flush_diags(&mut self) {
-        let diags = diag::take();
-        if self.stdout_closed {
-            return;
-        }
-        for d in diags {
+        for d in diag::take() {
             let msg = format!("\n{}: {} in {} on line {}\n", d.level.label(), d.msg, d.file, d.line);
-            let _ = self.out.write_all(msg.as_bytes());
+            self.emit_quiet(msg.as_bytes());
         }
     }
 
     fn write(&mut self, bytes: &[u8]) -> EResult<()> {
         self.flush_diags();
-        if self.stdout_closed {
-            return Ok(());
-        }
-        self.out.write_all(bytes).map_err(|e| Fatal::error(format!("write failed: {e}")))
+        self.emit(bytes)
     }
 
     fn frame(&mut self) -> &mut Frame {
@@ -2309,6 +2318,7 @@ impl<W: Write> Interp<W> {
                 Ok(Value::Bool(self.is_traversable(&v)))
             }
             "array_filter" => self.array_filter(vals, line),
+            _ if lname.starts_with("ob_") || lname == "flush" => self.output_builtin(lname, vals),
             _ => {
                 if let Some(v) = self.object_builtin(lname, &vals)? {
                     return Ok(v);
@@ -3781,6 +3791,7 @@ fn constant(name: &str) -> Option<Value> {
         "INF" => Value::Float(f64::INFINITY),
         "ARRAY_FILTER_USE_KEY" => Value::Int(builtins::ARRAY_FILTER_USE_KEY),
         "ARRAY_FILTER_USE_BOTH" => Value::Int(builtins::ARRAY_FILTER_USE_BOTH),
+        _ if name.starts_with("PHP_OUTPUT_HANDLER_") => Value::Int(output::output_constant(name)?),
         "PHP_VERSION" => Value::str(b"8.5.0".to_vec()),
         "PHP_MAJOR_VERSION" => Value::Int(8),
         "PHP_MINOR_VERSION" => Value::Int(5),

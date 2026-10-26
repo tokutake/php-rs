@@ -76,6 +76,10 @@ Early stage. Implemented so far:
   `scandir`, `glob`), `unlink`/`mkdir`/`rename`/`copy`/`touch`/`stat` and friends.
   Reads stop at php-src's default memory limit, so an endless stream cannot
   exhaust memory
+- Output buffering: `ob_start()` with handlers, chunk sizes and flags, `ob_get_clean()`,
+  `ob_end_flush()` and the rest of the ob_* functions. Diagnostics and uncaught errors
+  go to the buffers, writes to `STDOUT` bypass them, and buffers left open are
+  flushed after the destructors
 - Regular expressions: the preg_* functions (`preg_match`, `preg_match_all`,
   `preg_replace`, `preg_replace_callback(_array)`, `preg_split`, `preg_grep`,
   `preg_quote`, ...) on a PCRE2-compatible engine of its own: PCRE2's syntax

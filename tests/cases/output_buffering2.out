@@ -1,0 +1,6 @@
+[before
+Fatal error: Uncaught Exception: x in output_buffering2.php:7
+Stack trace:
+#0 {main}
+  thrown in output_buffering2.php on line 7
+destruct]

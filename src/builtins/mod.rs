@@ -64,6 +64,8 @@ pub trait Runtime {
     fn call_callback(&mut self, cb: &Value, args: Vec<Value>) -> EResult<Value>;
     /// Writes to the script's output, as echo does
     fn echo(&mut self, bytes: &[u8]);
+    /// Writes to standard output itself, past any output buffers (STDOUT)
+    fn echo_direct(&mut self, bytes: &[u8]);
     fn flush_out(&mut self);
     /// fclose(STDOUT): later output is discarded
     fn close_stdout(&mut self);
@@ -92,7 +94,9 @@ const NAMES: &[&str] = &[
     "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
     "substr", "define", "defined", "constant", "trait_exists", "class_uses", "enum_exists",
     "iterator_to_array", "iterator_count", "is_iterable", "var_export", "printf", "vprintf", "array_walk",
-    "array_reduce", "compact", "extract",
+    "array_reduce", "compact", "extract", "ob_start", "ob_get_clean", "ob_get_contents", "ob_get_length",
+    "ob_get_level", "ob_flush", "ob_clean", "ob_end_flush", "ob_end_clean", "ob_get_flush", "ob_list_handlers",
+    "ob_get_status", "ob_implicit_flush", "flush",
 ];
 
 /// A built-in's parameter, for named arguments
@@ -160,6 +164,8 @@ impl Runtime for NoRuntime {
     }
 
     fn echo(&mut self, _bytes: &[u8]) {}
+
+    fn echo_direct(&mut self, _bytes: &[u8]) {}
 
     fn flush_out(&mut self) {}
 

@@ -486,6 +486,8 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("floor", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
+    ("flush", &[
+    ]),
     ("fmod", &[
         Param { name: "num1", default: None, variadic: false, by_ref: false },
         Param { name: "num2", default: None, variadic: false, by_ref: false },
@@ -829,6 +831,37 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "decimals", default: Some("0"), variadic: false, by_ref: false },
         Param { name: "decimal_separator", default: Some("\".\""), variadic: false, by_ref: false },
         Param { name: "thousands_separator", default: Some("\",\""), variadic: false, by_ref: false },
+    ]),
+    ("ob_clean", &[
+    ]),
+    ("ob_end_clean", &[
+    ]),
+    ("ob_end_flush", &[
+    ]),
+    ("ob_flush", &[
+    ]),
+    ("ob_get_clean", &[
+    ]),
+    ("ob_get_contents", &[
+    ]),
+    ("ob_get_flush", &[
+    ]),
+    ("ob_get_length", &[
+    ]),
+    ("ob_get_level", &[
+    ]),
+    ("ob_get_status", &[
+        Param { name: "full_status", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("ob_implicit_flush", &[
+        Param { name: "enable", default: Some("true"), variadic: false, by_ref: false },
+    ]),
+    ("ob_list_handlers", &[
+    ]),
+    ("ob_start", &[
+        Param { name: "callback", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "chunk_size", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "flags", default: Some("PHP_OUTPUT_HANDLER_STDFLAGS"), variadic: false, by_ref: false },
     ]),
     ("octdec", &[
         Param { name: "octal_string", default: None, variadic: false, by_ref: false },
