@@ -516,9 +516,9 @@ impl Parser {
             return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, is_static: false, file }));
         };
         if let Some(ty) = &ret {
-            let ok = ty.types.iter().any(|t| {
+            let ok = ty.types.iter().any(|group| group.iter().all(|t| {
                 matches!(t.as_str(), "object" | "mixed" | "iterable" | "static" | "traversable" | "iterator" | "generator")
-            });
+            }));
             if !ok {
                 let msg = format!("Generator return type must be a supertype of Generator, {} given", ty.display);
                 return Err(ParseError { msg, line: yield_line });
@@ -1177,7 +1177,7 @@ impl Parser {
         let name = self.prefix_ns(&name);
         let backing = if is_enum && self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
         if let Some(ty) = &backing
-            && (ty.types.len() != 1 || !matches!(ty.types[0].as_str(), "int" | "string"))
+            && (ty.types.len() != 1 || ty.types[0].len() != 1 || !matches!(ty.types[0][0].as_str(), "int" | "string"))
         {
             return Err(ParseError { msg: format!("Enum backing type must be int or string, {} given", ty.display), line });
         }
@@ -1481,27 +1481,88 @@ impl Parser {
         Ok(Stmt::Try { body, catches, finally })
     }
 
-    /// `int`, `?string`, `int|float|null`
+    /// Nullable, union, intersection and disjunctive normal form types.
     fn type_hint(&mut self) -> PResult<TypeHint> {
-        let mut display = String::new();
+        let line = self.line();
+        let nullable = self.eat(&Tok::Op("?"));
         let mut types = Vec::new();
-        if self.eat(&Tok::Op("?")) {
-            display.push('?');
-            types.push("null".to_string());
-        }
+        let mut displays = Vec::new();
+        let mut parenthesized = Vec::new();
         loop {
-            let Tok::Ident(name) = self.next() else {
-                self.pos -= 1;
-                return self.unexpected();
-            };
-            let lname = name.to_ascii_lowercase();
-            let name = if BUILTIN_TYPES.contains(&lname.as_str()) { name } else { self.resolve_class(&name) };
-            display.push_str(&name);
-            types.push(name.to_ascii_lowercase());
-            if !self.eat(&Tok::Op("|")) {
-                break;
+            let parens = self.eat(&Tok::Op("("));
+            let mut group = Vec::new();
+            let mut names = Vec::new();
+            loop {
+                let Tok::Ident(name) = self.next() else {
+                    self.pos -= 1;
+                    return self.unexpected();
+                };
+                let lname = name.to_ascii_lowercase();
+                let name = if BUILTIN_TYPES.contains(&lname.as_str()) { name } else { self.resolve_class(&name) };
+                group.push(name.to_ascii_lowercase());
+                names.push(name);
+                // An ampersand before a variable or ... belongs to a reference
+                // parameter, not the type (including A&B &$value).
+                if self.at(&Tok::Op("&")) && matches!(self.peek_at(1), Tok::Ident(_)) {
+                    self.next();
+                } else {
+                    break;
+                }
             }
-            display.push('|');
+            if group.len() > 1 {
+                for (i, name) in group.iter().enumerate() {
+                    if BUILTIN_TYPES.contains(&name.as_str()) {
+                        return Err(ParseError { msg: format!("Type {} cannot be part of an intersection type", names[i]), line });
+                    }
+                    if group[..i].contains(name) {
+                        return Err(ParseError { msg: format!("Duplicate type {} is redundant", names[i]), line });
+                    }
+                }
+            }
+            if parens {
+                if group.len() < 2 { return self.unexpected(); }
+                self.expect(Tok::Op(")"))?;
+            }
+            let display = names.join("&");
+            displays.push(if parens { format!("({display})") } else { display });
+            types.push(group);
+            parenthesized.push(parens);
+            if !self.eat(&Tok::Op("|")) { break; }
+            if nullable { return self.unexpected(); }
+        }
+        // PHP requires parentheses around an intersection inside a union and
+        // does not accept redundant parentheses around a standalone type.
+        if types.len() == 1 && parenthesized[0]
+            || types.len() > 1 && types.iter().zip(&parenthesized).any(|(g, p)| g.len() > 1 && !p)
+            || nullable && types[0].len() > 1
+        {
+            return self.unexpected();
+        }
+        // Reject redundant DNF alternatives without loading classes. Class
+        // inheritance and aliases are deliberately not resolved at parse time.
+        for (i, group) in types.iter().enumerate() {
+            for (j, other) in types[..i].iter().enumerate() {
+                let group_sub = other.iter().all(|t| group.contains(t));
+                let other_sub = group.iter().all(|t| other.contains(t));
+                if group_sub || other_sub {
+                    let current = displays[i].trim_matches(['(', ')']);
+                    let previous = displays[j].trim_matches(['(', ')']);
+                    let msg = if group.len() == 1 && other.len() == 1 {
+                        format!("Duplicate type {current} is redundant")
+                    } else if group_sub && other_sub {
+                        format!("Type {current} is redundant with type {previous}")
+                    } else {
+                        let (narrow, wide) = if group_sub { (current, previous) } else { (previous, current) };
+                        format!("Type {narrow} is redundant as it is more restrictive than type {wide}")
+                    };
+                    return Err(ParseError { msg, line });
+                }
+            }
+        }
+        let mut display = displays.join("|");
+        if nullable {
+            types.push(vec!["null".into()]);
+            display.insert(0, '?');
         }
         Ok(TypeHint { types, display })
     }

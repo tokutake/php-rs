@@ -1,0 +1,4 @@
+
+Fatal error: Type A&B is redundant as it is more restrictive than type A in dnf_fatal_redundant.php on line 2
+Stack trace:
+#0 {main}

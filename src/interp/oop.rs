@@ -103,6 +103,12 @@ impl<W: Write> Interp<W> {
             }
         }
 
+        if !decl.is_interface && entry.interfaces.contains(&"DateTimeInterface")
+            && !parent.as_ref().is_some_and(|p| p.is_subclass_of("DateTimeInterface"))
+        {
+            return Err(Fatal::compile("DateTimeInterface can't be implemented by user classes"));
+        }
+
         let iterable = |i: &&str| *i == "Iterator" || *i == "IteratorAggregate";
         if !decl.is_interface
             && !decl.is_abstract
@@ -257,7 +263,7 @@ impl<W: Write> Interp<W> {
         entry.is_readonly = true;
         entry.allow_dynamic = false;
         entry.interfaces.push("UnitEnum");
-        let mut props = vec![("name", TypeHint { types: vec!["string".into()], display: "string".into() })];
+        let mut props = vec![("name", TypeHint { types: vec![vec!["string".into()]], display: "string".into() })];
         if let Some(ty) = &decl.backing {
             entry.interfaces.push("BackedEnum");
             entry.backing = Some(ty.clone());
@@ -627,6 +633,8 @@ impl<W: Write> Interp<W> {
                 scope: c.scope.clone(),
                 forward: c.forward.clone(),
             }),
+            Internal::DateTime(d) => Internal::DateTime(RefCell::new(d.borrow().clone())),
+            Internal::TimeZone(z) => Internal::TimeZone(RefCell::new(z.borrow().clone())),
             Internal::None | Internal::Generator(_) => Internal::None,
         };
         let copy = Object::new(o.class.clone(), internal);
@@ -859,6 +867,12 @@ impl<W: Write> Interp<W> {
             return Err(Fatal::error(format!("Non-static method {}::{}() cannot be called statically", method.class, method.name)));
         };
         let fname = format!("{}::{}", method.class, method.name);
+        if n == Native::DateTime {
+            return builtins::date::method_call(self, &this, &fname, &method.name.to_ascii_lowercase(), vals);
+        }
+        if n == Native::TimeZone {
+            return builtins::date::timezone_method(self, &this, &fname, &method.name.to_ascii_lowercase(), vals);
+        }
         if n == Native::ThrowableConstruct {
             if vals.len() > 3 {
                 return Err(Fatal::new(
@@ -1442,7 +1456,7 @@ impl<W: Write> Interp<W> {
             scope: ctx.scope.as_deref(),
             static_class: ctx.static_class.as_deref(),
         };
-        ty.types.iter().any(|t| tc.class_matches(&o.class, t))
+        ty.types.iter().any(|group| group.iter().all(|t| tc.class_matches(&o.class, t)))
     }
 
     /// Built-in functions about classes and objects, which need the class table or scope

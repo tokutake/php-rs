@@ -449,6 +449,18 @@ pub fn loose_cmp(a: &Value, b: &Value) -> Option<Ordering> {
         (Str(_), Int(_) | Float(_)) => loose_cmp(b, a).map(Ordering::reverse),
         (Array(x), Array(y)) => nested(|| cmp_arrays(x, y)).flatten(),
         (Object(x), Object(y)) if Rc::ptr_eq(x, y) => Some(Ordering::Equal),
+        (Object(x), Object(y)) if matches!((&x.internal, &y.internal), (object::Internal::DateTime(_), object::Internal::DateTime(_))) => {
+            let (object::Internal::DateTime(x), object::Internal::DateTime(y)) = (&x.internal, &y.internal) else { unreachable!() };
+            let x = x.borrow(); let y = y.borrow();
+            let (x, y) = (x.as_ref()?, y.as_ref()?);
+            Some((x.seconds, x.micros).cmp(&(y.seconds, y.micros)))
+        }
+        (Object(x), Object(y)) if matches!((&x.internal, &y.internal), (object::Internal::TimeZone(_), object::Internal::TimeZone(_))) => {
+            let (object::Internal::TimeZone(x), object::Internal::TimeZone(y)) = (&x.internal, &y.internal) else { unreachable!() };
+            let x = x.borrow(); let y = y.borrow();
+            let (x, y) = (x.as_ref()?, y.as_ref()?);
+            (x.kind == y.kind && x.name == y.name).then_some(Ordering::Equal)
+        }
         // Enum cases are singletons: only identical ones are equal
         (Object(x), Object(y)) if x.class.is_enum || y.class.is_enum => None,
         // Objects of the same class compare by their properties; anything else is uncomparable

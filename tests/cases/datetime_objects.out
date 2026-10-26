@@ -1,0 +1,30 @@
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+int(0)
+int(-1)
+array(3) {
+  ["date"]=>
+  string(26) "2024-01-01 00:00:00.000001"
+  ["timezone_type"]=>
+  int(3)
+  ["timezone"]=>
+  string(3) "UTC"
+}
+array(0) {
+}
+string(72) "{"date":"2024-01-01 00:00:00.000001","timezone_type":3,"timezone":"UTC"}"
+string(44) "{"timezone_type":3,"timezone":"Asia\/Tokyo"}"
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+2000-01-02T00:00:00+00:00 2000-01-01T00:00:00+00:00
+UTC UTC 0 +00:00
+Etc/UTC UTC 0 +00:00
+GMT GMT 0 +00:00
+EST EST 0 -05:00
+EDT EDT 1 -04:00
+CET CET 0 +01:00
+asia/tokyo JST 0 +09:00

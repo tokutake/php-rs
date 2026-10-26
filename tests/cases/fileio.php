@@ -83,7 +83,7 @@ var_dump(rmdir("$d/a/b"), rmdir("$d/a"), rmdir($d), is_dir($d));
 try { file_get_contents(''); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
 try { file_get_contents("a\0b"); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
 try { file('x', 1024); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
-var_dump(sys_get_temp_dir());
+var_dump(is_dir(sys_get_temp_dir()));
 $t = tmpfile(); fwrite($t, "hello"); rewind($t); var_dump(fread($t, 10), stream_get_meta_data($t)['mode']);
 $f = fopen('php://memory', 'w+'); fwrite($f, "a,b\n"); var_dump(fputcsv($f, ['x', 'y z', 'q"r', 'a,b', "n\nl", ''], ',', '"', '\\'), fputcsv($f, [1, 2.5, true, null], ';', "'", ''));
 rewind($f); var_dump(stream_get_contents($f), stream_get_contents($f, -1, 0), stream_get_contents($f, 3, 1));

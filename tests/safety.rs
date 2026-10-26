@@ -202,3 +202,27 @@ fn endless_streams_hit_the_memory_limit() {
     let (code, out) = run("fread_len", "<?php var_dump(strlen(fread(fopen(__FILE__, 'r'), PHP_INT_MAX)));");
     assert_eq!((code, out.as_str()), (0, "int(65)\n"));
 }
+
+#[test]
+fn extreme_dates_do_not_panic() {
+    let (code, out) = run("extreme_dates", r#"<?php
+        date_default_timezone_set('UTC');
+        foreach ([PHP_INT_MIN, PHP_INT_MAX] as $t) {
+            $d = new DateTime('@0');
+            $d->setTimestamp($t);
+            if ($d->getTimestamp() !== $t || strlen($d->format('c W o')) === 0) exit(1);
+        }
+        foreach (['9223372036854775807 weeks', '-9223372036854775808 days ago',
+                  '9999999999999999999999-01-01', '@-9223372036854775808.1',
+                  str_repeat('1', 100000), '日本語'] as $input) {
+            if (strtotime($input, 0) !== false) exit(2);
+        }
+        if (gmmktime(PHP_INT_MAX, 0, 0, 1, 1, PHP_INT_MAX) !== false) exit(3);
+        $d = new DateTime('@0');
+        try { $d->setISODate(PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX); exit(4); }
+        catch (DateRangeError $e) {}
+        echo 'safe';
+    "#);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "safe");
+}

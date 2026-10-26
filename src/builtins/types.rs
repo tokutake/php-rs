@@ -224,7 +224,7 @@ fn var_export_at(out: &mut Vec<u8>, v: &Value, level: usize, visiting: &mut Vec<
                 }
                 out.extend_from_slice(b"::__set_state(array(\n");
             }
-            for (k, v) in o.ordered_props() {
+            for (k, v) in o.export_props() {
                 spaces(out, level + 2);
                 match &k {
                     Key::Int(i) => out.extend_from_slice(i.to_string().as_bytes()),

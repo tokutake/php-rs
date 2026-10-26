@@ -1,0 +1,4 @@
+
+Fatal error: Type int cannot be part of an intersection type in intersection_fatal_builtin.php on line 2
+Stack trace:
+#0 {main}

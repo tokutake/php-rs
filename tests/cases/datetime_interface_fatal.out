@@ -1,0 +1,4 @@
+
+Fatal error: DateTimeInterface can't be implemented by user classes in datetime_interface_fatal.php on line 2
+Stack trace:
+#0 {main}

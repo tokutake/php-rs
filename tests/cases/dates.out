@@ -1,0 +1,139 @@
+bool(true)
+string(3) "UTC"
+1970-01-01 00:00:00 Thu Thursday 4 4 0 01 1970 st January Jan 1 31 0 70 am AM 12 12 0 000000 000 041 UTC 0 +0000 +00:00 Z UTC 0 0 1970-01-01T00:00:00+00:00 Thu, 01 Jan 1970 00:00:00 +0000
+1969-12-31 23:59:59 Wed Wednesday 3 3 364 01 1970 st December Dec 12 31 0 69 pm PM 11 11 23 000000 000 041 UTC 0 +0000 +00:00 Z UTC 0 -1 1969-12-31T23:59:59+00:00 Wed, 31 Dec 1969 23:59:59 +0000
+2000-02-29 11:54:56 Tue Tuesday 2 2 59 09 2000 th February Feb 2 29 1 00 am AM 11 11 11 000000 000 538 UTC 0 +0000 +00:00 Z UTC 0 951825296 2000-02-29T11:54:56+00:00 Tue, 29 Feb 2000 11:54:56 +0000
+2021-01-01 00:00:00 Fri Friday 5 5 0 53 2020 st January Jan 1 31 0 21 am AM 12 12 0 000000 000 041 UTC 0 +0000 +00:00 Z UTC 0 1609459200 2021-01-01T00:00:00+00:00 Fri, 01 Jan 2021 00:00:00 +0000
+2024-02-29 12:00:00 Thu Thursday 4 4 59 09 2024 th February Feb 2 29 1 24 pm PM 12 12 12 000000 000 541 UTC 0 +0000 +00:00 Z UTC 0 1709208000 2024-02-29T12:00:00+00:00 Thu, 29 Feb 2024 12:00:00 +0000
+2038-01-19 03:14:08 Tue Tuesday 2 2 18 03 2038 th January Jan 1 31 0 38 am AM 3 03 3 000000 000 176 UTC 0 +0000 +00:00 Z UTC 0 2147483648 2038-01-19T03:14:08+00:00 Tue, 19 Jan 2038 03:14:08 +0000
+292277026596-12-04 15:30:07 Sun Sunday 7 0 338 48 292277026596 th December Dec 12 31 1 96 pm PM 3 03 15 000000 000 687 UTC 0 +0000 +00:00 Z UTC 0 9223372036854775807 292277026596-12-04T15:30:07+00:00 Sun, 04 Dec 292277026596 15:30:07 +0000
+-292277022657-01-27 08:29:52 Sun Sunday 7 0 26 04 -292277022657 th January Jan 1 31 0 -57 am AM 8 08 8 000000 000 395 UTC 0 +0000 +00:00 Z UTC 0 -9223372036854775808 -292277022657-01-27T08:29:52+00:00 Sun, 27 Jan -292277022657 08:29:52 +0000
+1970-01-01: int(0)
+2000-02-29 12:34:56: int(951827696)
+2024-02-30: int(1709251200)
+2024-03-01T12:30:45Z: int(1709296245)
+2024-03-01T12:30:45+09:00: int(1709263845)
+@-0.500000: int(-1)
+1 January 2000: int(946684800)
+February 29, 2024: int(1709164800)
+10:20 pm: int(1709331600)
++1 day: int(1709380800)
++1 month: int(1711972800)
+-2 weeks: int(1708084800)
+2 days ago: int(1709121600)
+tomorrow: int(1709337600)
+yesterday: int(1709164800)
+next monday: int(1709510400)
+last friday: int(1708646400)
+first day of next month: int(1711972800)
+last day of this month: int(1711886400)
+: bool(false)
+not a date: bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+int(0)
+int(1709341201)
+array(11) {
+  ["seconds"]=>
+  int(0)
+  ["minutes"]=>
+  int(0)
+  ["hours"]=>
+  int(0)
+  ["mday"]=>
+  int(1)
+  ["wday"]=>
+  int(4)
+  ["mon"]=>
+  int(1)
+  ["year"]=>
+  int(1970)
+  ["yday"]=>
+  int(0)
+  ["weekday"]=>
+  string(8) "Thursday"
+  ["month"]=>
+  string(7) "January"
+  [0]=>
+  int(0)
+}
+array(9) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(0)
+  [2]=>
+  int(0)
+  [3]=>
+  int(1)
+  [4]=>
+  int(0)
+  [5]=>
+  int(70)
+  [6]=>
+  int(4)
+  [7]=>
+  int(0)
+  [8]=>
+  int(0)
+}
+array(9) {
+  ["tm_sec"]=>
+  int(0)
+  ["tm_min"]=>
+  int(0)
+  ["tm_hour"]=>
+  int(0)
+  ["tm_mday"]=>
+  int(1)
+  ["tm_mon"]=>
+  int(0)
+  ["tm_year"]=>
+  int(70)
+  ["tm_wday"]=>
+  int(4)
+  ["tm_yday"]=>
+  int(0)
+  ["tm_isdst"]=>
+  int(0)
+}
+int(29)
+int(12)
+int(0)
+int(1)
+int(2)
+int(4)
+int(2024)
+int(29)
+int(1709208000)
+int(9)
+int(2024)
+int(59)
+int(0)
+
+Warning: idate(): Unrecognized date format token in dates.php on line 13
+bool(false)
+
+Warning: idate(): idate format is one char in dates.php on line 14
+bool(false)
+string(25) "1970-01-01T00:00:00+00:00"
+int(946684800)
+bool(true)
+1970-01-01T09:00:00+09:00 Asia/Tokyo JST
+1970-01-01T00:00:00+00:00 UTC GMT
+int(-32400)
+
+Notice: date_default_timezone_set(): Timezone ID 'Invalid/Zone' is invalid in dates.php on line 19
+bool(false)
+string(10) "Asia/Tokyo"
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+Thu, 01 Jan 1970 00:00:00 +0000: int(0)
+2024-00-00: int(1701270000)
+-0500-01-01: int(-77945707139)
+70-01-01: int(-32400)
