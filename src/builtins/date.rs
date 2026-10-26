@@ -142,7 +142,7 @@ fn base() -> DateTime {
 fn out_of_range() -> Fatal {
     Fatal::new("DateRangeError", "Epoch doesn't fit in a PHP integer")
 }
-fn state(obj: &Object) -> EResult<DateTime> {
+pub(super) fn state(obj: &Object) -> EResult<DateTime> {
     match &obj.internal {
         Internal::DateTime(d) => d.borrow().clone().ok_or_else(|| {
             Fatal::error(
@@ -187,7 +187,7 @@ fn store(obj: &Object, value: DateTime) {
         *d.borrow_mut() = Some(value);
     }
 }
-fn make(rt: &mut dyn Runtime, class: &str, value: DateTime) -> EResult<Value> {
+pub(super) fn make(rt: &mut dyn Runtime, class: &str, value: DateTime) -> EResult<Value> {
     let obj = rt
         .new_object(class)
         .ok_or_else(|| Fatal::error("DateTime class is unavailable"))?;

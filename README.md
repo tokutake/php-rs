@@ -88,6 +88,9 @@ Early stage. Implemented so far:
   `DateInterval` supports ISO durations, relative strings, mutable components,
   formatting and cloning; `DateTime::add()` / `sub()` / `diff()` and their
   procedural forms distinguish calendar days from elapsed hours across DST.
+  `DatePeriod` lazily iterates by recurrence count or end date, with start/end
+  inclusion flags, ISO 8601 construction, readonly snapshot properties and
+  `InternalIterator` support. Its steps follow local calendar time across DST.
   `strtotime` accepts ISO dates and times,
   Unix timestamps, common English dates and relative day/week/month/year/time
   adjustments. Named zones use `/usr/share/zoneinfo` (IANA TZif), including
@@ -107,8 +110,8 @@ Early stage. Implemented so far:
   pathological pattern ends in `PREG_BACKTRACK_LIMIT_ERROR` and friends rather
   than a hang or a crash
 
-Not yet: the rest of the date extension (`DatePeriod`, the full timelib
-free-form/relative parsing grammar and diagnostics),
+Not yet: the rest of the date extension (the full timelib free-form/relative
+parsing grammar and diagnostics),
 network streams and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage

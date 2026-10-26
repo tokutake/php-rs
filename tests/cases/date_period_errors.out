@@ -1,0 +1,23 @@
+DateMalformedPeriodStringException: DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640
+DateMalformedPeriodStringException: DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640
+DateMalformedPeriodStringException: DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640
+DateMalformedStringException: DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640 (including options)
+DateMalformedPeriodStringException: DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640
+TypeError: DatePeriod::__construct() accepts (DateTimeInterface, DateInterval, int [, int]), or (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments
+TypeError: DatePeriod::__construct() accepts (DateTimeInterface, DateInterval, int [, int]), or (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments
+TypeError: DatePeriod::__construct() accepts (DateTimeInterface, DateInterval, int [, int]), or (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments
+Error: Cannot modify readonly property DatePeriod::$start
+Error: Cannot modify readonly property DatePeriod::$current
+Error: Cannot modify readonly property DatePeriod::$end
+Error: Cannot modify readonly property DatePeriod::$interval
+Error: Cannot modify readonly property DatePeriod::$recurrences
+Error: Cannot modify readonly property DatePeriod::$include_start_date
+Error: Cannot modify readonly property DatePeriod::$include_end_date
+Error: Cannot unset DatePeriod::$start
+Error: Cannot modify readonly property DatePeriod::$start
+Error: An iterator cannot be used with foreach by reference
+Error: An iterator cannot be used with foreach by reference
+Error: Trying to clone an uncloneable object of class InternalIterator
+Error: Call to private InternalIterator::__construct() from global scope
+int(2)
+int(1)

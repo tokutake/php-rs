@@ -114,6 +114,9 @@ pub struct ClassConst {
 /// Methods implemented natively for built-in classes
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Native {
+    Period,
+    PeriodFactory,
+    PeriodIterator,
     DateFactory,
     Interval,
     IntervalFactory,
@@ -246,6 +249,9 @@ pub struct Object {
 }
 
 pub enum Internal {
+    // Keep the enum (and recursive Object drop frames) small for ordinary objects.
+    Period(Box<RefCell<Option<crate::builtins::date_period::Period>>>),
+    PeriodIterator(RefCell<Option<crate::builtins::date_period::Cursor>>),
     Interval(RefCell<Option<crate::datetime::interval::Interval>>),
     DateTime(RefCell<Option<crate::datetime::DateTime>>),
     TimeZone(RefCell<Option<Rc<crate::datetime::Zone>>>),
@@ -410,6 +416,10 @@ impl Object {
             Internal::TimeZone(RefCell::new(None))
         } else if matches!(internal, Internal::None) && class.is_subclass_of("DateInterval") {
             Internal::Interval(RefCell::new(None))
+        } else if matches!(internal, Internal::None) && class.is_subclass_of("DatePeriod") {
+            Internal::Period(Box::new(RefCell::new(None)))
+        } else if matches!(internal, Internal::None) && class.name == "InternalIterator" {
+            Internal::PeriodIterator(RefCell::new(None))
         } else { internal };
         let id = alloc_id();
         let mut props = PhpArray::new();
@@ -474,13 +484,21 @@ impl Object {
                 }
             }
         }
+        if matches!(self.internal, Internal::Period(_)) {
+            for (key, value) in &mut out {
+                let name = unmangle(key).0;
+                if crate::builtins::date_period::PROPERTIES.contains(&name.as_str()) {
+                    *value = crate::builtins::date_period::public_value(&name,value.clone());
+                }
+            }
+        }
         out
     }
 
     pub fn closure(&self) -> Option<&Closure> {
         match &self.internal {
             Internal::Closure(c) => Some(c),
-            Internal::None | Internal::Generator(_) | Internal::DateTime(_) | Internal::TimeZone(_) | Internal::Interval(_) => None,
+            Internal::None | Internal::Generator(_) | Internal::DateTime(_) | Internal::TimeZone(_) | Internal::Interval(_) | Internal::Period(_) | Internal::PeriodIterator(_) => None,
         }
     }
 
@@ -692,6 +710,7 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         ("DateMalformedStringException", "DateException"),
         ("DateInvalidTimeZoneException", "DateException"),
         ("DateMalformedIntervalStringException", "DateException"),
+        ("DateMalformedPeriodStringException", "DateException"),
         ("DateInvalidOperationException", "DateException"),
     ] {
         let c = put(plain_subclass(name, &by_name[parent]));
@@ -786,6 +805,18 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     let (key, method) = static_native("createFromDateString", "DateInterval", Native::IntervalFactory);
     methods.insert(key, method);
     put(ClassEntry { name: "DateInterval", methods, ..Default::default() });
+    let mut methods: HashMap<_, _> = ["__construct", "getStartDate", "getEndDate", "getDateInterval", "getRecurrences", "getIterator"].iter().map(|m| native(m, "DatePeriod", Native::Period, false)).collect();
+    let (key, method) = static_native("createFromISO8601String", "DatePeriod", Native::PeriodFactory);
+    methods.insert(key, method);
+    let props = crate::builtins::date_period::PROPERTIES.iter().map(|name| PropInfo { name:(*name).into(), key:Key::from_bytes(name.as_bytes()), vis:Visibility::Public, class:"DatePeriod", ty:None, default:Some(Value::Null), readonly:true }).collect();
+    let consts = [("EXCLUDE_START_DATE",1),("INCLUDE_END_DATE",2)].into_iter().map(|(name,value)| (name.into(),Rc::new(ClassConst {vis:Visibility::Public,class:"DatePeriod",state:RefCell::new(ConstState::Done(Value::Int(value)))}))).collect();
+    put(ClassEntry {name:"DatePeriod", interfaces:vec!["IteratorAggregate","Traversable"], methods, props, consts, ..Default::default()});
+    let mut methods: HashMap<_, _> = ["current","key","next","valid","rewind"].iter().map(|m|native(m,"InternalIterator",Native::PeriodIterator,false)).collect();
+    let (key, method) = native("__construct","InternalIterator",Native::Abstract,false);
+    let mut method = Rc::try_unwrap(method).expect("fresh native method");
+    method.vis = Visibility::Private;
+    methods.insert(key,Rc::new(method));
+    put(ClassEntry {name:"InternalIterator", is_final:true, internal_only:true, interfaces:vec!["Iterator","Traversable"], methods, ..Default::default()});
     map
 }
 

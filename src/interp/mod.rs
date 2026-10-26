@@ -852,6 +852,9 @@ impl<W: Write> Interp<W> {
             }
             Stmt::Foreach { subject, key, value, by_ref, body } if !by_ref || !subject.is_lvalue() => {
                 let v = self.expr(subject)?;
+                if *by_ref && let Value::Object(o) = &v && matches!(o.internal, Internal::Period(_) | Internal::PeriodIterator(_)) {
+                    return Err(Fatal::error("An iterator cannot be used with foreach by reference"));
+                }
                 // By reference over a temporary: nothing to write back to
                 if *by_ref && let Value::Object(o) = &v && matches!(o.internal, Internal::Generator(_)) {
                     return Err(self.generator_by_ref(o));
@@ -900,6 +903,9 @@ impl<W: Write> Interp<W> {
                     Ok(keys) => keys,
                     Err(Value::Object(o)) if matches!(o.internal, Internal::Generator(_)) => {
                         return Err(self.generator_by_ref(&o));
+                    }
+                    Err(Value::Object(o)) if matches!(o.internal, Internal::Period(_) | Internal::PeriodIterator(_)) => {
+                        return Err(Fatal::error("An iterator cannot be used with foreach by reference"));
                     }
                     Err(Value::Object(_)) => {
                         return Err(Fatal::error("Iterating objects by reference is not supported yet"));
