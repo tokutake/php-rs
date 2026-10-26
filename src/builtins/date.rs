@@ -24,6 +24,14 @@ pub const NAMES: &[&str] = &[
     "localtime",
     "date_default_timezone_get",
     "date_default_timezone_set",
+    "date_add",
+    "date_sub",
+    "date_diff",
+    "date_interval_create_from_date_string",
+    "date_interval_format",
+    "date_get_last_errors",
+    "date_create_from_format",
+    "date_create_immutable_from_format",
     "date_create",
     "date_create_immutable",
     "date_format",
@@ -72,6 +80,60 @@ fn nullable_int(f: &str, n: usize, p: &str, v: Option<Value>, default: i64) -> E
     match v {
         None | Some(Value::Null) => Ok(default),
         Some(v) => arg_int(f, n, p, &v),
+    }
+}
+pub fn last_errors() -> Value {
+    let errors = datetime::format::last_errors();
+    if errors.is_empty() {
+        return Value::Bool(false);
+    }
+    let map = |values: std::collections::BTreeMap<usize, String>| {
+        Value::Array(Rc::new(
+            values
+                .into_iter()
+                .map(|(pos, msg)| (Key::Int(pos as i64), Value::str(msg)))
+                .collect(),
+        ))
+    };
+    let mut array = PhpArray::new();
+    for (name, value) in [
+        ("warning_count", Value::Int(errors.warning_count as i64)),
+        ("warnings", map(errors.warnings)),
+        ("error_count", Value::Int(errors.error_count as i64)),
+        ("errors", map(errors.errors)),
+    ] {
+        array.insert(Key::from_bytes(name.as_bytes()), value);
+    }
+    Value::Array(Rc::new(array))
+}
+pub fn factory(
+    rt: &mut dyn Runtime,
+    class: &str,
+    fname: &str,
+    method: &str,
+    vals: Vec<Value>,
+) -> EResult<Value> {
+    if method == "getlasterrors" {
+        args::<0, 0>(fname, vals)?;
+        return Ok(last_errors());
+    }
+    let [format, text, zone] = args::<2, 3>(fname, vals)?;
+    let format = arg_str(rt, fname, 1, "format", &format.unwrap())?;
+    let text = arg_str(rt, fname, 2, "datetime", &text.unwrap())?;
+    if text.contains(&0) {
+        return Err(Fatal::value_error(format!(
+            "{fname}(): Argument #2 ($datetime) must not contain any null bytes"
+        )));
+    }
+    let mut b = base();
+    if let Some(z) = zone
+        && !matches!(z, Value::Null)
+    {
+        b.zone = zone_arg(fname, 3, "timezone", &z)?;
+    }
+    match datetime::format::parse(&format, &text, &b) {
+        Some(date) => make(rt, class, date),
+        None => Ok(Value::Bool(false)),
     }
 }
 fn base() -> DateTime {
@@ -229,6 +291,31 @@ fn procedural_error(mut e: Fatal, name: &str) -> Fatal {
 }
 fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
     match lname {
+        "date_interval_create_from_date_string" => {
+            super::date_interval::from_string(rt, name, vals)
+        }
+        "date_interval_format" => {
+            arity(name, 2, 2, vals.len())?;
+            let mut vals = vals;
+            let obj = object_arg(name, 1, "object", vals.remove(0), "DateInterval")?;
+            super::date_interval::method(rt, &obj, name, "format", vals)
+                .map_err(|e| procedural_error(e, name))
+        }
+        "date_get_last_errors" => {
+            args::<0, 0>(name, vals)?;
+            Ok(last_errors())
+        }
+        "date_create_from_format" | "date_create_immutable_from_format" => factory(
+            rt,
+            if lname == "date_create_from_format" {
+                "DateTime"
+            } else {
+                "DateTimeImmutable"
+            },
+            name,
+            "createfromformat",
+            vals,
+        ),
         "time" => {
             args::<0, 0>(name, vals)?;
             Ok(Value::Int(datetime::now().0))
@@ -468,6 +555,9 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
         }
         _ => {
             let method = match lname {
+                "date_add" => "add",
+                "date_sub" => "sub",
+                "date_diff" => "diff",
                 "date_format" => "format",
                 "date_modify" => "modify",
                 "date_timestamp_get" => "gettimestamp",
@@ -482,6 +572,8 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             };
             let (min, max) = match method {
                 "format" | "modify" | "settimestamp" | "settimezone" => (2, 2),
+                "add" | "sub" => (2, 2),
+                "diff" => (2, 3),
                 "setdate" => (4, 4),
                 "settime" => (3, 5),
                 "setisodate" => (3, 4),
@@ -491,7 +583,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             let mut vals = vals;
             let class = if matches!(
                 method,
-                "format" | "gettimestamp" | "gettimezone" | "getoffset"
+                "format" | "gettimestamp" | "gettimezone" | "getoffset" | "diff"
             ) {
                 "DateTimeInterface"
             } else {
@@ -528,6 +620,55 @@ pub fn method_call(
     }
     let mut d = state(obj)?;
     match method {
+        "add" | "sub" => {
+            let [interval] = args::<1, 1>(fname, vals)?;
+            let obj = object_arg(fname, 1, "interval", interval.unwrap(), "DateInterval")?;
+            let interval = super::date_interval::state(&obj)?;
+            // Relative strings can contain weekday rules in addition to fields.
+            d = if interval.special {
+                let text = interval.relative.as_deref().unwrap_or("");
+                if method == "sub" {
+                    return Err(Fatal::new(
+                        "DateInvalidOperationException",
+                        format!(
+                            "{fname}(): Only non-special relative time specifications are supported for subtraction"
+                        ),
+                    ));
+                }
+                let mut next = datetime::parse(text, &d).ok_or_else(out_of_range)?;
+                let source = d.civil();
+                next.set_civil(Civil {
+                    hour: source.hour,
+                    minute: source.minute,
+                    second: source.second,
+                    ..next.civil()
+                })
+                .ok_or_else(out_of_range)?;
+                next.micros = d.micros;
+                next
+            } else {
+                interval
+                    .apply(&d, method == "sub")
+                    .ok_or_else(out_of_range)?
+            };
+        }
+        "diff" => {
+            let [target, absolute] = args::<1, 2>(fname, vals)?;
+            let target = object_arg(
+                fname,
+                1,
+                "targetObject",
+                target.unwrap(),
+                "DateTimeInterface",
+            )?;
+            let absolute = match absolute {
+                None => false,
+                Some(v) => super::arg_bool(fname, 2, "absolute", &v)?,
+            };
+            let interval = datetime::interval::Interval::diff(&d, &state(&target)?, absolute)
+                .ok_or_else(out_of_range)?;
+            return super::date_interval::make(rt, interval);
+        }
         "format" => {
             let [f] = args::<1, 1>(fname, vals)?;
             let f = arg_str(rt, fname, 1, "format", &f.unwrap())?;

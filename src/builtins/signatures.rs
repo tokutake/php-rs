@@ -309,12 +309,26 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "format", default: None, variadic: false, by_ref: false },
         Param { name: "timestamp", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
+    ("date_add", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "interval", default: None, variadic: false, by_ref: false },
+    ]),
     ("date_create", &[
         Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
         Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
+    ("date_create_from_format", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
+        Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
     ("date_create_immutable", &[
         Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
+        Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("date_create_immutable_from_format", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
         Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
     ("date_date_set", &[
@@ -328,7 +342,21 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("date_default_timezone_set", &[
         Param { name: "timezoneId", default: None, variadic: false, by_ref: false },
     ]),
+    ("date_diff", &[
+        Param { name: "baseObject", default: None, variadic: false, by_ref: false },
+        Param { name: "targetObject", default: None, variadic: false, by_ref: false },
+        Param { name: "absolute", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("date_format", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_get_last_errors", &[
+    ]),
+    ("date_interval_create_from_date_string", &[
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_interval_format", &[
         Param { name: "object", default: None, variadic: false, by_ref: false },
         Param { name: "format", default: None, variadic: false, by_ref: false },
     ]),
@@ -344,6 +372,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("date_offset_get", &[
         Param { name: "object", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_sub", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "interval", default: None, variadic: false, by_ref: false },
     ]),
     ("date_time_set", &[
         Param { name: "object", default: None, variadic: false, by_ref: false },
@@ -366,12 +398,35 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "object", default: None, variadic: false, by_ref: false },
         Param { name: "timezone", default: None, variadic: false, by_ref: false },
     ]),
+    ("dateinterval::__construct", &[
+        Param { name: "duration", default: None, variadic: false, by_ref: false },
+    ]),
+    ("dateinterval::createfromdatestring", &[
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
+    ]),
+    ("dateinterval::format", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+    ]),
     ("datetime::__construct", &[
         Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
         Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
+    ("datetime::add", &[
+        Param { name: "interval", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetime::createfromformat", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
+        Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("datetime::diff", &[
+        Param { name: "targetObject", default: None, variadic: false, by_ref: false },
+        Param { name: "absolute", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("datetime::format", &[
         Param { name: "format", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetime::getlasterrors", &[
     ]),
     ("datetime::getmicrosecond", &[
     ]),
@@ -409,12 +464,29 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("datetime::settimezone", &[
         Param { name: "timezone", default: None, variadic: false, by_ref: false },
     ]),
+    ("datetime::sub", &[
+        Param { name: "interval", default: None, variadic: false, by_ref: false },
+    ]),
     ("datetimeimmutable::__construct", &[
         Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
         Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
+    ("datetimeimmutable::add", &[
+        Param { name: "interval", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::createfromformat", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
+        Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::diff", &[
+        Param { name: "targetObject", default: None, variadic: false, by_ref: false },
+        Param { name: "absolute", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("datetimeimmutable::format", &[
         Param { name: "format", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::getlasterrors", &[
     ]),
     ("datetimeimmutable::getmicrosecond", &[
     ]),
@@ -451,6 +523,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("datetimeimmutable::settimezone", &[
         Param { name: "timezone", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::sub", &[
+        Param { name: "interval", default: None, variadic: false, by_ref: false },
     ]),
     ("datetimezone::__construct", &[
         Param { name: "timezone", default: None, variadic: false, by_ref: false },

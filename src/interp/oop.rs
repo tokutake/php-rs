@@ -633,6 +633,7 @@ impl<W: Write> Interp<W> {
                 scope: c.scope.clone(),
                 forward: c.forward.clone(),
             }),
+            Internal::Interval(i) => Internal::Interval(RefCell::new(i.borrow().clone())),
             Internal::DateTime(d) => Internal::DateTime(RefCell::new(d.borrow().clone())),
             Internal::TimeZone(z) => Internal::TimeZone(RefCell::new(z.borrow().clone())),
             Internal::None | Internal::Generator(_) => Internal::None,
@@ -724,6 +725,10 @@ impl<W: Write> Interp<W> {
                 let class = Some((method.class.to_string(), if this.is_some() && !method.is_static { "->" } else { "::" }));
                 let shown = vals.clone();
                 return self.internal_call(method.name.clone(), class, shown, line, |this_| {
+                    if *n == Native::DateFactory {
+                        let fname = format!("{}::{}", method.class, method.name);
+                        return builtins::date::factory(this_, static_class.name, &fname, &method.name.to_ascii_lowercase(), vals);
+                    }
                     this_.native_method(*n, method, this, vals, line)
                 });
             }
@@ -857,6 +862,9 @@ impl<W: Write> Interp<W> {
         if matches!(n, Native::EnumCases | Native::EnumFrom | Native::EnumTryFrom) {
             return self.enum_native(n, method, vals);
         }
+        if n == Native::IntervalFactory {
+            return builtins::date_interval::from_string(self, &format!("{}::{}", method.class, method.name), vals);
+        }
         if n == Native::ClosureFromCallable {
             return self.closure_from_callable(vals);
         }
@@ -867,6 +875,9 @@ impl<W: Write> Interp<W> {
             return Err(Fatal::error(format!("Non-static method {}::{}() cannot be called statically", method.class, method.name)));
         };
         let fname = format!("{}::{}", method.class, method.name);
+        if n == Native::Interval {
+            return builtins::date_interval::method(self, &this, &fname, &method.name.to_ascii_lowercase(), vals);
+        }
         if n == Native::DateTime {
             return builtins::date::method_call(self, &this, &fname, &method.name.to_ascii_lowercase(), vals);
         }
@@ -1036,6 +1047,7 @@ impl<W: Write> Interp<W> {
     }
 
     pub(super) fn write_prop(&mut self, obj: &Rc<Object>, name: &str, v: Value) -> EResult<()> {
+        if builtins::date_interval::write(obj, name, &v) { return Ok(()); }
         let class = obj.class.name;
         match self.find_prop(&obj.class, name) {
             PropLookup::Declared(p) => {

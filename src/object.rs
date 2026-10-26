@@ -114,6 +114,9 @@ pub struct ClassConst {
 /// Methods implemented natively for built-in classes
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Native {
+    DateFactory,
+    Interval,
+    IntervalFactory,
     DateTime,
     TimeZone,
     ThrowableConstruct,
@@ -243,6 +246,7 @@ pub struct Object {
 }
 
 pub enum Internal {
+    Interval(RefCell<Option<crate::datetime::interval::Interval>>),
     DateTime(RefCell<Option<crate::datetime::DateTime>>),
     TimeZone(RefCell<Option<Rc<crate::datetime::Zone>>>),
     None,
@@ -404,6 +408,8 @@ impl Object {
             Internal::DateTime(RefCell::new(None))
         } else if matches!(internal, Internal::None) && class.is_subclass_of("DateTimeZone") {
             Internal::TimeZone(RefCell::new(None))
+        } else if matches!(internal, Internal::None) && class.is_subclass_of("DateInterval") {
+            Internal::Interval(RefCell::new(None))
         } else { internal };
         let id = alloc_id();
         let mut props = PhpArray::new();
@@ -463,7 +469,9 @@ impl Object {
             self.class.props.iter().filter_map(|p| stored.get(&p.key).map(|v| (p.key.clone(), v.clone()))).collect();
         for (k, v) in stored.iter() {
             if !self.class.props.iter().any(|p| &p.key == k) {
-                out.push((k.clone(), v.clone()));
+                if !matches!(self.internal, Internal::Interval(_)) || crate::builtins::date_interval::visible(self, &unmangle(k).0) {
+                    out.push((k.clone(), v.clone()));
+                }
             }
         }
         out
@@ -472,7 +480,7 @@ impl Object {
     pub fn closure(&self) -> Option<&Closure> {
         match &self.internal {
             Internal::Closure(c) => Some(c),
-            Internal::None | Internal::Generator(_) | Internal::DateTime(_) | Internal::TimeZone(_) => None,
+            Internal::None | Internal::Generator(_) | Internal::DateTime(_) | Internal::TimeZone(_) | Internal::Interval(_) => None,
         }
     }
 
@@ -683,6 +691,8 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         ("DateException", "Exception"),
         ("DateMalformedStringException", "DateException"),
         ("DateInvalidTimeZoneException", "DateException"),
+        ("DateMalformedIntervalStringException", "DateException"),
+        ("DateInvalidOperationException", "DateException"),
     ] {
         let c = put(plain_subclass(name, &by_name[parent]));
         by_name.insert(name, c);
@@ -766,10 +776,16 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     }).collect();
     put(ClassEntry { name: "DateTimeInterface", is_interface: true, consts: date_constants(), ..Default::default() });
     for name in ["DateTime", "DateTimeImmutable"] {
-        let methods = ["__construct", "format", "modify", "getTimestamp", "setTimestamp", "getTimezone", "setTimezone", "getOffset", "setDate", "setTime", "setISODate", "getMicrosecond", "setMicrosecond"];
-        put(ClassEntry { name, interfaces: vec!["DateTimeInterface"], consts: date_constants(), methods: methods.iter().map(|m| native(m, name, Native::DateTime, false)).collect(), ..Default::default() });
+        let methods = ["__construct", "format", "modify", "getTimestamp", "setTimestamp", "getTimezone", "setTimezone", "getOffset", "setDate", "setTime", "setISODate", "getMicrosecond", "setMicrosecond", "add", "sub", "diff"];
+        let mut methods: HashMap<_, _> = methods.iter().map(|m| native(m, name, Native::DateTime, false)).collect();
+        for m in ["createFromFormat", "getLastErrors"] { let (key, method) = static_native(m, name, Native::DateFactory); methods.insert(key, method); }
+        put(ClassEntry { name, interfaces: vec!["DateTimeInterface"], consts: date_constants(), methods, ..Default::default() });
     }
     put(ClassEntry { name: "DateTimeZone", methods: ["__construct", "getName", "getOffset"].iter().map(|m| native(m, "DateTimeZone", Native::TimeZone, false)).collect(), ..Default::default() });
+    let mut methods: HashMap<_, _> = ["__construct", "format"].iter().map(|m| native(m, "DateInterval", Native::Interval, false)).collect();
+    let (key, method) = static_native("createFromDateString", "DateInterval", Native::IntervalFactory);
+    methods.insert(key, method);
+    put(ClassEntry { name: "DateInterval", methods, ..Default::default() });
     map
 }
 

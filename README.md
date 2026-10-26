@@ -35,8 +35,9 @@ Early stage. Implemented so far:
   `$f(...)`, through `__call`/`__callStatic` too) and `Closure::fromCallable()`
 - `Closure::bind()`, `bindTo()` and `call()` with php-src's binding rules, and
   `static` closures
-- Classes and interfaces: inheritance, abstract/final, visibility, typed and
-  readonly properties, constructor promotion, static members, constants,
+- Classes and interfaces: anonymous classes (including constructor arguments,
+  inheritance, interfaces, traits and readonly), inheritance, abstract/final,
+  visibility, typed and readonly properties, constructor promotion, static members, constants,
   `self`/`parent`/`static` (late static binding), magic methods (`__get`,
   `__set`, `__call`, `__toString`, `__invoke`, ...), `clone`, user exceptions
 - Namespaces: `namespace A;` and braced `namespace A { }`, `use` imports (classes,
@@ -81,7 +82,13 @@ Early stage. Implemented so far:
   timezone functions, and `DateTime`, `DateTimeImmutable`, `DateTimeZone`.
   Formatting, calendar modification, date/time/ISO-week/timestamp/timezone
   setters, offsets, microseconds, cloning, comparisons and the corresponding
-  procedural functions are supported. `strtotime` accepts ISO dates and times,
+  procedural functions are supported. `createFromFormat()` handles numeric and
+  textual fields, reset controls, microseconds, timezone and trailing-data flags;
+  `getLastErrors()` / `date_get_last_errors()` expose parser warnings and errors.
+  `DateInterval` supports ISO durations, relative strings, mutable components,
+  formatting and cloning; `DateTime::add()` / `sub()` / `diff()` and their
+  procedural forms distinguish calendar days from elapsed hours across DST.
+  `strtotime` accepts ISO dates and times,
   Unix timestamps, common English dates and relative day/week/month/year/time
   adjustments. Named zones use `/usr/share/zoneinfo` (IANA TZif), including
   historical transitions and future POSIX `M` rules for daylight saving;
@@ -100,8 +107,8 @@ Early stage. Implemented so far:
   pathological pattern ends in `PREG_BACKTRACK_LIMIT_ERROR` and friends rather
   than a hang or a crash
 
-Not yet: the rest of the date extension (`DateInterval`, `DatePeriod`,
-`createFromFormat`, the full timelib parsing grammar and parser diagnostics),
+Not yet: the rest of the date extension (`DatePeriod`, the full timelib
+free-form/relative parsing grammar and diagnostics),
 network streams and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage

@@ -1,0 +1,68 @@
+["!Y-m-d","2024-02-30","2024-03-01 00:00:00.000000 UTC",{"warning_count":1,"warnings":{"10":"The parsed date was invalid"},"error_count":0,"errors":[]}]
+["!Y-m-d","2024-13-40","2025-02-09 00:00:00.000000 UTC",{"warning_count":1,"warnings":{"10":"The parsed date was invalid"},"error_count":0,"errors":[]}]
+["!Y-m-d","bad",false,{"warning_count":0,"warnings":[],"error_count":3,"errors":{"0":"A four digit year could not be found","3":"Not enough data available to satisfy format"}}]
+["!Y-m-d","2024-01",false,{"warning_count":0,"warnings":[],"error_count":1,"errors":{"7":"Not enough data available to satisfy format"}}]
+["!Y-m-d","2024-01-01x",false,{"warning_count":0,"warnings":[],"error_count":1,"errors":{"10":"Trailing data"}}]
+["!Y-m-d+","2024-01-01x","2024-01-01 00:00:00.000000 UTC",{"warning_count":1,"warnings":{"10":"Trailing data"},"error_count":0,"errors":[]}]
+["!Y-m-d H:i:s","2024-01-01 25:61:61","2024-01-02 02:02:01.000000 UTC",{"warning_count":1,"warnings":{"19":"The parsed time was invalid"},"error_count":0,"errors":[]}]
+["!Y","24","0024-01-01 00:00:00.000000 UTC",false]
+["!y","69","2069-01-01 00:00:00.000000 UTC",false]
+["!m","1","1970-01-01 00:00:00.000000 UTC",false]
+["!u","1","1970-01-01 00:00:00.100000 UTC",false]
+["!v","1","1970-01-01 00:00:00.100000 UTC",false]
+["!z","60","1970-03-02 00:00:00.000000 UTC",false]
+["!Y z","2024 60","2024-03-01 00:00:00.000000 UTC",false]
+["!d.m.Y","1.2.2024","2024-02-01 00:00:00.000000 UTC",false]
+["!H:i","1:2",false,{"warning_count":0,"warnings":[],"error_count":1,"errors":{"2":"A two digit minute could not be found"}}]
+["!h:i a","12:30 pm","1970-01-01 12:30:00.000000 UTC",false]
+["!h:i","12:30","1970-01-01 12:30:00.000000 UTC",false]
+["!a h:i","pm 01:30","1970-01-01 01:30:00.000000 UTC",false]
+["!Y-m-d D","2024-01-01 Tue","2024-01-02 00:00:00.000000 UTC",false]
+["!Y-m-d S","2024-01-01 xx",false,{"warning_count":0,"warnings":[],"error_count":1,"errors":{"11":"Trailing data"}}]
+["!e","Invalid\/Zone",false,{"warning_count":0,"warnings":[],"error_count":1,"errors":["The timezone could not be found in the database"]}]
+["!U.u","-1.500000","1969-12-31 23:59:59.500000 +00:00",false]
+["!Y-m-d","2024-0-0","2023-11-30 00:00:00.000000 UTC",{"warning_count":1,"warnings":{"8":"The parsed date was invalid"},"error_count":0,"errors":[]}]
+["!c","2024-01-01T00:00:00Z",false,{"warning_count":0,"warnings":[],"error_count":2,"errors":["The format separator does not match","Trailing data"]}]
+["!Y*m*d","2024abc01abc02","2024-01-02 00:00:00.000000 UTC",false]
+["Y-m-d|","2000-02-29","2000-02-29 00:00:00.000000 UTC",false]
+["!Y-m-d\\TH:i:s.uP","2024-03-01T12:34:56.1234+09:00","2024-03-01 12:34:56.123400 +09:00",false]
+["!F j, Y g:i A","February 29, 2024 3:45 PM","2024-02-29 15:45:00.000000 UTC",false]
+["!Y#m#d","2024\/01\/02","2024-01-02 00:00:00.000000 UTC",false]
+bool(true)
+bool(false)
+string(25) "2000-01-01T00:00:00+00:00"
+string(25) "2024-01-01T00:00:00+09:00"
+ValueError: DateTime::createFromFormat(): Argument #2 ($datetime) must not contain any null bytes
+array(4) {
+  ["warning_count"]=>
+  int(1)
+  ["warnings"]=>
+  array(1) {
+    [11]=>
+    string(27) "The parsed date was invalid"
+  }
+  ["error_count"]=>
+  int(0)
+  ["errors"]=>
+  array(0) {
+  }
+}
+bool(false)
+array(4) {
+  ["warning_count"]=>
+  int(0)
+  ["warnings"]=>
+  array(0) {
+  }
+  ["error_count"]=>
+  int(1)
+  ["errors"]=>
+  array(1) {
+    [0]=>
+    string(47) "The timezone could not be found in the database"
+  }
+}
+2000-01-01T00:00:00+00:00 946684800
+1970-01-01T00:00:00+09:00 -32400
+1970-01-01T12:00:00+00:00 43200
+1970-01-01T00:00:00+00:00 0
