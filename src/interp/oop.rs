@@ -224,6 +224,9 @@ impl<W: Write> Interp<W> {
         // Defaults may refer to the class's own constants (`self::X`), so the class
         // is registered first and the defaults evaluated in its scope
         let lname = decl.name.to_ascii_lowercase();
+        if entry.is_subclass_of("ArrayAccess") {
+            self.array_access_declared = true;
+        }
         let provisional = Rc::new(entry.clone());
         self.classes.insert(lname.clone(), provisional.clone());
         self.declared.insert(Rc::as_ptr(decl));

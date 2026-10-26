@@ -303,6 +303,9 @@ pub struct Interp<W: Write> {
     ob: Vec<output::OutBuffer>,
     /// An output handler is running: its own output is dropped
     ob_running: bool,
+    /// A class implementing ArrayAccess exists. Until then write paths need
+    /// not look for objects, which only fail as arrays
+    array_access_declared: bool,
 }
 
 fn undefined_constant(name: &str) -> Fatal {
@@ -409,6 +412,7 @@ impl<W: Write> Interp<W> {
             programs: HashMap::new(),
             ob: Vec::new(),
             ob_running: false,
+            array_access_declared: false,
         }
     }
 
@@ -1586,6 +1590,9 @@ impl<W: Write> Interp<W> {
     /// are reached with offsetGet: unless that gives an object, the write lands in
     /// a copy that is thrown away, as in PHP
     fn resolve_offsets<'e>(&mut self, mut path: Path<'e>) -> EResult<Path<'e>> {
+        if !self.array_access_declared {
+            return Ok(path);
+        }
         while let Some((k, obj)) = self.find_object(&path) {
             let mut rest = path.dims.split_off(k);
             let dim = rest.remove(0);
@@ -3301,6 +3308,7 @@ fn unset_in(slot: &mut Value, dims: &[Option<Value>], last: Option<Value>) -> ER
                 }
             }
             (Value::Str(_), _) => Err(Fatal::error("Cannot unset string offsets")),
+            (Value::Object(o), _) => Err(Fatal::error(format!("Cannot use object of type {} as array", o.class.name))),
             _ => Ok(()),
         },
         None => match (slot, last) {
@@ -3313,6 +3321,7 @@ fn unset_in(slot: &mut Value, dims: &[Option<Value>], last: Option<Value>) -> ER
             }
             (_, None) => Err(Fatal::error("Cannot use [] for unsetting")),
             (Value::Str(_), _) => Err(Fatal::error("Cannot unset string offsets")),
+            (Value::Object(o), _) => Err(Fatal::error(format!("Cannot use object of type {} as array", o.class.name))),
             _ => Ok(()),
         },
     }
