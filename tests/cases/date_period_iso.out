@@ -1,0 +1,31 @@
+[0,2,["2024-01-01T00:00:00+00:00","2024-01-02T00:00:00+00:00","2024-01-03T00:00:00+00:00"]]
+[1,2,["2024-01-02T00:00:00+00:00","2024-01-03T00:00:00+00:00"]]
+[2,2,["2024-01-01T00:00:00+00:00","2024-01-02T00:00:00+00:00","2024-01-03T00:00:00+00:00","2024-01-04T00:00:00+00:00"]]
+[3,2,["2024-01-02T00:00:00+00:00","2024-01-03T00:00:00+00:00","2024-01-04T00:00:00+00:00"]]
+[0,null,["2024-01-01T00:00:00+00:00","2024-01-02T00:00:00+00:00","2024-01-03T00:00:00+00:00"]]
+[1,null,["2024-01-02T00:00:00+00:00","2024-01-03T00:00:00+00:00"]]
+[2,null,["2024-01-01T00:00:00+00:00","2024-01-02T00:00:00+00:00","2024-01-03T00:00:00+00:00","2024-01-04T00:00:00+00:00"]]
+[3,null,["2024-01-02T00:00:00+00:00","2024-01-03T00:00:00+00:00","2024-01-04T00:00:00+00:00"]]
+DateMalformedPeriodStringException: Unknown or bad format (bad)
+DateMalformedPeriodStringException: DatePeriod::createFromISO8601String(): Recurrence count must be greater or equal to 1 and lower than 2147483640
+DateMalformedPeriodStringException: Unknown or bad format (R/2024-01-01T00:00:00Z/P1D)
+DateMalformedPeriodStringException: Unknown or bad format (R2/2024-01-01/P1D)
+DateMalformedPeriodStringException: Unknown or bad format (R2/2024-01-01T00:00:00+09:00/P1D)
+DateMalformedPeriodStringException: DatePeriod::createFromISO8601String(): ISO interval must contain an interval, "R2/2024-01-01T00:00:00Z/2024-01-04T00:00:00Z" given
+DateMalformedPeriodStringException: DatePeriod::createFromISO8601String(): ISO interval must contain a start date, "P1D/2024-01-04T00:00:00Z" given
+
+Deprecated: Calling DatePeriod::__construct(string $isostr, int $options = 0) is deprecated, use DatePeriod::createFromISO8601String() instead in date_period_iso.php on line 9
+int(2)
+bool(true)
+int(3)
+array(3) {
+  [0]=>
+  string(25) "2024-01-01T00:00:00+00:00"
+  [1]=>
+  string(25) "2024-01-02T00:00:00+00:00"
+  [2]=>
+  string(25) "2024-01-03T00:00:00+00:00"
+}
+DateMalformedPeriodStringException: DatePeriod::createFromISO8601String(): Recurrence count must be greater or equal to 1 and lower than 2147483640
+DateMalformedPeriodStringException: Unknown or bad format (R2/2024-01-01T00:00Z/P1D)
+DateMalformedPeriodStringException: Unknown or bad format (R2/2024-01-01T00:00:00.5Z/P1D)

@@ -258,3 +258,32 @@ fn deeply_nested_anonymous_classes_are_bounded() {
     let src = format!("<?php $x = {}0{};", "new class (".repeat(6000), ") {}".repeat(6000));
     assert_php_error("anonymous_depth", &src, "memory exhausted");
 }
+
+#[test]
+fn date_periods_remain_lazy_for_large_recurrence_counts() {
+    let (code, out) = run("lazy_date_period", r#"<?php
+        $p = new DatePeriod(new DateTimeImmutable('2000-01-01'), new DateInterval('P1D'), 2147483638);
+        $seen = 0;
+        foreach ($p as $key => $date) {
+            if ($key !== $seen || $date->format('j') !== (string)($seen + 1)) exit(1);
+            if (++$seen === 3) break;
+        }
+        if ($p->getRecurrences() !== 2147483638) exit(2);
+        echo 'lazy';
+    "#);
+    assert_eq!((code, out.as_str()), (0, "lazy"));
+}
+
+#[test]
+fn date_periods_stop_on_nonadvancing_or_overflowing_steps() {
+    assert_php_error(
+        "nonadvancing_date_period",
+        "<?php iterator_count(new DatePeriod(new DateTimeImmutable('2000-01-01'), new DateInterval('PT0S'), new DateTimeImmutable('2000-01-02')));",
+        "DatePeriod iteration does not advance towards the end date",
+    );
+    assert_php_error(
+        "overflowing_date_period",
+        "<?php iterator_count(new DatePeriod(new DateTimeImmutable('@9223372036854775807'), new DateInterval('P1D'), 1));",
+        "DatePeriod date is out of range",
+    );
+}

@@ -569,6 +569,9 @@ impl<W: Write> Interp<W> {
             let e = Fatal::error("The \"Generator\" class is reserved for internal use and cannot be manually instantiated");
             return Err(Fatal::thrown(self.exception_object(e)));
         }
+        if class.name == "InternalIterator" {
+            return Err(Fatal::error(format!("Call to private InternalIterator::__construct() from {}",self.scope_desc())));
+        }
         if class.internal_only {
             return Err(Fatal::error(format!("Instantiation of class {} is not allowed", class.name)));
         }
@@ -618,7 +621,7 @@ impl<W: Write> Interp<W> {
         let Value::Object(o) = v else {
             return Err(Fatal::error("__clone method called on non-object"));
         };
-        if o.class.is_throwable || o.class.is_enum || matches!(o.internal, Internal::Generator(_)) {
+        if o.class.is_throwable || o.class.is_enum || matches!(o.internal, Internal::Generator(_) | Internal::PeriodIterator(_)) {
             // The error exists before the object being cloned is released, as in php-src
             let e = Fatal::error(format!("Trying to clone an uncloneable object of class {}", o.class.name));
             return Err(Fatal::thrown(self.exception_object(e)));
@@ -633,6 +636,8 @@ impl<W: Write> Interp<W> {
                 scope: c.scope.clone(),
                 forward: c.forward.clone(),
             }),
+            Internal::Period(p) => Internal::Period(Box::new(RefCell::new(p.borrow().clone()))),
+            Internal::PeriodIterator(_) => unreachable!("uncloneable iterator"),
             Internal::Interval(i) => Internal::Interval(RefCell::new(i.borrow().clone())),
             Internal::DateTime(d) => Internal::DateTime(RefCell::new(d.borrow().clone())),
             Internal::TimeZone(z) => Internal::TimeZone(RefCell::new(z.borrow().clone())),
@@ -725,6 +730,9 @@ impl<W: Write> Interp<W> {
                 let class = Some((method.class.to_string(), if this.is_some() && !method.is_static { "->" } else { "::" }));
                 let shown = vals.clone();
                 return self.internal_call(method.name.clone(), class, shown, line, |this_| {
+                    if *n == Native::PeriodFactory {
+                        return builtins::date_period::factory(this_,static_class.name,&format!("{}::{}",method.class,method.name),vals);
+                    }
                     if *n == Native::DateFactory {
                         let fname = format!("{}::{}", method.class, method.name);
                         return builtins::date::factory(this_, static_class.name, &fname, &method.name.to_ascii_lowercase(), vals);
@@ -875,6 +883,8 @@ impl<W: Write> Interp<W> {
             return Err(Fatal::error(format!("Non-static method {}::{}() cannot be called statically", method.class, method.name)));
         };
         let fname = format!("{}::{}", method.class, method.name);
+        if n == Native::Period { return builtins::date_period::method(self,&this,&fname,&method.name.to_ascii_lowercase(),vals); }
+        if n == Native::PeriodIterator { return builtins::date_period::iterator_method(&this,&fname,&method.name.to_ascii_lowercase(),vals); }
         if n == Native::Interval {
             return builtins::date_interval::method(self, &this, &fname, &method.name.to_ascii_lowercase(), vals);
         }
@@ -1011,6 +1021,7 @@ impl<W: Write> Interp<W> {
     }
 
     pub(super) fn read_prop(&mut self, obj: &Rc<Object>, name: &str) -> EResult<Value> {
+        if let Some(value) = builtins::date_period::property(obj,name) {return Ok(value);}
         let class = obj.class.name;
         match self.find_prop(&obj.class, name) {
             PropLookup::Declared(p) => {
@@ -1119,6 +1130,9 @@ impl<W: Write> Interp<W> {
 
     /// The storage key for writing into a property in place (`$o->a[] = 1`, `$o->n++`)
     pub(super) fn prop_key_for_update(&mut self, obj: &Rc<Object>, name: &str, read: bool) -> EResult<Key> {
+        if matches!(obj.internal, Internal::Period(_)) && builtins::date_period::PROPERTIES.contains(&name) {
+            return Err(Fatal::error(format!("Cannot modify readonly property DatePeriod::${name}")));
+        }
         let class = obj.class.name;
         match self.find_prop(&obj.class, name) {
             PropLookup::Declared(p) => {
@@ -1152,6 +1166,7 @@ impl<W: Write> Interp<W> {
 
     /// isset()/??/empty() on a property: None when it does not exist (or is not visible)
     pub(super) fn isset_prop(&mut self, obj: &Rc<Object>, name: &str, need_value: bool) -> EResult<Option<Value>> {
+        if let Some(value) = builtins::date_period::property(obj,name) {return Ok(Some(value));}
         let stored = match self.find_prop(&obj.class, name) {
             PropLookup::Declared(p) => Self::stored(obj, &p.key),
             PropLookup::Inaccessible(_) => None,
@@ -1168,6 +1183,9 @@ impl<W: Write> Interp<W> {
     }
 
     pub(super) fn unset_prop(&mut self, obj: &Rc<Object>, name: &str) -> EResult<()> {
+        if matches!(obj.internal, Internal::Period(_)) && builtins::date_period::PROPERTIES.contains(&name) {
+            return Err(Fatal::error(format!("Cannot unset DatePeriod::${name}")));
+        }
         let class = obj.class.name;
         let key = match self.find_prop(&obj.class, name) {
             PropLookup::Declared(p) => {

@@ -407,6 +407,26 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("dateinterval::format", &[
         Param { name: "format", default: None, variadic: false, by_ref: false },
     ]),
+    ("dateperiod::__construct", &[
+        Param { name: "start", default: None, variadic: false, by_ref: false },
+        Param { name: "interval", default: Some("UNKNOWN"), variadic: false, by_ref: false },
+        Param { name: "end", default: Some("UNKNOWN"), variadic: false, by_ref: false },
+        Param { name: "options", default: Some("UNKNOWN"), variadic: false, by_ref: false },
+    ]),
+    ("dateperiod::createfromiso8601string", &[
+        Param { name: "specification", default: None, variadic: false, by_ref: false },
+        Param { name: "options", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("dateperiod::getdateinterval", &[
+    ]),
+    ("dateperiod::getenddate", &[
+    ]),
+    ("dateperiod::getiterator", &[
+    ]),
+    ("dateperiod::getrecurrences", &[
+    ]),
+    ("dateperiod::getstartdate", &[
+    ]),
     ("datetime::__construct", &[
         Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
         Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
@@ -904,6 +924,16 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("interface_exists", &[
         Param { name: "interface", default: None, variadic: false, by_ref: false },
         Param { name: "autoload", default: Some("true"), variadic: false, by_ref: false },
+    ]),
+    ("internaliterator::current", &[
+    ]),
+    ("internaliterator::key", &[
+    ]),
+    ("internaliterator::next", &[
+    ]),
+    ("internaliterator::rewind", &[
+    ]),
+    ("internaliterator::valid", &[
     ]),
     ("intval", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },

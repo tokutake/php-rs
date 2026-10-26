@@ -1,0 +1,46 @@
+NULL
+NULL
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+string(4) "Mine"
+string(12) "DateInterval"
+string(4) "mine"
+string(4) "mine"
+int(1)
+InternalIterator
+NULL
+int(0)
+bool(true)
+bool(false)
+string(17) "DateTimeImmutable"
+string(4) "Mine"
+2024-01-01T00:00:00+00:00
+2024-01-02T00:00:00+00:00 2024-01-02T00:00:00+00:00
+2024-01-01T00:00:00+00:00
+DateTimeImmutable 01
+DateTimeImmutable 02
+DateTimeImmutable 03
+bool(true)
+["01","02","03"]
+array(7) {
+  [0]=>
+  string(5) "start"
+  [1]=>
+  string(7) "current"
+  [2]=>
+  string(3) "end"
+  [3]=>
+  string(8) "interval"
+  [4]=>
+  string(11) "recurrences"
+  [5]=>
+  string(18) "include_start_date"
+  [6]=>
+  string(16) "include_end_date"
+}
+int(1)
+["01","02","02"]
+int(2)
