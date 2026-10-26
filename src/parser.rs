@@ -509,11 +509,12 @@ impl Parser {
         params: Vec<Param>,
         ret: Option<TypeHint>,
         body: Vec<Stmt>,
+        returns_ref: bool,
         line: u32,
     ) -> PResult<Rc<FuncDecl>> {
         let Some(yield_line) = self.yield_line else {
             let file = self.file.clone();
-            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, is_static: false, file }));
+            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, returns_ref, is_static: false, file }));
         };
         if let Some(ty) = &ret {
             let ok = ty.types.iter().any(|group| group.iter().all(|t| {
@@ -524,9 +525,9 @@ impl Parser {
                 return Err(ParseError { msg, line: yield_line });
             }
         }
-        let body = crate::genlower::lower(body)?;
+        let body = crate::genlower::lower(body, returns_ref)?;
         let file = self.file.clone();
-        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true, is_static: false, file }))
+        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true, returns_ref, is_static: false, file }))
     }
 
     fn peek(&self) -> &Tok {
@@ -1017,8 +1018,7 @@ impl Parser {
     fn function_decl(&mut self) -> PResult<Stmt> {
         let line = self.line();
         self.next();
-        // Returning by reference is accepted but treated as by value
-        self.eat(&Tok::Op("&"));
+        let returns_ref = self.eat(&Tok::Op("&"));
         let Tok::Ident(name) = self.next() else {
             self.pos -= 1;
             return self.unexpected();
@@ -1028,7 +1028,7 @@ impl Parser {
             let params = p.params()?;
             let ret = if p.eat(&Tok::Op(":")) { Some(p.type_hint()?) } else { None };
             let body = p.brace_body()?;
-            p.make_func(FuncKind::Named, name, Vec::new(), params, ret, body, line)
+            p.make_func(FuncKind::Named, name, Vec::new(), params, ret, body, returns_ref, line)
         })?;
         Ok(Stmt::Function(func))
     }
@@ -1039,7 +1039,7 @@ impl Parser {
     }
 
     fn closure_inner(&mut self, line: u32) -> PResult<ExprKind> {
-        self.eat(&Tok::Op("&"));
+        let returns_ref = self.eat(&Tok::Op("&"));
         let params = self.params()?;
         let mut uses = Vec::new();
         if self.eat_kw("use") {
@@ -1066,7 +1066,7 @@ impl Parser {
         let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
         let body = self.brace_body()?;
         let name = "{closure}".to_string();
-        Ok(ExprKind::Closure(self.make_func(FuncKind::Closure, name, uses, params, ret, body, line)?))
+        Ok(ExprKind::Closure(self.make_func(FuncKind::Closure, name, uses, params, ret, body, returns_ref, line)?))
     }
 
     /// `fn (...) => expr`, after the `fn` keyword
@@ -1075,7 +1075,7 @@ impl Parser {
     }
 
     fn arrow_fn_inner(&mut self, line: u32) -> PResult<ExprKind> {
-        self.eat(&Tok::Op("&"));
+        let returns_ref = self.eat(&Tok::Op("&"));
         let params = self.params()?;
         let ret = if self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
         self.expect(Tok::Op("=>"))?;
@@ -1090,7 +1090,7 @@ impl Parser {
             .collect();
         let name = "{closure}".to_string();
         let body = vec![Stmt::Return(Some(body))];
-        Ok(ExprKind::Closure(self.make_func(FuncKind::Arrow, name, uses, params, ret, body, line)?))
+        Ok(ExprKind::Closure(self.make_func(FuncKind::Arrow, name, uses, params, ret, body, returns_ref, line)?))
     }
 
     fn brace_body(&mut self) -> PResult<Vec<Stmt>> {
@@ -1335,7 +1335,7 @@ impl Parser {
             return self.end_statement();
         }
         if self.eat_kw("function") {
-            self.eat(&Tok::Op("&"));
+            let returns_ref = self.eat(&Tok::Op("&"));
             let name = self.class_name()?;
             let is_abstract = is_abstract || in_interface;
             let func = self.in_func(FuncCtx::Method(name.clone()), |p| {
@@ -1355,7 +1355,7 @@ impl Parser {
                 if params.iter().any(|p| p.promote.is_some()) && !name.eq_ignore_ascii_case("__construct") {
                     return Err(ParseError { msg: "Cannot declare promoted property outside a constructor".into(), line });
                 }
-                p.make_func(FuncKind::Method, name, Vec::new(), params, ret, body, line)
+                p.make_func(FuncKind::Method, name, Vec::new(), params, ret, body, returns_ref, line)
             })?;
             members.push(Member::Method { func, vis, is_static, is_abstract, is_final });
             return Ok(());
@@ -2192,6 +2192,7 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
     let args = |args: &[Arg], out: &mut Vec<String>| args.iter().for_each(|a| free_vars(&a.value, out));
     match &e.kind {
         ExprKind::Null
+        | ExprKind::Argument(_)
         | ExprKind::Bool(_)
         | ExprKind::Int(_)
         | ExprKind::Float(_)

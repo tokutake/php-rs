@@ -1,0 +1,50 @@
+string(6) "ababab"
+string(2) "bc"
+string(5) "----x"
+ArgumentCountError: sprintf() does not accept unknown named parameters
+spread
+length
+offset
+string(2) "bc"
+duplicate
+Error: Named parameter $string overwrites previous argument
+unknown
+Error: Unknown named parameter $bad
+ArgumentCountError: substr(): Argument #1 ($string) not passed
+array(1) {
+  [0]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+array(2) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(2)
+}
+int(1)
+array(1) {
+  [0]=>
+  string(3) "abc"
+}
+int(1)
+string(6) "abcabc"
+2024-01-02T00:00:00+00:00
+string(2) "xx"
+string(3) "xxx"
+
+Warning: Cannot pass by-reference argument 1 of sort() by unpacking a Traversable, passing by-value instead in native_unpack_named.php on line 22
+int(9)
+int(1)
+array(1) {
+  [0]=>
+  int(2)
+}
+string(2) "xx"
+int(9)

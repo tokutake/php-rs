@@ -1,0 +1,22 @@
+int(5)
+int(5)
+int(6)
+TypeError: Cannot assign string to reference held by property Props::$i of type int
+int(1)
+NULL
+int(7)
+NULL
+int(8)
+TypeError: Cannot assign array to reference held by property Props::$value of type int
+int(1)
+array(0) {
+}
+int(10)
+int(10)
+array(0) {
+}
+TypeError: Reference with value of type int held by property Props::$i of type int is not compatible with property Props::$s of type string
+string(1) "a"
+int(1)
+TypeError: Cannot assign array to reference held by property NativeOutput::$matches of type string
+string(3) "old"

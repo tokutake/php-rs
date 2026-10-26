@@ -25,6 +25,8 @@ pub struct Expr {
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     Null,
+    /// Already evaluated native-call argument, with reference storage preserved.
+    Argument(Rc<std::cell::RefCell<crate::value::Value>>),
     Bool(bool),
     Int(i64),
     Float(f64),
@@ -198,7 +200,7 @@ impl Expr {
     /// Whether the expression can be assigned to
     pub fn is_lvalue(&self) -> bool {
         match &self.kind {
-            ExprKind::Var(_) | ExprKind::StaticProp { .. } => true,
+            ExprKind::Var(_) | ExprKind::Argument(_) | ExprKind::StaticProp { .. } => true,
             ExprKind::Prop { nullsafe, .. } => !nullsafe,
             ExprKind::Index(base, _) => base.is_lvalue(),
             _ => false,
@@ -337,6 +339,8 @@ pub struct FuncDecl {
     /// Contains `yield`: calling it creates a Generator, and the body is lowered
     /// (see genlower)
     pub is_generator: bool,
+    /// `function &name` / `function &()`: a generator yields reference cells.
+    pub returns_ref: bool,
     /// `static function` / `static fn`, which never has a `$this`
     pub is_static: bool,
     /// Where it is declared, which decides the file of its diagnostics and its strict_types

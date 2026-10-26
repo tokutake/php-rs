@@ -191,6 +191,7 @@ impl<W: Write> Interp<W> {
             body: Vec::new(),
             line: 0,
             is_generator: false,
+            returns_ref: false,
             is_static: false,
             file: self.file.clone(),
         })

@@ -1,0 +1,4 @@
+
+Fatal error: Cannot use "yield from" inside a by-reference generator in generator_reference_fatal.php on line 2
+Stack trace:
+#0 {main}

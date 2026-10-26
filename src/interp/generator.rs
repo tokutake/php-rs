@@ -86,7 +86,9 @@ pub(super) enum Iter {
     Array(Rc<PhpArray>, usize),
     /// Properties visible in scope, snapshotted
     Props(Vec<(Value, Value)>, usize),
-    Generator { obj: Rc<Object>, started: bool, _handle: object::Handle },
+    Generator { obj: Rc<Object>, started: bool, by_ref: bool, _handle: object::Handle },
+    RefArray {cell: RefCellValue, position: usize},
+    RefProps {obj: Rc<Object>, declared: usize, dynamic: usize},
     /// An object implementing Iterator
     User { obj: Rc<Object>, started: bool, _handle: object::Handle },
 }
@@ -131,7 +133,7 @@ impl GenState {
     }
 
     fn current(&self) -> (Value, Value) {
-        (self.key.clone(), self.value.clone())
+        (self.key.clone(), self.value.copy_out())
     }
 }
 
@@ -486,11 +488,8 @@ impl<W: Write> Interp<W> {
                     Some(Saved::Foreach(it)) => (it, true),
                     Some(_) => return Err(state_mismatch()),
                     None => {
-                        if *by_ref {
-                            return Err(Fatal::error("Iterating by reference in a generator is not supported yet"));
-                        }
-                        let v = self.expr(subject)?;
-                        match self.iter_start(v, false)? {
+                        let iterator = if *by_ref {self.iter_start_reference(subject)?}else{let v=self.expr(subject)?;self.iter_start(v,false)?};
+                        match iterator {
                             Some(it) => (it, false),
                             None => return Ok(G::Flow(Flow::Normal)),
                         }
@@ -502,7 +501,7 @@ impl<W: Write> Interp<W> {
                         if let Some(key_target) = key {
                             self.assign(key_target, k)?;
                         }
-                        self.assign(value, v)?;
+                        if *by_ref {let Value::Ref(reference)=v else{return Err(state_mismatch());};self.bind_ref(value,reference)?;}else{self.assign(value,v)?;}
                     }
                     resumed = false;
                     match self.gblock(body)? {
@@ -678,7 +677,11 @@ impl<W: Write> Interp<W> {
             None => {}
         }
         let key = key.map(|k| self.expr(k)).transpose()?;
-        let value = value.map(|v| self.expr(v)).transpose()?.unwrap_or(Value::Null);
+        let by_ref=Self::gen_state(&self.gen_runs.last().expect("yield runs in a generator").obj).borrow().func.returns_ref;
+        let value = if by_ref {
+            if let Some(value)=value && value.is_lvalue() {let path=self.path(value)?;Value::Ref(self.make_ref(&path)?)}
+            else {if let Some(value)=value {diag::set_line(value.line);diag::notice("Only variable references should be yielded by reference");}Value::Ref(Rc::new(RefCell::new(value.map(|v|self.expr(v)).transpose()?.unwrap_or(Value::Null))))}
+        } else {value.map(|v|self.expr(v)).transpose()?.unwrap_or(Value::Null)};
         let obj = self.gen_runs.last().expect("yield runs in a generator").obj.clone();
         let mut st = Self::gen_state(&obj).borrow_mut();
         st.key = match key {
@@ -785,6 +788,29 @@ impl<W: Write> Interp<W> {
 
     // ---- Iteration ----
 
+    pub(super) fn iter_start_reference(&mut self, subject:&Expr) -> EResult<Option<Iter>> {
+        let path=if subject.is_lvalue() && !matches!(&subject.kind,ExprKind::Var(name) if name=="this"){Some(self.path(subject)?)}else{None};
+        let value=if let Some(path)=&path {self.with_place(path,true,true,|v|Ok(v.copy_out()))?}else{self.expr(subject)?};
+        match value {
+            Value::Array(array)=>{let cell=if let Some(path)=path {self.make_ref(&path)?}else{Rc::new(RefCell::new(Value::Array(array)))};Ok(Some(Iter::RefArray{cell,position:0}))}
+            Value::Object(mut obj)=>{
+                let mut depth=0;
+                while obj.class.is_subclass_of("IteratorAggregate")&&!obj.class.is_subclass_of("Iterator") {
+                    let class=obj.class.name;
+                    let next=self.call_named_method(&obj,"getIterator")?;depth+=1;
+                    if let Value::Object(next)=next && next.class.is_subclass_of("Traversable") && depth<64 {obj=next;}
+                    else{return Err(exception(&format!("Objects returned by {class}::getIterator() must be traversable or implement interface Iterator")));}
+                }
+                if matches!(obj.internal,Internal::Generator(_)) {
+                    if !Self::gen_state(&obj).borrow().func.returns_ref || Self::gen_state(&obj).borrow().finished {return Err(self.generator_by_ref(&obj));}
+                    Ok(Some(Iter::Generator{obj,started:false,by_ref:true,_handle:object::Handle::new()}))
+                }else if obj.class.is_subclass_of("Traversable") {Err(Fatal::error("An iterator cannot be used with foreach by reference"))}
+                else{Ok(Some(Iter::RefProps{obj,declared:0,dynamic:0}))}
+            }
+            other=>{foreach_type_warning(&other);Ok(None)}
+        }
+    }
+
     pub(super) fn is_traversable(&self, v: &Value) -> bool {
         match v {
             Value::Array(_) => true,
@@ -822,7 +848,7 @@ impl<W: Write> Interp<W> {
                     if Self::gen_state(&o).borrow().finished {
                         return Err(exception("Cannot traverse an already closed generator"));
                     }
-                    Iter::Generator { obj: o, started: false, _handle: object::Handle::new() }
+                    Iter::Generator { obj: o, started: false, by_ref: false, _handle: object::Handle::new() }
                 } else if o.class.is_subclass_of("Iterator") {
                     Iter::User { obj: o, started: false, _handle: object::Handle::new() }
                 } else {
@@ -846,6 +872,34 @@ impl<W: Write> Interp<W> {
     /// iter_next, also leaving out the value unless `want_value`
     fn iter_step(&mut self, it: &mut Iter, want_key: bool, want_value: bool) -> EResult<Option<(Value, Value)>> {
         match it {
+            Iter::RefArray {cell,position} => {
+                let mut root=cell.try_borrow_mut().map_err(|_|recursive_reference())?;
+                let Value::Array(array)=&mut *root else{return Ok(None);};
+                let Some((next,key,_))=array.entry_from(*position) else{return Ok(None);};
+                let key=key.clone();*position=next;
+                let value=Rc::make_mut(array).get_mut(&key).expect("entry exists");
+                Ok(Some((key.to_value(),Value::Ref(make_ref_slot(value)))))
+            }
+            Iter::RefProps {obj,declared,dynamic} => {
+                loop {
+                    let (key,name)=if *declared<obj.class.props.len() {
+                        let prop=obj.class.props[*declared].clone();*declared+=1;
+                        if !self.can_access(prop.vis,prop.class)||!obj.props.borrow().contains_key(&prop.key){continue;}
+                        (prop.key,prop.name)
+                    }else{
+                        let entry=obj.props.borrow().entry_from(*dynamic).map(|(next,key,_)|(next,key.clone()));
+                        let Some((next,key))=entry else{return Ok(None);};*dynamic=next;
+                        if obj.class.props.iter().any(|p|p.key==key){continue;}
+                        let name=object::unmangle(&key).0;
+                        if !builtins::date_interval::visible(obj,&name){continue;}
+                        (key,name)
+                    };
+                    let path=Path{base:Base::Prop(obj.clone(),name.clone()),dims:Vec::new()};
+                    let reference=self.make_ref(&path)?;
+                    let _=key;
+                    return Ok(Some((Value::str(name),Value::Ref(reference))));
+                }
+            }
             Iter::Array(arr, pos) => Ok(arr.entry_from(*pos).map(|(next, k, v)| {
                 *pos = next;
                 (k.to_value(), v.copy_out())
@@ -855,7 +909,7 @@ impl<W: Write> Interp<W> {
                 *pos += 1;
                 Ok(entry)
             }
-            Iter::Generator { obj, started, .. } => {
+            Iter::Generator { obj, started, by_ref, .. } => {
                 let obj = obj.clone();
                 if std::mem::replace(started, true) {
                     self.gen_next(&obj)?;
@@ -865,7 +919,7 @@ impl<W: Write> Interp<W> {
                 if !self.gen_valid(&obj)? {
                     return Ok(None);
                 }
-                self.gen_current(&obj).map(Some)
+                if *by_ref {let state=Self::gen_state(&obj).borrow();Ok(Some((state.key.clone(),state.value.clone())))}else{self.gen_current(&obj).map(Some)}
             }
             Iter::User { obj, started, .. } => {
                 let obj = obj.clone();
@@ -892,12 +946,12 @@ impl<W: Write> Interp<W> {
     }
 
     /// foreach over a Traversable object, outside generators
-    pub(super) fn foreach_iter(&mut self, mut it: Iter, key: Option<&Expr>, value: &Expr, body: &[Stmt]) -> EResult<Flow> {
+    pub(super) fn foreach_iter(&mut self, mut it: Iter, key: Option<&Expr>, value: &Expr, body: &[Stmt], by_ref:bool) -> EResult<Flow> {
         while let Some((k, v)) = self.iter_next(&mut it, key.is_some())? {
             if let Some(key_target) = key {
                 self.assign(key_target, k)?;
             }
-            self.assign(value, v)?;
+            if by_ref {let Value::Ref(reference)=v else{return Err(state_mismatch());};self.bind_ref(value,reference)?;}else{self.assign(value,v)?;}
             if let Some(flow) = loop_flow(self.block(body)?) {
                 return Ok(flow);
             }
