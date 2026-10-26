@@ -849,6 +849,9 @@ impl<W: Write> Interp<W> {
         if n == Native::ClosureFromCallable {
             return self.closure_from_callable(vals);
         }
+        if n == Native::ClosureBind {
+            return self.closure_bind(None, vals);
+        }
         let Some(this) = this else {
             return Err(Fatal::error(format!("Non-static method {}::{}() cannot be called statically", method.class, method.name)));
         };
@@ -895,6 +898,9 @@ impl<W: Write> Interp<W> {
         }
         if n == Native::Abstract {
             return Err(Fatal::error(format!("Cannot call abstract method {}::{}()", method.class, method.name)));
+        }
+        if matches!(n, Native::ClosureBindTo | Native::ClosureCall) {
+            return if n == Native::ClosureCall { self.closure_call(&this, vals, line) } else { self.closure_bind(Some(&this), vals) };
         }
         if n == Native::ClosureInvoke {
             let c = this.closure().ok_or_else(|| Fatal::error("Closure::__invoke() called on a non-closure"))?;

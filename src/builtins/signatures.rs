@@ -233,6 +233,24 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("closedir", &[
         Param { name: "dir_handle", default: Some("null"), variadic: false, by_ref: false },
     ]),
+    ("closure::__construct", &[
+    ]),
+    ("closure::bind", &[
+        Param { name: "closure", default: None, variadic: false, by_ref: false },
+        Param { name: "newThis", default: None, variadic: false, by_ref: false },
+        Param { name: "newScope", default: Some("\"static\""), variadic: false, by_ref: false },
+    ]),
+    ("closure::bindto", &[
+        Param { name: "newThis", default: None, variadic: false, by_ref: false },
+        Param { name: "newScope", default: Some("\"static\""), variadic: false, by_ref: false },
+    ]),
+    ("closure::call", &[
+        Param { name: "newThis", default: None, variadic: false, by_ref: false },
+        Param { name: "args", default: None, variadic: true, by_ref: false },
+    ]),
+    ("closure::fromcallable", &[
+        Param { name: "callback", default: None, variadic: false, by_ref: false },
+    ]),
     ("compact", &[
         Param { name: "var_name", default: None, variadic: false, by_ref: false },
         Param { name: "var_names", default: None, variadic: true, by_ref: false },

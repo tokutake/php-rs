@@ -2560,7 +2560,8 @@ impl<W: Write> Interp<W> {
         let ctx = CallCtx {
             name: closure.name.clone(),
             trace_fn: closure.name.clone(),
-            trace_class: None,
+            // A closure with a class scope shows in traces like a method of the class
+            trace_class: closure.scope.as_ref().map(|s| (s.name.to_string(), if closure.this.is_some() { "->" } else { "::" })),
             this: closure.this.clone(),
             scope: closure.scope.clone(),
             static_class: closure.this.as_ref().map(|t| t.class.clone()).or_else(|| closure.scope.clone()),
@@ -3102,8 +3103,9 @@ impl<W: Write> Interp<W> {
             }
         }
         let name = format!("{{closure:{}:{}}}", self.file.path, f.line);
-        // Closures created in a method keep its $this and class scope
-        let (this, scope) = (self.ctx().this.clone(), self.ctx().scope.clone());
+        // Closures created in a method keep its $this (unless static) and class scope
+        let this = if f.is_static { None } else { self.ctx().this.clone() };
+        let scope = self.ctx().scope.clone();
         let closure = Closure { func: f.clone(), bound, name, file: self.file.path.to_string(), this, scope, forward: None };
         Ok(Value::Object(Object::new(self.classes["closure"].clone(), Internal::Closure(closure))))
     }

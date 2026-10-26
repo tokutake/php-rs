@@ -513,7 +513,7 @@ impl Parser {
     ) -> PResult<Rc<FuncDecl>> {
         let Some(yield_line) = self.yield_line else {
             let file = self.file.clone();
-            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, file }));
+            return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, is_static: false, file }));
         };
         if let Some(ty) = &ret {
             let ok = ty.types.iter().any(|t| {
@@ -526,7 +526,7 @@ impl Parser {
         }
         let body = crate::genlower::lower(body)?;
         let file = self.file.clone();
-        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true, file }))
+        Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: true, is_static: false, file }))
     }
 
     fn peek(&self) -> &Tok {
@@ -1884,13 +1884,19 @@ impl Parser {
                 self.next();
                 ExprKind::Throw(Box::new(self.expr_bp(0)?))
             }
-            // `static function` / `static fn`: there is no $this to leave unbound yet
+            // `static function` / `static fn`: a closure without `$this`
             Tok::Ident(kw)
                 if kw.eq_ignore_ascii_case("static")
                     && matches!(self.peek_at(1), Tok::Ident(f) if f.eq_ignore_ascii_case("function") || f.eq_ignore_ascii_case("fn")) =>
             {
                 self.next();
-                return self.prefix();
+                let mut e = self.prefix()?;
+                if let ExprKind::Closure(f) = &mut e.kind
+                    && let Some(f) = Rc::get_mut(f)
+                {
+                    f.is_static = true;
+                }
+                return Ok(e);
             }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("yield") => {
                 self.next();

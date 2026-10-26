@@ -489,6 +489,50 @@ pub fn stmt_has_yield(s: &Stmt) -> bool {
     }
 }
 
+/// Whether a function body uses `$this`, in closures inside it too (they
+/// take it from the function). Decides whether a closure may lose its `$this`
+pub fn uses_this(stmts: &[Stmt]) -> bool {
+    fn expr(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Var(name) => name == "this",
+            ExprKind::Closure(f) => !f.is_static && uses_this(&f.body),
+            _ => {
+                let mut found = false;
+                each_child(e, &mut |c| found = found || expr(c));
+                found
+            }
+        }
+    }
+    fn opt(e: &Option<Expr>) -> bool {
+        e.as_ref().is_some_and(expr)
+    }
+    fn stmt(s: &Stmt) -> bool {
+        match s {
+            Stmt::Echo(exprs) | Stmt::Unset(exprs) => exprs.iter().any(expr),
+            Stmt::Expr(e) => expr(e),
+            Stmt::Return(e) => opt(e),
+            Stmt::If(branches, else_body) => {
+                branches.iter().any(|(c, b)| expr(c) || uses_this(b)) || else_body.as_deref().is_some_and(uses_this)
+            }
+            Stmt::While(c, body) | Stmt::DoWhile(body, c) => expr(c) || uses_this(body),
+            Stmt::For(init, cond, step, body) => init.iter().chain(cond).chain(step).any(expr) || uses_this(body),
+            Stmt::Foreach { subject, key, value, body, .. } => expr(subject) || opt(key) || expr(value) || uses_this(body),
+            Stmt::Block(body) => uses_this(body),
+            Stmt::Switch(subject, cases) => expr(subject) || cases.iter().any(|(c, b)| opt(c) || uses_this(b)),
+            Stmt::Try { body, catches, finally } => {
+                uses_this(body) || catches.iter().any(|c| uses_this(&c.body)) || finally.as_deref().is_some_and(uses_this)
+            }
+            Stmt::StaticVar(vars) => vars.iter().any(|(_, e)| opt(e)),
+            Stmt::Const(consts) => consts.iter().any(|(_, e)| expr(e)),
+            Stmt::Yield { key, value, .. } => opt(key) || opt(value),
+            Stmt::YieldFrom { source, .. } => expr(source),
+            Stmt::Plain(s) => stmt(s),
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Function(_) | Stmt::Class(_) | Stmt::Global(_) | Stmt::StrictTypes => false,
+        }
+    }
+    stmts.iter().any(stmt)
+}
+
 /// The direct subexpressions in evaluation order, not looking into closures
 fn each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
     let class = |c: &ClassRef, f: &mut dyn FnMut(&Expr)| {

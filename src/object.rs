@@ -125,6 +125,9 @@ pub enum Native {
     ThrowableToString,
     ClosureInvoke,
     ClosureFromCallable,
+    ClosureBind,
+    ClosureBindTo,
+    ClosureCall,
     EnumCases,
     EnumFrom,
     EnumTryFrom,
@@ -179,6 +182,8 @@ pub struct ClassEntry {
     pub traits: Vec<&'static str>,
     /// Built-ins like Closure that `new` refuses
     pub internal_only: bool,
+    /// A built-in class, whose scope closures cannot be bound to
+    pub is_internal: bool,
     pub is_throwable: bool,
     pub allow_dynamic: bool,
     /// Instance properties in layout order, inherited ones first
@@ -610,7 +615,8 @@ pub fn plain_subclass(name: &'static str, parent: &Rc<ClassEntry>) -> ClassEntry
 /// Built-in classes by lowercase name
 pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     let mut map: HashMap<String, Rc<ClassEntry>> = HashMap::new();
-    let mut put = |c: ClassEntry| {
+    let mut put = |mut c: ClassEntry| {
+        c.is_internal = true;
         let c = Rc::new(c);
         map.insert(c.name.to_ascii_lowercase(), c.clone());
         c
@@ -714,13 +720,18 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         methods: generator_methods.iter().map(|(m, n)| native(m, "Generator", *n, true)).collect(),
         ..Default::default()
     });
-    let invoke = native("__invoke", "Closure", Native::ClosureInvoke, false);
-    let from_callable = static_native("fromCallable", "Closure", Native::ClosureFromCallable);
+    let methods = [
+        native("__invoke", "Closure", Native::ClosureInvoke, false),
+        static_native("fromCallable", "Closure", Native::ClosureFromCallable),
+        static_native("bind", "Closure", Native::ClosureBind),
+        native("bindTo", "Closure", Native::ClosureBindTo, false),
+        native("call", "Closure", Native::ClosureCall, false),
+    ];
     put(ClassEntry {
         name: "Closure",
         is_final: true,
         internal_only: true,
-        methods: [invoke, from_callable].into_iter().collect(),
+        methods: methods.into_iter().collect(),
         ..Default::default()
     });
     map

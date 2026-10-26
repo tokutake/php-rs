@@ -335,6 +335,8 @@ pub struct FuncDecl {
     /// Contains `yield`: calling it creates a Generator, and the body is lowered
     /// (see genlower)
     pub is_generator: bool,
+    /// `static function` / `static fn`, which never has a `$this`
+    pub is_static: bool,
     /// Where it is declared, which decides the file of its diagnostics and its strict_types
     pub file: Rc<SourceFile>,
 }

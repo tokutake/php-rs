@@ -191,6 +191,7 @@ impl<W: Write> Interp<W> {
             body: Vec::new(),
             line: 0,
             is_generator: false,
+            is_static: false,
             file: self.file.clone(),
         })
     }
@@ -245,4 +246,157 @@ impl<W: Write> Interp<W> {
         let margs = vec![ArgVal::Val(Value::str(name)), ArgVal::Val(args)];
         self.call_method(c.this.clone(), &m, margs, line, class.clone())
     }
+}
+
+impl<W: Write> Interp<W> {
+    /// Closure::bind($closure, $newThis, $newScope) and $closure->bindTo($newThis, $newScope)
+    pub(super) fn closure_bind(&mut self, this: Option<&Rc<Object>>, vals: Vec<Value>) -> EResult<Value> {
+        let (fname, min) = if this.is_some() { ("Closure::bindTo", 1) } else { ("Closure::bind", 2) };
+        // Argument positions are counted from the closure for bind()
+        let first = min - 1;
+        if vals.len() < min || vals.len() > min + 1 {
+            let (bound, n) = if vals.len() < min { ("at least", min) } else { ("at most", min + 1) };
+            return Err(Fatal::new(
+                "ArgumentCountError",
+                format!("{fname}() expects {bound} {n} argument{}, {} given", if n == 1 { "" } else { "s" }, vals.len()),
+            ));
+        }
+        let mut vals = vals.into_iter();
+        let closure = match this {
+            Some(t) => t.clone(),
+            None => match vals.next() {
+                Some(Value::Object(o)) if o.closure().is_some() => o,
+                other => {
+                    let given = other.unwrap_or(Value::Null).value_name();
+                    return Err(Fatal::type_error(format!("{fname}(): Argument #1 ($closure) must be of type Closure, {given} given")));
+                }
+            },
+        };
+        let new_this = match vals.next().unwrap_or(Value::Null) {
+            Value::Null => None,
+            Value::Object(o) => Some(o),
+            other => {
+                return Err(Fatal::type_error(format!(
+                    "{fname}(): Argument #{} ($newThis) must be of type ?object, {} given",
+                    first + 1,
+                    other.value_name()
+                )))
+            }
+        };
+        let c = closure.closure().expect("checked above");
+        let scope = match vals.next() {
+            None => c.scope.clone(),
+            Some(Value::Null) => None,
+            Some(Value::Object(o)) => Some(o.class.clone()),
+            Some(v @ (Value::Str(_) | Value::Int(_) | Value::Float(_) | Value::Bool(_))) => {
+                let name = String::from_utf8_lossy(&to_str(&v)?).into_owned();
+                if name == "static" {
+                    c.scope.clone()
+                } else {
+                    match self.classes.get(&name.trim_start_matches('\\').to_ascii_lowercase()) {
+                        Some(class) => Some(class.clone()),
+                        None => {
+                            diag::warning(format!("Class \"{name}\" not found"));
+                            return Ok(Value::Null);
+                        }
+                    }
+                }
+            }
+            Some(other) => {
+                return Err(Fatal::type_error(format!(
+                    "{fname}(): Argument #{} ($newScope) must be of type object|string|null, {} given",
+                    first + 2,
+                    other.value_name()
+                )))
+            }
+        };
+        if !self.valid_binding(c, new_this.as_ref(), scope.as_ref()) {
+            return Ok(Value::Null);
+        }
+        // An object bound without a scope gets the scope of Closure itself, as in php-src
+        let scope = match (scope, &new_this) {
+            (None, Some(_)) => Some(self.classes["closure"].clone()),
+            (scope, _) => scope,
+        };
+        let copy = rebound(c, new_this, scope);
+        Ok(Value::Object(Object::new(self.classes["closure"].clone(), Internal::Closure(copy))))
+    }
+
+    /// $closure->call($newThis, ...$args): calls it bound to the object, in its class's scope
+    pub(super) fn closure_call(&mut self, closure: &Rc<Object>, vals: Vec<Value>, line: u32) -> EResult<Value> {
+        let mut vals = vals.into_iter();
+        let new_this = match vals.next() {
+            Some(Value::Object(o)) => o,
+            Some(other) => {
+                return Err(Fatal::type_error(format!(
+                    "Closure::call(): Argument #1 ($newThis) must be of type object, {} given",
+                    other.value_name()
+                )))
+            }
+            None => return Err(Fatal::new("ArgumentCountError", "Closure::call() expects at least 1 argument, 0 given")),
+        };
+        let c = closure.closure().ok_or_else(|| Fatal::error("Closure::call() called on a non-closure"))?;
+        let scope = Some(new_this.class.clone());
+        if !self.valid_binding(c, Some(&new_this), scope.as_ref()) {
+            return Ok(Value::Null);
+        }
+        let copy = rebound(c, Some(new_this), scope);
+        self.invoke_closure(&copy, vals.map(ArgVal::Val).collect(), line)
+    }
+
+    /// Whether a closure may get this `$this` and scope, warning as php-src does if not
+    fn valid_binding(&self, c: &Closure, new_this: Option<&Rc<Object>>, scope: Option<&Rc<ClassEntry>>) -> bool {
+        let fake = c.forward.is_some();
+        let is_static = match &c.forward {
+            Some(Forward::Method(m, _)) => m.is_static,
+            Some(Forward::Magic(..)) => c.this.is_none(),
+            Some(Forward::Function(_)) => false,
+            None => c.func.is_static,
+        };
+        let func_scope = c.scope.as_ref();
+        let same_scope = match (scope, func_scope) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        };
+        let refuse = |msg: String| {
+            diag::warning(msg);
+            false
+        };
+        if let Some(t) = new_this {
+            if is_static {
+                return refuse("Cannot bind an instance to a static closure".into());
+            }
+            if fake && let Some(s) = func_scope
+                && !t.class.is_subclass_of(s.name)
+            {
+                return refuse(format!("Cannot bind method {}() to object of class {}", c.name, t.class.name));
+            }
+        } else if fake && func_scope.is_some() && !is_static {
+            return refuse("Cannot unbind $this of method".into());
+        } else if !fake && c.this.is_some() && crate::genlower::uses_this(&c.func.body) {
+            return refuse("Cannot unbind $this of closure using $this".into());
+        }
+        if let Some(s) = scope
+            && !same_scope
+            && s.is_internal
+        {
+            return refuse(format!("Cannot bind closure to scope of internal class {}", s.name));
+        }
+        if fake && !same_scope {
+            let from = if func_scope.is_none() { "function" } else { "method" };
+            return refuse(format!("Cannot rebind scope of closure created from {from}"));
+        }
+        true
+    }
+}
+
+/// A copy of a closure with another `$this` and scope
+fn rebound(c: &Closure, this: Option<Rc<Object>>, scope: Option<Rc<ClassEntry>>) -> Closure {
+    // A method closure bound to an object of a subclass calls it with that class as `static`
+    let forward = match (&c.forward, &this) {
+        (Some(Forward::Method(m, _)), Some(t)) => Some(Forward::Method(m.clone(), t.class.clone())),
+        (f, _) => f.clone(),
+    };
+    Closure { func: c.func.clone(), bound: c.bound.clone(), name: c.name.clone(), file: c.file.clone(), this, scope, forward }
 }

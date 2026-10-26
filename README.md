@@ -33,6 +33,8 @@ Early stage. Implemented so far:
   callables, `?->`, `instanceof`
 - First-class callable syntax (`strlen(...)`, `$obj->method(...)`, `A::method(...)`,
   `$f(...)`, through `__call`/`__callStatic` too) and `Closure::fromCallable()`
+- `Closure::bind()`, `bindTo()` and `call()` with php-src's binding rules, and
+  `static` closures
 - Classes and interfaces: inheritance, abstract/final, visibility, typed and
   readonly properties, constructor promotion, static members, constants,
   `self`/`parent`/`static` (late static binding), magic methods (`__get`,
