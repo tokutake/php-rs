@@ -2676,9 +2676,22 @@ impl<W: Write> Interp<W> {
                     ArgVal::Named(n, v) => (Some(n), *v),
                     other => (None, other),
                 });
-                for (name, a) in args.by_ref().map(|a| (None, a)).chain(extra) {
+                for (offset, (name, a)) in args.by_ref().map(|a| (None, a)).chain(extra).enumerate() {
+                    let type_error = |v: &Value, file: &str| {
+                        let n = i + offset + 1;
+                        let param = if offset == 0 { format!(" (${})", p.name) } else { String::new() };
+                        Fatal::type_error(format!(
+                            "{fname}(): Argument #{n}{param} must be of type {}, {} given, called in {file} on line {call_line}",
+                            p.ty.as_ref().map_or("mixed", |t| t.display.as_str()), v.value_name()
+                        ))
+                    };
                     let elem = match a {
-                        ArgVal::Ref(r) if p.by_ref => Value::Ref(r),
+                        ArgVal::Ref(r) if p.by_ref => {
+                            let v = value::with_deref(&r, Value::clone);
+                            let v = self.check_type(v, p.ty.as_ref(), &type_error, strict)?;
+                            *r.try_borrow_mut().map_err(|_| recursive_reference())? = v;
+                            Value::Ref(r)
+                        },
                         ArgVal::Ref(r) => {
                             let v = value::with_deref(&r, Value::clone);
                             self.check_type(v, p.ty.as_ref(), &type_error, strict)?
@@ -2747,7 +2760,7 @@ impl<W: Write> Interp<W> {
         };
         let Some(ty) = &f.ret else { return Ok(ret.unwrap_or(Value::Null)) };
         // `mixed` allows anything, but not falling off the end
-        if ty.types.iter().any(|t| t == "void") {
+        if ty.types.iter().any(|group| group.len() == 1 && group[0] == "void") {
             return Ok(Value::Null);
         }
         let given = match ret {
@@ -3201,7 +3214,7 @@ fn cast_array(v: Value) -> Value {
         Value::Null => Value::Array(Rc::new(PhpArray::new())),
         Value::Object(ref o) if o.closure().is_some() => list(vec![v]),
         Value::Object(o) => Value::Array(Rc::new(
-            o.ordered_props()
+            o.export_props()
                 .into_iter()
                 .map(|(k, v)| match k {
                     Key::Str(s) => (Key::from_bytes(&s), v),
@@ -3363,7 +3376,7 @@ impl TypeCtx<'_> {
 /// only int to float. Err hands the value back for the error message
 fn coerce(v: Value, ty: &TypeHint, ctx: &TypeCtx<'_>, strict: bool) -> Result<Value, Value> {
     if let Value::Object(o) = &v {
-        if ty.types.iter().any(|t| ctx.class_matches(&o.class, t)) {
+        if ty.types.iter().any(|group| group.iter().all(|t| ctx.class_matches(&o.class, t))) {
             return Ok(v);
         }
         return Err(v);

@@ -1,6 +1,7 @@
 //! Built-in functions.
 
 mod array;
+pub mod date;
 mod env;
 mod file;
 mod format;
@@ -35,6 +36,7 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| json::constant(name))
         .or_else(|| preg::constant(name))
         .or_else(|| streams::constant(name))
+        .or_else(|| date::constant(name))
 }
 
 pub use format::{sprintf, vsprintf};
@@ -119,6 +121,7 @@ type BuiltinFn = fn(&mut dyn Runtime, &str, &str, Vec<Value>) -> Option<EResult<
 /// Groups of built-ins in their own modules, with the names each implements
 const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (types::NAMES, types::call),
+    (date::NAMES, date::call),
     (string::NAMES, string::call),
     (math::NAMES, math::call),
     (format::NAMES, format::call),
@@ -793,6 +796,9 @@ struct DebugProp {
 /// typed ones included), then dynamic ones. Closures show what they capture
 fn debug_props(o: &Object) -> Vec<DebugProp> {
     let prop = |name: &str, value: Value| DebugProp { key: Key::Str(name.as_bytes().into()), value: Some(value), ty: String::new() };
+    if date::debug_properties(o).is_some() {
+        return o.export_props().into_iter().map(|(key, value)| DebugProp { key, value: Some(value), ty: String::new() }).collect();
+    }
     if let Internal::Closure(c) = &o.internal {
         let mut props = vec![prop("name", Value::str(c.name.clone()))];
         // A closure of a built-in function has no location

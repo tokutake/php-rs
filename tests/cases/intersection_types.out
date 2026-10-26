@@ -1,0 +1,22 @@
+bool(true)
+bool(true)
+NULL
+bool(true)
+TypeError: Shapes\take(): Argument #1 ($value) must be of type Shapes\A&Shapes\B, Shapes\OnlyA given, called in intersection_types.php on line 16
+TypeError: Shapes\take(): Argument #1 ($value) must be of type Shapes\A&Shapes\B, int given, called in intersection_types.php on line 17
+TypeError: Shapes\choose(): Argument #1 ($value) must be of type (Shapes\A&Shapes\B)|Shapes\C|null, Shapes\OnlyA given, called in intersection_types.php on line 18
+TypeError: Shapes\wrong(): Return value must be of type Shapes\A&Shapes\B, Shapes\OnlyA returned
+bool(true)
+bool(true)
+bool(true)
+TypeError: Cannot assign Shapes\OnlyA to property Shapes\Box::$value of type Shapes\A&Shapes\B
+TypeError: Cannot assign Shapes\OnlyA to property Shapes\Box::$shared of type (Shapes\A&Shapes\B)|Shapes\C|null
+bool(true)
+int(2)
+TypeError: Shapes\many(): Argument #2 must be of type Shapes\A&Shapes\B, Shapes\OnlyA given, called in intersection_types.php on line 35
+bool(true)
+array(1) {
+  [0]=>
+  int(1)
+}
+bool(true)

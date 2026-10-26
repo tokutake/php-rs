@@ -406,7 +406,7 @@ bool(false)
 Path cannot be empty
 file_get_contents(): Argument #1 ($filename) must not contain any null bytes
 file(): Argument #2 ($flags) must be a valid flag value
-string(4) "/tmp"
+bool(true)
 string(5) "hello"
 string(3) "r+b"
 int(28)

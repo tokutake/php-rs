@@ -202,6 +202,11 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("ceil", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
+    ("checkdate", &[
+        Param { name: "month", default: None, variadic: false, by_ref: false },
+        Param { name: "day", default: None, variadic: false, by_ref: false },
+        Param { name: "year", default: None, variadic: false, by_ref: false },
+    ]),
     ("chmod", &[
         Param { name: "filename", default: None, variadic: false, by_ref: false },
         Param { name: "permissions", default: None, variadic: false, by_ref: false },
@@ -299,6 +304,161 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("ctype_xdigit", &[
         Param { name: "text", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "timestamp", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("date_create", &[
+        Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
+        Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("date_create_immutable", &[
+        Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
+        Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("date_date_set", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "year", default: None, variadic: false, by_ref: false },
+        Param { name: "month", default: None, variadic: false, by_ref: false },
+        Param { name: "day", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_default_timezone_get", &[
+    ]),
+    ("date_default_timezone_set", &[
+        Param { name: "timezoneId", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_format", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_isodate_set", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "year", default: None, variadic: false, by_ref: false },
+        Param { name: "week", default: None, variadic: false, by_ref: false },
+        Param { name: "dayOfWeek", default: Some("1"), variadic: false, by_ref: false },
+    ]),
+    ("date_modify", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "modifier", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_offset_get", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_time_set", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "hour", default: None, variadic: false, by_ref: false },
+        Param { name: "minute", default: None, variadic: false, by_ref: false },
+        Param { name: "second", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "microsecond", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("date_timestamp_get", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_timestamp_set", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "timestamp", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_timezone_get", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+    ]),
+    ("date_timezone_set", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "timezone", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetime::__construct", &[
+        Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
+        Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("datetime::format", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetime::getmicrosecond", &[
+    ]),
+    ("datetime::getoffset", &[
+    ]),
+    ("datetime::gettimestamp", &[
+    ]),
+    ("datetime::gettimezone", &[
+    ]),
+    ("datetime::modify", &[
+        Param { name: "modifier", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetime::setdate", &[
+        Param { name: "year", default: None, variadic: false, by_ref: false },
+        Param { name: "month", default: None, variadic: false, by_ref: false },
+        Param { name: "day", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetime::setisodate", &[
+        Param { name: "year", default: None, variadic: false, by_ref: false },
+        Param { name: "week", default: None, variadic: false, by_ref: false },
+        Param { name: "dayOfWeek", default: Some("1"), variadic: false, by_ref: false },
+    ]),
+    ("datetime::setmicrosecond", &[
+        Param { name: "microsecond", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetime::settime", &[
+        Param { name: "hour", default: None, variadic: false, by_ref: false },
+        Param { name: "minute", default: None, variadic: false, by_ref: false },
+        Param { name: "second", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "microsecond", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("datetime::settimestamp", &[
+        Param { name: "timestamp", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetime::settimezone", &[
+        Param { name: "timezone", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::__construct", &[
+        Param { name: "datetime", default: Some("'now'"), variadic: false, by_ref: false },
+        Param { name: "timezone", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::format", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::getmicrosecond", &[
+    ]),
+    ("datetimeimmutable::getoffset", &[
+    ]),
+    ("datetimeimmutable::gettimestamp", &[
+    ]),
+    ("datetimeimmutable::gettimezone", &[
+    ]),
+    ("datetimeimmutable::modify", &[
+        Param { name: "modifier", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::setdate", &[
+        Param { name: "year", default: None, variadic: false, by_ref: false },
+        Param { name: "month", default: None, variadic: false, by_ref: false },
+        Param { name: "day", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::setisodate", &[
+        Param { name: "year", default: None, variadic: false, by_ref: false },
+        Param { name: "week", default: None, variadic: false, by_ref: false },
+        Param { name: "dayOfWeek", default: Some("1"), variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::setmicrosecond", &[
+        Param { name: "microsecond", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::settime", &[
+        Param { name: "hour", default: None, variadic: false, by_ref: false },
+        Param { name: "minute", default: None, variadic: false, by_ref: false },
+        Param { name: "second", default: Some("0"), variadic: false, by_ref: false },
+        Param { name: "microsecond", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::settimestamp", &[
+        Param { name: "timestamp", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimeimmutable::settimezone", &[
+        Param { name: "timezone", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimezone::__construct", &[
+        Param { name: "timezone", default: None, variadic: false, by_ref: false },
+    ]),
+    ("datetimezone::getname", &[
+    ]),
+    ("datetimezone::getoffset", &[
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
     ]),
     ("decbin", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
@@ -600,9 +760,15 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("getcwd", &[
     ]),
+    ("getdate", &[
+        Param { name: "timestamp", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
     ("getenv", &[
         Param { name: "name", default: Some("null"), variadic: false, by_ref: false },
         Param { name: "local_only", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("gettimeofday", &[
+        Param { name: "as_float", default: Some("false"), variadic: false, by_ref: false },
     ]),
     ("gettype", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
@@ -610,6 +776,18 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("glob", &[
         Param { name: "pattern", default: None, variadic: false, by_ref: false },
         Param { name: "flags", default: Some("0"), variadic: false, by_ref: false },
+    ]),
+    ("gmdate", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "timestamp", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("gmmktime", &[
+        Param { name: "hour", default: None, variadic: false, by_ref: false },
+        Param { name: "minute", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "second", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "month", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "day", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "year", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
     ("hex2bin", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
@@ -630,6 +808,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("hypot", &[
         Param { name: "x", default: None, variadic: false, by_ref: false },
         Param { name: "y", default: None, variadic: false, by_ref: false },
+    ]),
+    ("idate", &[
+        Param { name: "format", default: None, variadic: false, by_ref: false },
+        Param { name: "timestamp", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
     ("implode", &[
         Param { name: "separator", default: None, variadic: false, by_ref: false },
@@ -787,6 +969,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "replacement_cost", default: Some("1"), variadic: false, by_ref: false },
         Param { name: "deletion_cost", default: Some("1"), variadic: false, by_ref: false },
     ]),
+    ("localtime", &[
+        Param { name: "timestamp", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "associative", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("log", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
         Param { name: "base", default: Some("M_E"), variadic: false, by_ref: false },
@@ -812,6 +998,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "object_or_class", default: None, variadic: false, by_ref: false },
         Param { name: "method", default: None, variadic: false, by_ref: false },
     ]),
+    ("microtime", &[
+        Param { name: "as_float", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("min", &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
         Param { name: "values", default: None, variadic: true, by_ref: false },
@@ -821,6 +1010,14 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "permissions", default: Some("0777"), variadic: false, by_ref: false },
         Param { name: "recursive", default: Some("false"), variadic: false, by_ref: false },
         Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("mktime", &[
+        Param { name: "hour", default: None, variadic: false, by_ref: false },
+        Param { name: "minute", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "second", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "month", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "day", default: Some("NULL"), variadic: false, by_ref: false },
+        Param { name: "year", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
     ("nl2br", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
@@ -1209,6 +1406,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("strtolower", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
+    ("strtotime", &[
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
+        Param { name: "baseTimestamp", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
     ("strtoupper", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
@@ -1248,6 +1449,18 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("tempnam", &[
         Param { name: "directory", default: None, variadic: false, by_ref: false },
         Param { name: "prefix", default: None, variadic: false, by_ref: false },
+    ]),
+    ("time", &[
+    ]),
+    ("timezone_name_get", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+    ]),
+    ("timezone_offset_get", &[
+        Param { name: "object", default: None, variadic: false, by_ref: false },
+        Param { name: "datetime", default: None, variadic: false, by_ref: false },
+    ]),
+    ("timezone_open", &[
+        Param { name: "timezone", default: None, variadic: false, by_ref: false },
     ]),
     ("tmpfile", &[
     ]),

@@ -359,17 +359,17 @@ pub struct Param {
     pub variadic: bool,
 }
 
-/// A declared type such as `int`, `?string` or `int|float`
+/// A declared type in disjunctive normal form, e.g. `(A&B)|null`.
 #[derive(Debug, Clone)]
 pub struct TypeHint {
-    /// Lowercased member types; `?T` is stored as `T` plus "null"
-    pub types: Vec<String>,
+    /// Union alternatives, each an intersection of lowercased type names.
+    pub types: Vec<Vec<String>>,
     /// As written, for error messages
     pub display: String,
 }
 
 impl TypeHint {
     pub fn allows(&self, ty: &str) -> bool {
-        self.types.iter().any(|t| t == ty || t == "mixed")
+        self.types.iter().any(|group| group.len() == 1 && (group[0] == ty || group[0] == "mixed"))
     }
 }

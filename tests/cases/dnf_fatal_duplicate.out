@@ -1,0 +1,4 @@
+
+Fatal error: Type B&A is redundant with type A&B in dnf_fatal_duplicate.php on line 2
+Stack trace:
+#0 {main}

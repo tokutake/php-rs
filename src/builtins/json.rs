@@ -349,8 +349,8 @@ impl Encoder<'_> {
     /// Public properties as a JSON object
     fn plain_object(&mut self, out: &mut Vec<u8>, o: &Rc<Object>) -> EResult<bool> {
         let entries = match &o.internal {
-            Internal::None => o
-                .ordered_props()
+            Internal::None | Internal::DateTime(_) | Internal::TimeZone(_) => o
+                .export_props()
                 .into_iter()
                 .filter(|(k, _)| unmangle(k).1 == Visibility::Public)
                 .map(|(k, v)| (Some(k), v))

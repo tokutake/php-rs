@@ -17,7 +17,7 @@ int(1)
 Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in coercion.php on line 16
 int(0)
 TypeError: strlen(): Argument #1 ($string) must be of type string, array given
-int(264)
+bool(true)
 TypeError: strlen(): Argument #1 ($string) must be of type string, Closure given
 TypeError: in_array(): Argument #2 ($haystack) must be of type array, string given
 

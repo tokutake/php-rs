@@ -1,0 +1,31 @@
+DateMalformedStringException: Failed to parse time string (bad) at position 0 (b): The timezone could not be found in the database
+DateInvalidTimeZoneException: DateTimeZone::__construct(): Unknown or bad timezone (bad)
+DateMalformedStringException: DateTime::modify(): Failed to parse time string (bad) at position 0 (b): The timezone could not be found in the database
+
+Warning: date_modify(): Failed to parse time string (bad) at position 0 (b): The timezone could not be found in the database in date_errors.php on line 8
+bool(false)
+
+Warning: timezone_open(): Unknown or bad timezone (bad) in date_errors.php on line 9
+bool(false)
+TypeError: date_format(): Argument #2 ($format) must be of type string, array given
+ArgumentCountError: date_format() expects exactly 2 arguments, 1 given
+TypeError: date_date_set(): Argument #2 ($year) must be of type int, array given
+TypeError: date_time_set(): Argument #3 ($minute) must be of type int, array given
+TypeError: date_timezone_set(): Argument #2 ($timezone) must be of type DateTimeZone, string given
+TypeError: date_timestamp_get(): Argument #1 ($object) must be of type DateTimeInterface, int given
+TypeError: timezone_offset_get(): Argument #2 ($datetime) must be of type DateTimeInterface, int given
+TypeError: strtotime(): Argument #1 ($datetime) must be of type string, array given
+TypeError: checkdate(): Argument #3 ($year) must be of type int, array given
+DateRangeError: DateTime::setMicrosecond(): Argument #1 ($microsecond) must be between 0 and 999999, -1 given
+DateRangeError: DateTime::setMicrosecond(): Argument #1 ($microsecond) must be between 0 and 999999, 1000000 given
+
+Notice: date_default_timezone_set(): Timezone ID 'EDT' is invalid in date_errors.php on line 21
+
+Notice: date_default_timezone_set(): Timezone ID 'Z' is invalid in date_errors.php on line 21
+
+Notice: date_default_timezone_set(): Timezone ID '+09:00' is invalid in date_errors.php on line 21
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)

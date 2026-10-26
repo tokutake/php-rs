@@ -15,7 +15,7 @@ t(fn() => strlen(1.5));
 t(fn() => strlen(true));
 t(fn() => strlen(null));
 t(fn() => strlen([]));
-t(fn() => strlen(new Exception("msg")));
+t(fn() => strlen(new Exception("msg")) === strlen((string) new Exception("msg")));
 t(fn() => strlen(fn() => 1));
 t(fn() => in_array(1, "x"));
 t(fn() => explode(",", null));

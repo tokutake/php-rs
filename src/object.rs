@@ -114,6 +114,8 @@ pub struct ClassConst {
 /// Methods implemented natively for built-in classes
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Native {
+    DateTime,
+    TimeZone,
     ThrowableConstruct,
     GetMessage,
     GetCode,
@@ -241,6 +243,8 @@ pub struct Object {
 }
 
 pub enum Internal {
+    DateTime(RefCell<Option<crate::datetime::DateTime>>),
+    TimeZone(RefCell<Option<Rc<crate::datetime::Zone>>>),
     None,
     Closure(Closure),
     Generator(Box<RefCell<crate::interp::generator::GenState>>),
@@ -396,6 +400,11 @@ pub fn disable_destructors() {
 impl Object {
     /// A new object with the class's default property values
     pub fn new(class: Rc<ClassEntry>, internal: Internal) -> Rc<Object> {
+        let internal = if matches!(internal, Internal::None) && class.is_subclass_of("DateTimeInterface") {
+            Internal::DateTime(RefCell::new(None))
+        } else if matches!(internal, Internal::None) && class.is_subclass_of("DateTimeZone") {
+            Internal::TimeZone(RefCell::new(None))
+        } else { internal };
         let id = alloc_id();
         let mut props = PhpArray::new();
         for p in &class.props {
@@ -433,6 +442,19 @@ impl Object {
         }
     }
 
+    /// Native debug/serialization properties, followed by user properties.
+    /// Native date properties are absent from foreach/get_object_vars.
+    pub fn export_props(&self) -> Vec<(Key, Value)> {
+        let Some(native) = crate::builtins::date::debug_properties(self) else { return self.ordered_props() };
+        let mut out: Vec<_> = native.into_iter().map(|(name, value)| (Key::from_bytes(name.as_bytes()), value)).collect();
+        let native_count = out.len();
+        for (key, value) in self.ordered_props() {
+            if let Some((_, slot)) = out[..native_count].iter_mut().find(|(k, _)| *k == key) { *slot = value; }
+            else { out.push((key, value)); }
+        }
+        out
+    }
+
     /// Initialized properties in slot order: declared ones in class layout order
     /// (even if re-set later), then dynamic ones in creation order
     pub fn ordered_props(&self) -> Vec<(Key, Value)> {
@@ -450,7 +472,7 @@ impl Object {
     pub fn closure(&self) -> Option<&Closure> {
         match &self.internal {
             Internal::Closure(c) => Some(c),
-            Internal::None | Internal::Generator(_) => None,
+            Internal::None | Internal::Generator(_) | Internal::DateTime(_) | Internal::TimeZone(_) => None,
         }
     }
 
@@ -656,6 +678,11 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         ("UnexpectedValueException", "RuntimeException"),
         ("JsonException", "Exception"),
         ("ClosedGeneratorException", "Exception"),
+        ("DateError", "Error"),
+        ("DateRangeError", "DateError"),
+        ("DateException", "Exception"),
+        ("DateMalformedStringException", "DateException"),
+        ("DateInvalidTimeZoneException", "DateException"),
     ] {
         let c = put(plain_subclass(name, &by_name[parent]));
         by_name.insert(name, c);
@@ -734,6 +761,15 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         methods: methods.into_iter().collect(),
         ..Default::default()
     });
+    let date_constants = || crate::builtins::date::class_constants().map(|(name, value)| {
+        (name.to_string(), Rc::new(ClassConst { vis: Visibility::Public, class: "DateTimeInterface", state: RefCell::new(ConstState::Done(value)) }))
+    }).collect();
+    put(ClassEntry { name: "DateTimeInterface", is_interface: true, consts: date_constants(), ..Default::default() });
+    for name in ["DateTime", "DateTimeImmutable"] {
+        let methods = ["__construct", "format", "modify", "getTimestamp", "setTimestamp", "getTimezone", "setTimezone", "getOffset", "setDate", "setTime", "setISODate", "getMicrosecond", "setMicrosecond"];
+        put(ClassEntry { name, interfaces: vec!["DateTimeInterface"], consts: date_constants(), methods: methods.iter().map(|m| native(m, name, Native::DateTime, false)).collect(), ..Default::default() });
+    }
+    put(ClassEntry { name: "DateTimeZone", methods: ["__construct", "getName", "getOffset"].iter().map(|m| native(m, "DateTimeZone", Native::TimeZone, false)).collect(), ..Default::default() });
     map
 }
 

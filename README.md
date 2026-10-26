@@ -25,8 +25,8 @@ Early stage. Implemented so far:
 - Constants: `const`, `define()`, `constant()`, magic constants (`__LINE__`, `__CLASS__`, ...)
 - Named arguments, for user and built-in functions, methods and `new` (also from
   spread arrays and call_user_func_array)
-- User functions: type declarations, defaults, variadics, by-reference parameters,
-  `static`, `global`, references
+- User functions: type declarations (including intersection and DNF types),
+  defaults, variadics, by-reference parameters, `static`, `global`, references
 - Exceptions: `try`/`catch`/`finally`, `throw` (also as an expression), the
   built-in Throwable hierarchy, chained previous exceptions
 - Closures and arrow functions (`use`, by-reference captures, auto-capture),
@@ -76,6 +76,16 @@ Early stage. Implemented so far:
   `scandir`, `glob`), `unlink`/`mkdir`/`rename`/`copy`/`touch`/`stat` and friends.
   Reads stop at php-src's default memory limit, so an endless stream cannot
   exhaust memory
+- Dates and times: `date`/`gmdate`/`idate`, `time`/`microtime`/`gettimeofday`,
+  `strtotime`, `mktime`/`gmmktime`, `checkdate`, `getdate`/`localtime`, default
+  timezone functions, and `DateTime`, `DateTimeImmutable`, `DateTimeZone`.
+  Formatting, calendar modification, date/time/ISO-week/timestamp/timezone
+  setters, offsets, microseconds, cloning, comparisons and the corresponding
+  procedural functions are supported. `strtotime` accepts ISO dates and times,
+  Unix timestamps, common English dates and relative day/week/month/year/time
+  adjustments. Named zones use `/usr/share/zoneinfo` (IANA TZif), including
+  historical transitions and future POSIX `M` rules for daylight saving;
+  UTC and fixed offsets work without the database
 - Output buffering: `ob_start()` with handlers, chunk sizes and flags, `ob_get_clean()`,
   `ob_end_flush()` and the rest of the ob_* functions. Diagnostics and uncaught errors
   go to the buffers, writes to `STDOUT` bypass them, and buffers left open are
@@ -90,7 +100,9 @@ Early stage. Implemented so far:
   pathological pattern ends in `PREG_BACKTRACK_LIMIT_ERROR` and friends rather
   than a hang or a crash
 
-Not yet: dates, network streams and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
+Not yet: the rest of the date extension (`DateInterval`, `DatePeriod`,
+`createFromFormat`, the full timelib parsing grammar and parser diagnostics),
+network streams and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage
 
