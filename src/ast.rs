@@ -61,6 +61,8 @@ pub enum ExprKind {
     /// `function () use ($x) {}` and `fn () => ...`
     Closure(Rc<FuncDecl>),
     New(ClassRef, Vec<Arg>),
+    /// A class declaration that is linked on first evaluation of this expression.
+    AnonymousClass(Rc<ClassDecl>, Vec<Arg>),
     MethodCall { object: Box<Expr>, name: Name, args: Vec<Arg>, nullsafe: bool },
     Prop { object: Box<Expr>, name: Name, nullsafe: bool },
     StaticCall { class: ClassRef, name: String, args: Vec<Arg> },

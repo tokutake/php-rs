@@ -603,6 +603,7 @@ fn each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
             f(callee);
             args.iter().for_each(|a| f(&a.value));
         }
+        ExprKind::AnonymousClass(_, args) => args.iter().for_each(|a| f(&a.value)),
         ExprKind::New(c, args) | ExprKind::StaticCall { class: c, args, .. } => {
             class(c, f);
             args.iter().for_each(|a| f(&a.value));
@@ -716,6 +717,7 @@ fn each_child_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
             f(callee);
             args.iter_mut().for_each(|a| f(&mut a.value));
         }
+        ExprKind::AnonymousClass(_, args) => args.iter_mut().for_each(|a| f(&mut a.value)),
         ExprKind::New(c, args) | ExprKind::StaticCall { class: c, args, .. } => {
             class(c, f);
             args.iter_mut().for_each(|a| f(&mut a.value));

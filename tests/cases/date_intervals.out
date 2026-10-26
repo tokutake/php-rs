@@ -1,0 +1,247 @@
+P1Y2M3DT4H5M6S
+object(DateInterval)#2 (10) {
+  ["y"]=>
+  int(1)
+  ["m"]=>
+  int(2)
+  ["d"]=>
+  int(3)
+  ["h"]=>
+  int(4)
+  ["i"]=>
+  int(5)
+  ["s"]=>
+  int(6)
+  ["f"]=>
+  float(0)
+  ["invert"]=>
+  int(0)
+  ["days"]=>
+  bool(false)
+  ["from_string"]=>
+  bool(false)
+}
+P1W2D
+object(DateInterval)#2 (10) {
+  ["y"]=>
+  int(0)
+  ["m"]=>
+  int(0)
+  ["d"]=>
+  int(9)
+  ["h"]=>
+  int(0)
+  ["i"]=>
+  int(0)
+  ["s"]=>
+  int(0)
+  ["f"]=>
+  float(0)
+  ["invert"]=>
+  int(0)
+  ["days"]=>
+  bool(false)
+  ["from_string"]=>
+  bool(false)
+}
+P0D
+object(DateInterval)#2 (10) {
+  ["y"]=>
+  int(0)
+  ["m"]=>
+  int(0)
+  ["d"]=>
+  int(0)
+  ["h"]=>
+  int(0)
+  ["i"]=>
+  int(0)
+  ["s"]=>
+  int(0)
+  ["f"]=>
+  float(0)
+  ["invert"]=>
+  int(0)
+  ["days"]=>
+  bool(false)
+  ["from_string"]=>
+  bool(false)
+}
+PT0S
+object(DateInterval)#2 (10) {
+  ["y"]=>
+  int(0)
+  ["m"]=>
+  int(0)
+  ["d"]=>
+  int(0)
+  ["h"]=>
+  int(0)
+  ["i"]=>
+  int(0)
+  ["s"]=>
+  int(0)
+  ["f"]=>
+  float(0)
+  ["invert"]=>
+  int(0)
+  ["days"]=>
+  bool(false)
+  ["from_string"]=>
+  bool(false)
+}
+P0001-02-03T04:05:06
+object(DateInterval)#2 (10) {
+  ["y"]=>
+  int(1)
+  ["m"]=>
+  int(2)
+  ["d"]=>
+  int(3)
+  ["h"]=>
+  int(4)
+  ["i"]=>
+  int(5)
+  ["s"]=>
+  int(6)
+  ["f"]=>
+  float(0)
+  ["invert"]=>
+  int(0)
+  ["days"]=>
+  bool(false)
+  ["from_string"]=>
+  bool(false)
+}
+P
+DateMalformedIntervalStringException: Unknown or bad format (P)
+PT
+DateMalformedIntervalStringException: Unknown or bad format (PT)
+P1DT
+DateMalformedIntervalStringException: Unknown or bad format (P1DT)
+P1.5D
+DateMalformedIntervalStringException: Unknown or bad format (P1.5D)
+-P1D
+DateMalformedIntervalStringException: Unknown or bad format (-P1D)
+[01 1 02 2 03 3 04 4 05 5 06 6 000000 0 +  (unknown) % %q ]
+- - 4 123456
+bool(false)
+
+Deprecated: Creation of dynamic property DateInterval::$days is deprecated in date_intervals.php on line 11
+bool(false)
+bool(true)
+bool(true)
+array(10) {
+  ["days"]=>
+  bool(false)
+  ["y"]=>
+  int(1)
+  ["m"]=>
+  int(2)
+  ["d"]=>
+  int(4)
+  ["h"]=>
+  int(4)
+  ["i"]=>
+  int(5)
+  ["s"]=>
+  int(6)
+  ["f"]=>
+  float(0.123456)
+  ["invert"]=>
+  int(1)
+  ["from_string"]=>
+  bool(false)
+}
+array(10) {
+  ["days"]=>
+  bool(false)
+  ["y"]=>
+  int(1)
+  ["m"]=>
+  int(2)
+  ["d"]=>
+  int(4)
+  ["h"]=>
+  int(4)
+  ["i"]=>
+  int(5)
+  ["s"]=>
+  int(6)
+  ["f"]=>
+  float(0.123456)
+  ["invert"]=>
+  int(1)
+  ["from_string"]=>
+  bool(false)
+}
+string(94) "{"days":false,"y":1,"m":2,"d":4,"h":4,"i":5,"s":6,"f":0.123456,"invert":1,"from_string":false}"
+int(1)
+int(10)
+array(2) {
+  ["from_string"]=>
+  bool(true)
+  ["date_string"]=>
+  string(14) "2 days 3 hours"
+}
+0 0 2 3 0 0 (unknown)
+2024-02-02T03:00:00+00:00
+array(2) {
+  ["from_string"]=>
+  bool(true)
+  ["date_string"]=>
+  string(8) "-1 month"
+}
+0 -1 0 0 0 0 (unknown)
+2023-12-31T00:00:00+00:00
+array(2) {
+  ["from_string"]=>
+  bool(true)
+  ["date_string"]=>
+  string(14) "2 weeks 3 days"
+}
+0 0 17 0 0 0 (unknown)
+2024-02-17T00:00:00+00:00
+array(2) {
+  ["from_string"]=>
+  bool(true)
+  ["date_string"]=>
+  string(8) "24 hours"
+}
+0 0 0 24 0 0 (unknown)
+2024-02-01T00:00:00+00:00
+bool(true)
+2024-03-02 12:34:56.987654
+2024-02-02 12:34:56.987654
+2024-02-02 12:34:58.111110
+bool(true)
+string(25) "2000-01-01T00:00:00+00:00"
+string(25) "2000-01-02T00:00:00+00:00"
+2000-01-01T23:00:00+00:00
+3 days
+TypeError: date_add(): Argument #2 ($interval) must be of type DateInterval, int given
+TypeError: DateTime::add(): Argument #1 ($interval) must be of type DateInterval, stdClass given
+DateMalformedIntervalStringException: Unknown or bad format (bad) at position 0 (b): The timezone could not be found in the database
+
+Warning: date_interval_create_from_date_string(): Unknown or bad format (bad) at position 0 (b): The timezone could not be found in the database in date_intervals.php on line 29
+bool(false)
+DateMalformedIntervalStringException: String '2024-11-23' contains non-relative elements
+
+Warning: date_interval_create_from_date_string(): String '2024-11-23' contains non-relative elements in date_intervals.php on line 29
+bool(false)
+DateMalformedIntervalStringException: Unknown or bad format (1 day foo) at position 6 (f): The timezone could not be found in the database
+
+Warning: date_interval_create_from_date_string(): Unknown or bad format (1 day foo) at position 6 (f): The timezone could not be found in the database in date_intervals.php on line 29
+bool(false)
+DateMalformedIntervalStringException: Unknown or bad format () at position 0 ( ): Empty string
+
+Warning: date_interval_create_from_date_string(): Unknown or bad format () at position 0 ( ): Empty string in date_intervals.php on line 29
+bool(false)
+tomorrow 1 0 2024-01-04T12:34:56+00:00
+string(25) "2024-01-02T12:34:56+00:00"
+yesterday -1 0 2024-01-02T12:34:56+00:00
+string(25) "2024-01-04T12:34:56+00:00"
+today 0 0 2024-01-03T12:34:56+00:00
+string(25) "2024-01-03T12:34:56+00:00"
+next monday 0 0 2024-01-08T12:34:56+00:00
+DateInvalidOperationException: DateTimeImmutable::sub(): Only non-special relative time specifications are supported for subtraction

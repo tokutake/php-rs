@@ -1151,6 +1151,11 @@ impl Parser {
     }
 
     fn class_decl(&mut self) -> PResult<Stmt> {
+        let (class, _) = self.class_definition(false)?;
+        Ok(Stmt::Class(class))
+    }
+
+    fn class_definition(&mut self, anonymous: bool) -> PResult<(Rc<ClassDecl>, Vec<Arg>)> {
         let line = self.line();
         let (mut is_abstract, mut is_final, mut is_readonly) = (false, false, false);
         loop {
@@ -1170,11 +1175,17 @@ impl Parser {
         if !is_interface && !is_trait && !is_enum && !self.eat_kw("class") {
             return self.unexpected();
         }
-        let Tok::Ident(name) = self.next() else {
-            self.pos -= 1;
-            return self.unexpected();
+        let mut arguments = Vec::new();
+        let mut anonymous_id = None;
+        let mut name = if anonymous {
+            thread_local! { static NEXT_ANONYMOUS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+            anonymous_id = Some(NEXT_ANONYMOUS.with(|next| { let id=next.get();next.set(id+1);id }));
+            if self.eat(&Tok::Op("(")) { arguments = self.call_args()?; }
+            String::new()
+        } else {
+            let Tok::Ident(name) = self.next() else { self.pos -= 1; return self.unexpected(); };
+            self.prefix_ns(&name)
         };
-        let name = self.prefix_ns(&name);
         let backing = if is_enum && self.eat(&Tok::Op(":")) { Some(self.type_hint()?) } else { None };
         if let Some(ty) = &backing
             && (ty.types.len() != 1 || ty.types[0].len() != 1 || !matches!(ty.types[0][0].as_str(), "int" | "string"))
@@ -1192,6 +1203,10 @@ impl Parser {
         }
         if !is_interface && !is_trait && self.eat_kw("implements") {
             interfaces = self.class_list()?;
+        }
+        if let Some(id) = anonymous_id {
+            let prefix = parent.as_ref().or(interfaces.first()).map_or("class", String::as_str);
+            name = format!("{prefix}@anonymous\0{}:{line}${id:x}", self.file.path);
         }
         self.expect(Tok::Op("{"))?;
         let mut members = Vec::new();
@@ -1222,7 +1237,7 @@ impl Parser {
             members,
             line,
         };
-        Ok(Stmt::Class(Rc::new(decl)))
+        Ok((Rc::new(decl), arguments))
     }
 
     fn class_name(&mut self) -> PResult<String> {
@@ -2055,8 +2070,9 @@ impl Parser {
                 list_pattern(items, line)?
             }
             Tok::Ident(kw) if kw.eq_ignore_ascii_case("new") => {
-                if self.at_kw("class") {
-                    return Err(ParseError { msg: "Anonymous classes are not supported yet".into(), line });
+                if self.at_kw("class") || (self.at_kw("readonly") || self.at_kw("final")) && matches!(self.peek_at(1), Tok::Ident(name) if name.eq_ignore_ascii_case("class")) {
+                    let (decl, args) = self.class_definition(true)?;
+                    return Ok(Expr::new(ExprKind::AnonymousClass(decl, args), line));
                 }
                 let class = self.class_ref()?;
                 if self.at(&Tok::Op("(")) && matches!(self.peek_at(1), Tok::Op("...")) && matches!(self.peek_at(2), Tok::Op(")")) {
@@ -2249,6 +2265,7 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
             free_vars(f, out);
         }
         ExprKind::Call(_, a) | ExprKind::NsCall(_, _, a) => args(a, out),
+        ExprKind::AnonymousClass(_, a) => args(a, out),
         ExprKind::New(class, a) => {
             class_vars(class, out);
             args(a, out);

@@ -1,5 +1,8 @@
 //! Safe Gregorian calendar arithmetic and IANA TZif time zones. No process-global
 //! TZ changes, libc calls, or subprocesses are needed by the interpreter.
+pub mod format;
+pub mod interval;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -663,6 +666,41 @@ impl DateTime {
 /// English date spellings and relative calendar adjustments. All arithmetic
 /// is checked; unknown syntax returns failure rather than guessing a date.
 pub fn parse(input: &str, base: &DateTime) -> Option<DateTime> {
+    let result = parse_inner(input, base);
+    let mut diagnostics = format::Diagnostics::default();
+    if result.is_none() {
+        let message = if input.is_empty() {
+            "Empty string"
+        } else if input
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic)
+        {
+            "The timezone could not be found in the database"
+        } else {
+            "Unexpected character"
+        };
+        diagnostics.error(0, message);
+    } else {
+        // The free-form parser normalizes invalid calendar dates too.
+        let date = input.split([' ', 'T']).next().unwrap_or("");
+        let parts: Vec<_> = date.split('-').collect();
+        if parts.len() == 3
+            && let (Ok(y), Ok(m), Ok(d)) = (
+                parts[0].parse::<i64>(),
+                parts[1].parse::<i64>(),
+                parts[2].parse::<i64>(),
+            )
+        {
+            if !(1..=12).contains(&m) || d < 1 || d > month_days(y, m) {
+                diagnostics.warning(input.len() + 1, "The parsed date was invalid");
+            }
+        }
+    }
+    format::record(diagnostics);
+    result
+}
+fn parse_inner(input: &str, base: &DateTime) -> Option<DateTime> {
     if !input.is_ascii() || input.len() > 65536 || input.contains('\0') {
         return None;
     }

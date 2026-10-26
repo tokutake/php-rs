@@ -2,6 +2,7 @@
 
 mod array;
 pub mod date;
+pub mod date_interval;
 mod env;
 mod file;
 mod format;
@@ -796,6 +797,9 @@ struct DebugProp {
 /// typed ones included), then dynamic ones. Closures show what they capture
 fn debug_props(o: &Object) -> Vec<DebugProp> {
     let prop = |name: &str, value: Value| DebugProp { key: Key::Str(name.as_bytes().into()), value: Some(value), ty: String::new() };
+    if matches!(o.internal, Internal::Interval(_)) {
+        return o.ordered_props().into_iter().map(|(key, value)| DebugProp { key, value: Some(value), ty: String::new() }).collect();
+    }
     if date::debug_properties(o).is_some() {
         return o.export_props().into_iter().map(|(key, value)| DebugProp { key, value: Some(value), ty: String::new() }).collect();
     }

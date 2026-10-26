@@ -1425,6 +1425,14 @@ impl<W: Write> Interp<W> {
             }
             ExprKind::Closure(f) => self.make_closure(f)?,
             ExprKind::CallableFrom(call) => self.callable_from(call)?,
+            ExprKind::AnonymousClass(decl, args) => {
+                let name = decl.name.to_ascii_lowercase();
+                if !self.classes.contains_key(&name) { self.declare_class(decl)?; }
+                let class = self.classes[&name].clone();
+                let value = self.instantiate(&class, args, e.line)?;
+                diag::set_line(e.line);
+                value
+            }
             ExprKind::New(class, args) => {
                 let class = self.resolve_class(class)?;
                 let v = self.instantiate(&class, args, e.line)?;

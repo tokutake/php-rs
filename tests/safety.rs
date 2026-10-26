@@ -226,3 +226,35 @@ fn extreme_dates_do_not_panic() {
     assert_eq!(code, 0, "{out}");
     assert_eq!(out, "safe");
 }
+
+#[test]
+fn hostile_date_formats_and_intervals_do_not_panic() {
+    let (code, out) = run("date_format_interval_edges", r#"<?php
+        date_default_timezone_set('UTC');
+        foreach ([['!X-m-d', '+9223372036854775807-12-31'],
+                  ['!U', '-9223372036854775809'],
+                  ['!U', str_repeat('9', 100000)],
+                  [str_repeat('Y', 1100000), '2000'],
+                  ['!u', '99999999999999999']] as [$format, $text]) {
+            if (DateTimeImmutable::createFromFormat($format, $text) !== false) exit(1);
+        }
+        foreach (['P9223372036854775808Y', 'P9223372036854775807W',
+                  'P'.str_repeat('9',100000).'D'] as $spec) {
+            try { new DateInterval($spec); exit(2); }
+            catch (DateMalformedIntervalStringException $e) {}
+        }
+        $d = new DateTimeImmutable('@0');
+        try { $d->add(new DateInterval('P9223372036854775807Y')); exit(3); }
+        catch (DateRangeError $e) {}
+        $i = new DateInterval('PT0S'); $i->f = INF;
+        try { $d->add($i); } catch (DateRangeError $e) {}
+        echo 'safe';
+    "#);
+    assert_eq!((code, out.as_str()), (0, "safe"));
+}
+
+#[test]
+fn deeply_nested_anonymous_classes_are_bounded() {
+    let src = format!("<?php $x = {}0{};", "new class (".repeat(6000), ") {}".repeat(6000));
+    assert_php_error("anonymous_depth", &src, "memory exhausted");
+}
