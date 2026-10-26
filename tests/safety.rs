@@ -287,3 +287,25 @@ fn date_periods_stop_on_nonadvancing_or_overflowing_steps() {
         "DatePeriod date is out of range",
     );
 }
+
+#[test]
+fn property_reference_cycles_fail_without_panicking() {
+    assert_php_error(
+        "static_reference_cycle",
+        "<?php class RefCycle {public static array $a=[];} $r=&RefCycle::$a; $r[0]=&$r; $r[0][0]=1;",
+        "reference to itself",
+    );
+    let (code, out) = run("generator_property_reference", r#"<?php
+        class Source {public int $value=1;public static int $count=2;}
+        $source=new Source;
+        function &values($source) {yield $source->value;yield Source::$count;}
+        foreach (values($source) as &$value) {
+            try {$value=[];exit(1);}catch(TypeError $e) {}
+            $value++;
+        }
+        unset($value);
+        if ($source->value!==2 || Source::$count!==3) exit(2);
+        echo 'safe';
+    "#);
+    assert_eq!((code,out.as_str()),(0,"safe"));
+}

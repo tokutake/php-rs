@@ -452,7 +452,7 @@ impl<W: Write> Interp<W> {
     }
 
     /// Runs `f` with `self` and `static` set to `class`, as while evaluating its constants
-    fn with_scope<T>(&mut self, class: Rc<ClassEntry>, f: impl FnOnce(&mut Self) -> EResult<T>) -> EResult<T> {
+    pub(super) fn with_scope<T>(&mut self, class: Rc<ClassEntry>, f: impl FnOnce(&mut Self) -> EResult<T>) -> EResult<T> {
         let ctx = &mut self.frame().ctx;
         let saved = (ctx.scope.replace(class.clone()), ctx.static_class.replace(class));
         let out = f(self);
@@ -646,6 +646,13 @@ impl<W: Write> Interp<W> {
         let copy = Object::new(o.class.clone(), internal);
         let props = o.props.try_borrow().map_err(|_| super::recursive_reference())?.clone();
         *copy.props.borrow_mut() = props;
+        for prop in copy.class.props.iter().filter(|p|p.ty.is_some()) {
+            let reference=copy.props.borrow().get(&prop.key).and_then(|v|if let Value::Ref(r)=v {Some(r.clone())}else{None});
+            if let Some(reference)=reference {
+                let path=super::Path{base:super::Base::Prop(copy.clone(),prop.name.clone()),dims:Vec::new()};
+                if let Some(source)=self.reference_source(&path,true)? {self.register_reference(&reference,source);}
+            }
+        }
         if let Some(m) = o.class.find_method("__clone").cloned() {
             if !self.can_access(m.vis, m.class) {
                 return Err(Fatal::error(format!(
@@ -698,18 +705,10 @@ impl<W: Write> Interp<W> {
     ) -> EResult<Value> {
         let bound = match &method.body {
             MethodBody::User(f) => self.bind_args(f, &format!("{}::{}", method.class, method.name), args)?,
-            MethodBody::Native(_) if args.iter().any(|a| a.name.is_some()) => {
-                let mut positional = Vec::new();
-                let mut named = Vec::new();
-                for a in args {
-                    let v = self.expr(&a.value)?;
-                    match &a.name {
-                        Some(n) => named.push((n.clone(), v)),
-                        None => positional.push(v),
-                    }
-                }
+            MethodBody::Native(_) if args.iter().any(|a| a.name.is_some() || a.spread) => {
                 let display = format!("{}::{}", method.class, method.name);
-                self.order_builtin_values(&display, positional, named)?.into_iter().map(ArgVal::Val).collect()
+                let ordered = self.order_builtin_args(&display,args)?.unwrap_or_default();
+                self.eval_args(&ordered)?.into_iter().map(ArgVal::Val).collect()
             }
             MethodBody::Native(_) => self.eval_args(args)?.into_iter().map(ArgVal::Val).collect(),
         };

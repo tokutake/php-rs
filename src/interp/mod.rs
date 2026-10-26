@@ -2,6 +2,9 @@
 //! Class and object handling lives in the `oop` submodule.
 
 pub(crate) mod generator;
+mod arguments;
+mod references;
+use references::RefSource;
 mod closure;
 mod oop;
 mod output;
@@ -276,6 +279,7 @@ pub struct Interp<W: Write> {
     /// scope, since each class using a trait gets its own copy of the method
     statics: HashMap<(*const FuncDecl, &'static str), HashMap<String, RefCellValue>>,
     classes: HashMap<String, Rc<ClassEntry>>,
+    reference_sources: Vec<RefSource>,
     /// Class declarations already executed (hoisted ones are seen twice)
     declared: HashSet<*const ClassDecl>,
     /// Magic accessors running per (object id, property, kind), so that
@@ -401,6 +405,7 @@ impl<W: Write> Interp<W> {
             constants: HashMap::new(),
             statics: HashMap::new(),
             classes: object::builtin_classes(),
+            reference_sources: Vec::new(),
             declared: HashSet::new(),
             magic_guard: HashSet::new(),
             internal_calls: Vec::new(),
@@ -850,6 +855,10 @@ impl<W: Write> Interp<W> {
                     }
                 }
             }
+            Stmt::Foreach {subject,key,value,by_ref:true,body} if !subject.is_lvalue() || matches!(&subject.kind,ExprKind::Var(name) if name=="this") => {
+                let Some(iterator)=self.iter_start_reference(subject)? else{return Ok(Flow::Normal);};
+                return self.foreach_iter(iterator,key.as_ref(),value,body,true);
+            }
             Stmt::Foreach { subject, key, value, by_ref, body } if !by_ref || !subject.is_lvalue() => {
                 let v = self.expr(subject)?;
                 if *by_ref && let Value::Object(o) = &v && matches!(o.internal, Internal::Period(_) | Internal::PeriodIterator(_)) {
@@ -867,7 +876,7 @@ impl<W: Write> Interp<W> {
                     }
                     Value::Object(o) if o.class.is_subclass_of("Traversable") => {
                         let Some(it) = self.iter_start(Value::Object(o), false)? else { return Ok(Flow::Normal) };
-                        return self.foreach_iter(it, key.as_ref(), value, body);
+                        return self.foreach_iter(it, key.as_ref(), value, body,false);
                     }
                     Value::Object(o) => self.visible_props(&o),
                     other => {
@@ -901,14 +910,10 @@ impl<W: Write> Interp<W> {
                 })?;
                 let keys = match keys {
                     Ok(keys) => keys,
-                    Err(Value::Object(o)) if matches!(o.internal, Internal::Generator(_)) => {
-                        return Err(self.generator_by_ref(&o));
-                    }
-                    Err(Value::Object(o)) if matches!(o.internal, Internal::Period(_) | Internal::PeriodIterator(_)) => {
-                        return Err(Fatal::error("An iterator cannot be used with foreach by reference"));
-                    }
-                    Err(Value::Object(_)) => {
-                        return Err(Fatal::error("Iterating objects by reference is not supported yet"));
+                    Err(Value::Object(object)) => {
+                        let synthetic=Expr::new(ExprKind::Argument(Rc::new(RefCell::new(Value::Object(object)))),subject.line);
+                        let Some(iterator)=self.iter_start_reference(&synthetic)? else{return Ok(Flow::Normal);};
+                        return self.foreach_iter(iterator,key.as_ref(),value,body,true);
                     }
                     Err(other) => {
                         foreach_type_warning(&other);
@@ -1157,11 +1162,23 @@ impl<W: Write> Interp<W> {
     }
 
     fn expr(&mut self, e: &Expr) -> EResult<Value> {
+        if self.reference_sources.is_empty() || !matches!(e.kind,ExprKind::Assign(..)|ExprKind::AssignRef(..)|ExprKind::CompoundAssign(..)|ExprKind::IncDec{..}|ExprKind::Call(..)|ExprKind::NsCall(..)|ExprKind::CallValue(..)|ExprKind::MethodCall{..}|ExprKind::StaticCall{..}|ExprKind::New(..)|ExprKind::AnonymousClass(..)) {return self.expr_inner(e);}
+        let snapshots = self.reference_snapshots();
+        let mut result = self.expr_inner(e)?;
+        if let Some((before, after)) = self.validate_references(&snapshots)?
+            && matches!(e.kind, ExprKind::Assign(..) | ExprKind::CompoundAssign(..) | ExprKind::IncDec {prefix:true,..})
+            && references::same_value(&result,&before)
+        {result=after;}
+        Ok(result)
+    }
+
+    fn expr_inner(&mut self, e: &Expr) -> EResult<Value> {
         // Diagnostics report the line of the most recently entered node, which
         // matches the line php-src stamps on the opcode raising them
         diag::set_line(e.line);
         Ok(match &e.kind {
             ExprKind::Null => Value::Null,
+            ExprKind::Argument(cell) => value::with_deref(cell,Value::copy_out),
             ExprKind::Bool(b) => Value::Bool(*b),
             ExprKind::Int(i) => Value::Int(*i),
             ExprKind::Float(f) => Value::Float(*f),
@@ -1478,7 +1495,7 @@ impl<W: Write> Interp<W> {
             }
             ExprKind::StaticProp { class, name } => {
                 let (cell, _) = self.static_prop_cell(class, name)?;
-                value::with_deref(&cell, Value::clone)
+                value::with_deref(&cell, Value::copy_out)
             }
             ExprKind::ClassConst { class, name } => self.class_const(class, name)?,
             ExprKind::InstanceOf(x, class) => {
@@ -1585,7 +1602,7 @@ impl<W: Write> Interp<W> {
             },
             ExprKind::StaticProp { class, name } => {
                 let Some(c) = self.resolve_class_quiet(class)? else { return Ok(None) };
-                Ok(c.find_static(name).map(|p| value::with_deref(&p.cell, Value::clone)))
+                Ok(c.find_static(name).map(|p| value::with_deref(&p.cell, Value::copy_out)))
             }
             _ => self.expr(e).map(Some),
         }
@@ -1662,6 +1679,7 @@ impl<W: Write> Interp<W> {
                 Ok(Path { base: Base::Global(self.superglobal(name)), dims: Vec::new() })
             }
             ExprKind::Var(name) => Ok(Path::var(name)),
+            ExprKind::Argument(cell) => Ok(Path {base:Base::Cell(cell.clone(),None),dims:Vec::new()}),
             ExprKind::Index(base, Some(index)) if self.is_globals(base) => {
                 let name = self.expr(index)?;
                 let name = String::from_utf8_lossy(&self.stringify(&name)?).into_owned();
@@ -1740,26 +1758,23 @@ impl<W: Write> Interp<W> {
 
     /// Turns the slot at `path` into a reference (if it is not one yet) and returns it
     fn make_ref(&mut self, path: &Path<'_>) -> EResult<RefCellValue> {
-        if let (Base::Cell(cell, _), true) = (&path.base, path.dims.is_empty()) {
-            return Ok(cell.clone());
-        }
-        self.with_place(path, false, false, |slot| Ok(make_ref_slot(slot)))
+        let source=self.reference_source(path,true)?;
+        if source.is_some() && let Base::Prop(object,name)=&path.base && let oop::PropLookup::Declared(p)=self.find_prop(&object.class,name) && !object.props.borrow().contains_key(&p.key) {object.set_key(p.key,Value::Null);}
+        let reference=self.with_place(path,false,false,|slot|Ok(make_ref_slot(slot)))?;
+        if let Some(source)=source {self.register_reference(&reference,source);}
+        Ok(reference)
     }
 
-    /// Makes `target` an alias of `r`, as `$target = &...` does
-    fn bind_ref(&mut self, target: &Expr, r: RefCellValue) -> EResult<()> {
-        let path = self.path(target)?;
-        if let (Base::Cell(..), true) = (&path.base, path.dims.is_empty()) {
-            return Err(Fatal::error("Binding static properties by reference is not supported yet"));
-        }
-        if let Base::Offset(obj, dim) = &path.base {
-            self.offset_get_indirect(obj, dim.as_ref())?;
-            return Err(Fatal::error("Cannot assign by reference to an array dimension of an object"));
-        }
-        self.with_place(&path, false, false, |slot| {
-            *slot = Value::Ref(r);
-            Ok(())
-        })
+    /// Makes a target hold the shared reference, including static storage cells.
+    fn bind_ref(&mut self, target: &Expr, reference: RefCellValue) -> EResult<()> {
+        let path=self.path(target)?;
+        if let Base::Offset(obj,dim)=&path.base {self.offset_get_indirect(obj,dim.as_ref())?;return Err(Fatal::error("Cannot assign by reference to an array dimension of an object"));}
+        let source=self.reference_source(&path,false)?;
+        if let Some(source)=&source {self.check_reference_binding(&reference,source)?;}
+        if source.is_some() && let Base::Prop(object,name)=&path.base && let oop::PropLookup::Declared(p)=self.find_prop(&object.class,name) && !object.props.borrow().contains_key(&p.key) {object.set_key(p.key,Value::Null);}
+        self.with_place(&path,false,false,|slot|{*slot=Value::Ref(reference.clone());Ok(())})?;
+        if let Some(source)=source {self.register_reference(&reference,source);}
+        Ok(())
     }
 
     fn assign(&mut self, target: &Expr, v: Value) -> EResult<()> {
@@ -1991,16 +2006,9 @@ impl<W: Write> Interp<W> {
             return self.invoke_with(&f, ctx, Vec::new(), bound, line);
         }
         // call_user_func() hands its named arguments on to the callback
-        if lname == "call_user_func" && args.iter().any(|a| a.name.is_some()) && !args.iter().any(|a| a.spread) {
-            let mut positional = Vec::new();
-            let mut named = Vec::new();
-            for a in args {
-                let v = self.expr(&a.value)?;
-                match &a.name {
-                    Some(n) => named.push((n.clone(), v)),
-                    None => positional.push(v),
-                }
-            }
+        if lname == "call_user_func" && args.iter().any(|a| a.name.is_some() || a.spread) {
+            let (mut positional, mut named) = self.eval_named_values(args)?;
+            if positional.is_empty() && let Some(index)=named.iter().position(|(name,_)|name=="callback") {positional.push(named.remove(index).1);}
             if positional.is_empty() {
                 return Err(Fatal::new("ArgumentCountError", "call_user_func(): Argument #1 ($callback) not passed"));
             }
@@ -2011,6 +2019,7 @@ impl<W: Write> Interp<W> {
                 this.call_value_named(&f, positional, named, line)
             });
         }
+        let unpacked = args.iter().any(|a|a.spread);
         let reordered = if builtins::exists(&lname) { self.order_builtin_args(&lname, args)? } else { None };
         let args = reordered.as_deref().unwrap_or(args);
 
@@ -2068,7 +2077,7 @@ impl<W: Write> Interp<W> {
         }
 
         let vals = self.eval_args(args)?;
-        if (direct && compiled_inline(&lname, args)) || lname == "print" || !builtins::exists(&lname) {
+        if (direct && !unpacked && compiled_inline(&lname, args)) || lname == "print" || !builtins::exists(&lname) {
             return self.call_builtin(name, &lname, vals, line);
         }
         self.internal_call(lname.clone(), None, vals.clone(), line, |this| this.call_builtin(name, &lname, vals, line))
@@ -2111,7 +2120,8 @@ impl<W: Write> Interp<W> {
     ) -> EResult<T> {
         let frame = TraceFrame { file: self.file.path.to_string(), line, function, class, args };
         self.internal_calls.push((self.frames.len(), frame, false));
-        let result = f(self).map_err(|mut e| {
+        let snapshots = self.reference_snapshots();
+        let result = f(self).and_then(|result| {self.validate_references(&snapshots)?;Ok(result)}).map_err(|mut e| {
             if e.object.is_none() && e.trace.is_none() && !e.uncatchable {
                 // The error belongs to the line of the call
                 e.line = Some(e.line.unwrap_or(line));
@@ -2368,20 +2378,23 @@ impl<W: Write> Interp<W> {
         let mut named = Vec::new();
         for a in args {
             if a.spread {
-                let v = self.expr(&a.value)?;
-                let mut named_here = false;
-                for (k, v) in spread_entries(v)? {
-                    match k {
-                        // Only within one unpacked array do string keys rule out int keys
-                        Key::Int(_) if named_here => {
-                            return Err(Fatal::error("Cannot use positional argument after named argument during unpacking"));
-                        }
-                        Key::Int(_) => bound.push(ArgVal::Val(v)),
-                        Key::Str(s) => {
-                            named_here = true;
-                            let name = String::from_utf8_lossy(&s).into_owned();
-                            place_named(f, &mut bound, &mut named, name, ArgVal::Val(v))?;
-                        }
+                let source=if a.value.is_lvalue(){Some(self.path(&a.value)?)}else{None};
+                let value=if let Some(path)=&source{self.read_argument_path(path)?}else{self.expr(&a.value)?};
+                let traversable=matches!(value,Value::Object(_));
+                let mut named_here=false;
+                for (key,value) in self.unpack_entries(value)? {
+                    if matches!(key,Key::Int(_))&&named_here{return Err(Fatal::error("Cannot use positional argument after named argument during unpacking"));}
+                    let index=match &key {Key::Int(_)=>bound.len(),Key::Str(s)=>f.params.iter().position(|p|p.name.as_bytes()==s.as_ref()&&!p.variadic).unwrap_or(f.params.len())};
+                    let by_ref=f.params.get(index).or_else(||f.params.last().filter(|p|p.variadic)).is_some_and(|p|p.by_ref);
+                    let argument=if by_ref {
+                        let reference=if !traversable && let Some(path)=&source {let mut element=path.clone();element.dims.push(Some(key.to_value()));self.make_ref(&element)?}
+                        else if let Value::Ref(reference)=value {reference}
+                        else {if traversable {diag::warning(format!("Cannot pass by-reference argument {} of {fname}() by unpacking a Traversable, passing by-value instead",index+1));}Rc::new(RefCell::new(value.copy_out()))};
+                        ArgVal::Ref(reference)
+                    }else{ArgVal::Val(value.copy_out())};
+                    match key {
+                        Key::Int(_)=>bound.push(argument),
+                        Key::Str(s)=>{named_here=true;place_named(f,&mut bound,&mut named,String::from_utf8_lossy(&s).into_owned(),argument)?;}
                     }
                 }
                 continue;
@@ -2531,57 +2544,6 @@ impl<W: Write> Interp<W> {
         let e = Rc::new(e);
         self.builtin_defaults.insert(src, e.clone());
         Ok(e)
-    }
-
-    /// Named arguments to a built-in called directly: the arguments in parameter
-    /// order, with defaults for those skipped. None when no argument is named
-    fn order_builtin_args(&mut self, lname: &str, args: &[Arg]) -> EResult<Option<Vec<Arg>>> {
-        if !args.iter().any(|a| a.name.is_some()) {
-            return Ok(None);
-        }
-        if args.iter().any(|a| a.spread) {
-            return Err(Fatal::error("Named arguments after argument unpacking are not supported for built-in functions yet"));
-        }
-        let Some(sig) = builtins::signature(lname) else {
-            let name = args.iter().find_map(|a| a.name.clone()).unwrap_or_default();
-            return Err(Fatal::error(format!("Unknown named parameter ${name}")));
-        };
-        let mut slots: Vec<Option<Arg>> = Vec::new();
-        for a in args {
-            let Some(name) = &a.name else {
-                slots.push(Some(a.clone()));
-                continue;
-            };
-            match sig.iter().position(|p| p.name == name && !p.variadic) {
-                Some(i) => {
-                    if slots.len() <= i {
-                        slots.resize(i + 1, None);
-                    }
-                    if slots[i].is_some() {
-                        return Err(Fatal::error(format!("Named parameter ${name} overwrites previous argument")));
-                    }
-                    slots[i] = Some(Arg { name: None, ..a.clone() });
-                }
-                None if sig.last().is_some_and(|p| p.variadic) => {
-                    return Err(Fatal::new(
-                        "ArgumentCountError",
-                        format!("{lname}() does not accept unknown named parameters"),
-                    ));
-                }
-                None => return Err(Fatal::error(format!("Unknown named parameter ${name}"))),
-            }
-        }
-        let mut out = Vec::with_capacity(slots.len());
-        for (i, slot) in slots.into_iter().enumerate() {
-            match slot {
-                Some(a) => out.push(a),
-                None => {
-                    let d = self.builtin_default(lname, i, &sig[i])?;
-                    out.push(Arg { value: (*d).clone(), spread: false, name: None });
-                }
-            }
-        }
-        Ok(Some(out))
     }
 
     fn invoke_closure(&mut self, closure: &Closure, args: Vec<ArgVal>, call_line: u32) -> EResult<Value> {
@@ -3187,17 +3149,6 @@ fn place_named(f: &FuncDecl, bound: &mut Vec<ArgVal>, extra: &mut Vec<(String, A
             Ok(())
         }
         None => Err(Fatal::error(format!("Unknown named parameter ${name}"))),
-    }
-}
-
-/// The entries of an unpacked argument list: string keys are named arguments
-fn spread_entries(v: Value) -> EResult<Vec<(Key, Value)>> {
-    match v {
-        Value::Array(arr) => Ok(arr.iter().map(|(k, v)| (k.clone(), v.copy_out())).collect()),
-        other => Err(Fatal::type_error(format!(
-            "Only arrays and Traversables can be unpacked, {} given",
-            other.value_name()
-        ))),
     }
 }
 

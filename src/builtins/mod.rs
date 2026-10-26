@@ -794,6 +794,12 @@ struct DebugProp {
     ty: String,
 }
 
+/// Snapshotting an object property must not make an otherwise unshared
+/// reference appear shared in var_dump.
+fn debug_value(value:&Value)->Value {
+    if let Value::Ref(reference)=value && Rc::strong_count(reference)==1 {value.copy_out()}else{value.clone()}
+}
+
 /// Properties in var_dump order: declared ones in layout order (uninitialized
 /// typed ones included), then dynamic ones. Closures show what they capture
 fn debug_props(o: &Object) -> Vec<DebugProp> {
@@ -836,7 +842,7 @@ fn debug_props(o: &Object) -> Vec<DebugProp> {
     let Ok(stored) = o.props.try_borrow() else { return Vec::new() };
     let mut out = Vec::new();
     for p in &o.class.props {
-        let value = stored.get(&p.key).cloned();
+        let value = stored.get(&p.key).map(debug_value);
         if value.is_some() || p.ty.is_some() {
             let ty = p.ty.as_ref().map_or(String::new(), |t| t.display.clone());
             out.push(DebugProp { key: p.key.clone(), value, ty });
@@ -844,7 +850,7 @@ fn debug_props(o: &Object) -> Vec<DebugProp> {
     }
     for (k, v) in stored.iter() {
         if !o.class.props.iter().any(|p| &p.key == k) {
-            out.push(DebugProp { key: k.clone(), value: Some(v.clone()), ty: String::new() });
+            out.push(DebugProp { key: k.clone(), value: Some(debug_value(v)), ty: String::new() });
         }
     }
     out

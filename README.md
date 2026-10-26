@@ -24,9 +24,11 @@ Early stage. Implemented so far:
 - Heredoc and nowdoc strings, `"$obj->prop"` interpolation
 - Constants: `const`, `define()`, `constant()`, magic constants (`__LINE__`, `__CLASS__`, ...)
 - Named arguments, for user and built-in functions, methods and `new` (also from
-  spread arrays and call_user_func_array)
+  spread arrays and call_user_func_array); built-ins accept named arguments after
+  unpacking arrays or Traversables, preserving evaluation order and references
 - User functions: type declarations (including intersection and DNF types),
   defaults, variadics, by-reference parameters, `static`, `global`, references
+  (including static property aliases, with property types enforced through aliases)
 - Exceptions: `try`/`catch`/`finally`, `throw` (also as an expression), the
   built-in Throwable hierarchy, chained previous exceptions
 - Closures and arrow functions (`use`, by-reference captures, auto-capture),
@@ -45,7 +47,8 @@ Early stage. Implemented so far:
   and `namespace\` names, and the global fallback for unqualified functions and constants
 - Generators: `yield` (anywhere in an expression), keys, `send()`, `throw()`,
   `getReturn()`, `yield from` arrays, iterators and generators, finally blocks run
-  when a suspended generator is destroyed
+  when a suspended generator is destroyed; by-reference generator yields and
+  reference foreach over arrays/objects/generators also work inside generators
 - `Iterator`, `IteratorAggregate` and `Traversable` in foreach, `iterator_to_array()`,
   `iterator_count()`
 - `ArrayAccess` (reads, writes, `isset`/`empty`/`??`, `unset`, compound assignment,

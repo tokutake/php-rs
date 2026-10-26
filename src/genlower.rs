@@ -21,8 +21,8 @@
 use crate::ast::{ArrayItem, ClassRef, Expr, ExprKind, MatchArm, Name, Stmt};
 use crate::parser::ParseError;
 
-pub fn lower(body: Vec<Stmt>) -> Result<Vec<Stmt>, ParseError> {
-    Lowerer { next: 0 }.block(body)
+pub fn lower(body: Vec<Stmt>, by_ref: bool) -> Result<Vec<Stmt>, ParseError> {
+    Lowerer { next: 0, by_ref }.block(body)
 }
 
 /// Hidden variables start with a NUL byte, which a PHP variable name cannot contain
@@ -32,6 +32,7 @@ pub fn is_hidden(name: &str) -> bool {
 
 struct Lowerer {
     next: usize,
+    by_ref: bool,
 }
 
 fn var(name: &str, line: u32) -> Expr {
@@ -72,6 +73,7 @@ fn keep_in_place(e: &Expr) -> bool {
         || matches!(
             e.kind,
             ExprKind::Null
+        | ExprKind::Argument(_)
                 | ExprKind::Bool(_)
                 | ExprKind::Int(_)
                 | ExprKind::Float(_)
@@ -117,6 +119,7 @@ impl Lowerer {
                     out.push(Stmt::Yield { key, value, target: None });
                 }
                 ExprKind::YieldFrom(source) => {
+                    if self.by_ref {return Err(ParseError{msg:"Cannot use \"yield from\" inside a by-reference generator".into(),line:e.line});}
                     let source = self.expr(*source, out)?;
                     out.push(Stmt::YieldFrom { source, target: None });
                 }
@@ -309,6 +312,7 @@ impl Lowerer {
                 Ok(var(&t, line))
             }
             ExprKind::YieldFrom(source) => {
+                if self.by_ref {return Err(ParseError{msg:"Cannot use \"yield from\" inside a by-reference generator".into(),line});}
                 let source = self.expr(*source, pre)?;
                 let t = self.tmp();
                 pre.push(Stmt::YieldFrom { source, target: Some(t.clone()) });
@@ -555,6 +559,7 @@ fn each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
     };
     match &e.kind {
         ExprKind::Null
+        | ExprKind::Argument(_)
         | ExprKind::Bool(_)
         | ExprKind::Int(_)
         | ExprKind::Float(_)
@@ -662,6 +667,7 @@ fn each_child_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
     }
     match &mut e.kind {
         ExprKind::Null
+        | ExprKind::Argument(_)
         | ExprKind::Bool(_)
         | ExprKind::Int(_)
         | ExprKind::Float(_)
