@@ -1,0 +1,32 @@
+a=1 b=2 c=3 3 2 n
+Array
+(
+    [b] => 2
+    [c] => 3
+    [d] => 4
+)
+0:1@0 0:2@1 0:3@2 1:4@2 2:5@0 
+a=1 b[] c=2 
+a c b 
+Array
+(
+    [0] => inc/spltest/a.html|SplFileInfo|a.html
+    [1] => inc/spltest/sub/b.html|SplFileInfo|b.html
+    [2] => inc/spltest/sub/deep/c.txt|SplFileInfo|c.txt
+)
+Array
+(
+    [0] => inc/spltest/a.html
+    [1] => inc/spltest/sub/b.html
+)
+a.html,sub
+3,6,9
+3,4,5
+x1y22
+212
+a1
+3x["x",null,null]
+Index invalid or out of range
+12
+bool(true)
+int(3)

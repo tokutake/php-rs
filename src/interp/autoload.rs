@@ -16,6 +16,10 @@ pub(super) const NAMES: &[&str] = &[
     "spl_autoload_extensions",
 ];
 
+/// SPL's classes, which php-rs implements in PHP (src/prelude/spl.php)
+const SPL_CLASSES: &[&str] = &["outeriterator", "recursiveiterator", "seekableiterator", "arrayiterator", "recursivearrayiterator", "arrayobject", "iteratoriterator", "filteriterator", "callbackfilteriterator", "recursivefilteriterator", "recursivecallbackfilteriterator", "parentiterator", "recursiveiteratoriterator", "regexiterator", "recursiveregexiterator", "limititerator", "infiniteiterator", "norewinditerator", "emptyiterator", "appenditerator", "splfileinfo", "directoryiterator", "filesystemiterator", "recursivedirectoryiterator", "splobjectstorage", "spldoublylinkedlist", "splqueue", "splstack", "splfixedarray"];
+const SPL_SOURCE: &[u8] = include_bytes!("../prelude/spl.php");
+
 /// The share of the call depth limit one level of autoloading takes
 const AUTOLOAD_WEIGHT: usize = 3;
 
@@ -43,6 +47,7 @@ pub(super) struct Autoload {
     loading: Vec<String>,
     /// For spl_autoload(); None is the default ".inc,.php"
     extensions: Option<String>,
+    spl_loaded: bool,
 }
 
 /// zend_is_valid_class_name
@@ -58,6 +63,12 @@ impl<W: Write> Interp<W> {
         if let Some(c) = self.classes.get(&lname) {
             return Ok(Some(c.clone()));
         }
+        if !self.autoload.spl_loaded && SPL_CLASSES.contains(&lname.as_str()) {
+            self.load_spl()?;
+            if let Some(c) = self.classes.get(&lname) {
+                return Ok(Some(c.clone()));
+            }
+        }
         if self.autoload.loaders.is_empty() || !valid_class_name(name) || self.autoload.loading.contains(&lname) {
             return Ok(None);
         }
@@ -70,6 +81,21 @@ impl<W: Write> Interp<W> {
         self.autoload.loading.retain(|l| *l != lname);
         result?;
         Ok(self.classes.get(&lname).cloned())
+    }
+
+    /// Declares SPL's classes from the prelude
+    fn load_spl(&mut self) -> EResult<()> {
+        self.autoload.spl_loaded = true;
+        let path = "[SPL]";
+        let tokens = crate::lexer::lex(SPL_SOURCE, path).map_err(|e| Fatal::compile(e.msg))?;
+        let program = Rc::new(crate::parser::parse(tokens, path).map_err(|e| Fatal::compile(e.msg))?);
+        self.programs.insert(path.to_string(), program.clone());
+        let prev = self.enter_file(&program.file);
+        let line = diag::line();
+        let result = self.hoist(&program.stmts).and_then(|_| self.block(&program.stmts));
+        self.enter_file(&prev);
+        diag::set_line(line);
+        result.map(|_| ())
     }
 
     /// Calls the loaders in order until one of them declares the class
