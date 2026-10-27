@@ -1378,7 +1378,11 @@ impl<W: Write> Interp<W> {
                         Some(k) => Some(to_key(&self.expr(k)?, "array")?),
                         None => None,
                     };
-                    let v = if item.by_ref {
+                    let v = if item.by_ref && matches!(&item.value.kind, ExprKind::Var(n) if n == "this") {
+                        // `&$this` refers to a copy of the handle
+                        let this = self.lookup("this");
+                        Value::Ref(Rc::new(RefCell::new(this)))
+                    } else if item.by_ref {
                         let path = self.path(&item.value)?;
                         Value::Ref(self.make_ref(&path)?)
                     } else {
@@ -3213,6 +3217,10 @@ impl<W: Write> Interp<W> {
             }
             Value::Array(_) => {
                 let Some(c) = self.callable(&f)? else { return Err(Fatal::error("Array callback must have exactly two elements")) };
+                // By-reference parameters bind to the arguments themselves
+                if let Callable::Method { this, method, class } = c {
+                    return self.call_method_ast(this, &method, args, line, class);
+                }
                 let vals = self.eval_args(args)?;
                 self.call_value(&c, vals, line)
             }

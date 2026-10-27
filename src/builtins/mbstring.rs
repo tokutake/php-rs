@@ -491,7 +491,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             if off > len || off < -len {
                 return Err(Fatal::value_error(format!("{lname}(): Argument #3 ($offset) must be contained in argument #1 ($haystack)")));
             }
-            let rev = lname.contains("rpos");
+            let rev = matches!(lname, "mb_strrpos" | "mb_strripos");
             let ci = lname.contains("ipos");
             let found = if rev {
                 // A negative offset limits where the needle may start

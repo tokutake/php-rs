@@ -1,0 +1,85 @@
+string(5) "UTF-8"
+int(23)
+int(6)
+int(43)
+int(3)
+string(6) "Wörld"
+string(11) "スト 🎉"
+string(32) "llo Wörld ñ 日本語テキス"
+string(0) ""
+string(3) "?b?"
+string(3) "Hé"
+int(7)
+bool(false)
+int(9)
+int(6)
+int(9)
+int(9)
+bool(false)
+string(43) "HÉLLO WÖRLD Ñ 日本語テキスト 🎉"
+string(21) "àéîõü σας i̇"
+string(11) "STRASSE ʼN"
+string(22) "Hello World O'neil X-Y"
+string(2) "ǆ"
+string(7) "strasse"
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+string(8) "636166e9"
+string(5) "café"
+string(6) "a?b?c?"
+string(8) "006100e9"
+string(8) "6100e900"
+string(3) "aé"
+string(2) "??"
+string(5) "€Ÿ"
+string(5) "ASCII"
+string(5) "UTF-8"
+string(10) "ISO-8859-1"
+bool(false)
+string(5) "UTF-8"
+int(63)
+bool(true)
+bool(true)
+string(3) "abc"
+bool(true)
+string(6) "U+65E5"
+bool(true)
+array(2) {
+  [0]=>
+  string(3) "añ"
+  [1]=>
+  string(4) "b日"
+}
+int(26085)
+string(4) "🎉"
+bool(false)
+int(7)
+string(9) "Hello …"
+int(3)
+string(12) "@example.com"
+string(4) "user"
+string(2) "/c"
+string(3) "LLo"
+string(12) "a�b�c�"
+string(6) "a日ab"
+string(6) "日本"
+string(5) "Élan"
+string(5) "élan"
+string(3) "日"
+string(9) "Shift_JIS"
+bool(true)
+string(9) "&#26085;a"
+string(5) "日aA"
+mb_strlen(): Argument #2 ($encoding) must be a valid encoding, "nope" given
+string(7) "neutral"
+string(5) "UTF-8"
+array(2) {
+  [0]=>
+  string(5) "ASCII"
+  [1]=>
+  string(5) "UTF-8"
+}
+string(5) "UTF-8"
+string(5) "UTF-8"
