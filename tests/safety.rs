@@ -66,6 +66,15 @@ fn deep_serialized_data_is_bounded() {
 }
 
 #[test]
+fn endless_autoloading_is_bounded() {
+    assert_php_error(
+        "autoload_recursion",
+        "<?php spl_autoload_register(function ($c) { class_exists($c . 'x'); }); new A;",
+        "Maximum call stack size of",
+    );
+}
+
+#[test]
 fn deep_query_data_is_bounded() {
     assert_php_error(
         "http_build_query",

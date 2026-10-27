@@ -105,7 +105,8 @@ const NAMES: &[&str] = &[
     "iterator_to_array", "iterator_count", "is_iterable", "var_export", "printf", "vprintf", "array_walk",
     "array_reduce", "compact", "extract", "ob_start", "ob_get_clean", "ob_get_contents", "ob_get_length",
     "ob_get_level", "ob_flush", "ob_clean", "ob_end_flush", "ob_end_clean", "ob_get_flush", "ob_list_handlers",
-    "ob_get_status", "ob_implicit_flush", "flush", "shuffle", "serialize", "unserialize",
+    "ob_get_status", "ob_implicit_flush", "flush", "shuffle", "serialize", "unserialize", "spl_autoload_register", "spl_autoload_unregister",
+    "spl_autoload_functions", "spl_autoload_call", "spl_autoload", "spl_autoload_extensions",
 ];
 
 /// A built-in's parameter, for named arguments

@@ -9,7 +9,7 @@ use crate::interp::{EResult, Fatal};
 use crate::value::Value;
 
 pub const NAMES: &[&str] = &[
-    "basename", "dirname", "pathinfo", "file_exists", "is_file", "is_dir", "is_readable", "realpath", "getcwd",
+    "basename", "dirname", "pathinfo", "file_exists", "is_file", "is_dir", "is_readable", "realpath", "getcwd", "chdir",
 ];
 
 pub fn constant(name: &str) -> Option<Value> {
@@ -50,7 +50,7 @@ pub fn dirname(path: &[u8]) -> Vec<u8> {
 
 /// A file name argument, which cannot contain NUL bytes
 fn path_arg(rt: &mut dyn Runtime, fname: &str, v: &Value) -> EResult<Vec<u8>> {
-    let param = if fname == "realpath" { "path" } else { "filename" };
+    let param = match fname { "realpath" => "path", "chdir" => "directory", _ => "filename" };
     let p = arg_str(rt, fname, 1, param, v)?;
     if p.contains(&0) {
         return Err(Fatal::value_error(format!("{fname}(): Argument #1 (${param}) must not contain any null bytes")));
@@ -155,6 +155,18 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             Ok(match std::env::current_dir() {
                 Ok(d) => Value::str(d.display().to_string()),
                 Err(_) => Value::Bool(false),
+            })
+        }
+        "chdir" => {
+            let [p] = args::<1, 1>(name, vals)?;
+            let p = path_arg(rt, lname, &p.unwrap())?;
+            Ok(match std::env::set_current_dir(os_path(&p)) {
+                Ok(()) => Value::Bool(true),
+                Err(e) => {
+                    let errno = e.raw_os_error().unwrap_or(0);
+                    crate::diag::warning(format!("chdir(): {} (errno {errno})", super::streams::strerror(&e)));
+                    Value::Bool(false)
+                }
             })
         }
         _ => Err(Fatal::error(format!("Call to undefined function {name}()"))),

@@ -294,8 +294,8 @@ impl<W: Write> Interp<W> {
                 if name == "static" {
                     c.scope.clone()
                 } else {
-                    match self.classes.get(&name.trim_start_matches('\\').to_ascii_lowercase()) {
-                        Some(class) => Some(class.clone()),
+                    match self.find_class(&name)? {
+                        Some(class) => Some(class),
                         None => {
                             diag::warning(format!("Class \"{name}\" not found"));
                             return Ok(Value::Null);

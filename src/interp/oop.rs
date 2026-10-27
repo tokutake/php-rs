@@ -48,9 +48,7 @@ impl<W: Write> Interp<W> {
 
         let parent = match &decl.parent {
             Some(p) => {
-                let pe = self.classes.get(&p.to_ascii_lowercase()).cloned().ok_or_else(|| {
-                    Fatal::error(format!("Class \"{p}\" not found"))
-                })?;
+                let pe = self.find_class(p)?.ok_or_else(|| Fatal::error(format!("Class \"{p}\" not found")))?;
                 if pe.is_interface {
                     return Err(Fatal::compile(format!("Class {name} cannot extend interface {}", pe.name)));
                 }
@@ -79,9 +77,7 @@ impl<W: Write> Interp<W> {
         }
 
         for iname in &decl.interfaces {
-            let ie = self.classes.get(&iname.to_ascii_lowercase()).cloned().ok_or_else(|| {
-                Fatal::error(format!("Interface \"{iname}\" not found"))
-            })?;
+            let ie = self.find_class(iname)?.ok_or_else(|| Fatal::error(format!("Interface \"{iname}\" not found")))?;
             if !ie.is_interface {
                 return Err(Fatal::compile(format!("{name} cannot implement {} - it is not an interface", ie.name)));
             }
@@ -349,11 +345,7 @@ impl<W: Write> Interp<W> {
         for m in &decl.members {
             let Member::Use { traits, rules: r } = m else { continue };
             for t in traits {
-                let te = self
-                    .classes
-                    .get(&t.to_ascii_lowercase())
-                    .cloned()
-                    .ok_or_else(|| Fatal::compile(format!("Trait \"{t}\" not found")))?;
+                let te = self.find_class(t)?.ok_or_else(|| Fatal::compile(format!("Trait \"{t}\" not found")))?;
                 if !te.is_trait {
                     return Err(Fatal::compile(format!("{name} cannot use {} - it is not a trait", te.name)));
                 }
@@ -465,11 +457,7 @@ impl<W: Write> Interp<W> {
 
     pub(super) fn resolve_class(&mut self, class: &ClassRef) -> EResult<Rc<ClassEntry>> {
         match class {
-            ClassRef::Named(n) => self
-                .classes
-                .get(&n.to_ascii_lowercase())
-                .cloned()
-                .ok_or_else(|| Fatal::error(format!("Class \"{n}\" not found"))),
+            ClassRef::Named(n) => self.find_class(n)?.ok_or_else(|| Fatal::error(format!("Class \"{n}\" not found"))),
             ClassRef::SelfRef => self.ctx().scope.clone().ok_or_else(|| self.no_scope("self")),
             ClassRef::Static => self.ctx().static_class.clone().ok_or_else(|| self.no_scope("static")),
             ClassRef::Parent => {
@@ -501,7 +489,7 @@ impl<W: Write> Interp<W> {
     /// Like resolve_class, but an unknown class is None instead of an error
     pub(super) fn resolve_class_quiet(&mut self, class: &ClassRef) -> EResult<Option<Rc<ClassEntry>>> {
         match class {
-            ClassRef::Named(n) => Ok(self.classes.get(&n.to_ascii_lowercase()).cloned()),
+            ClassRef::Named(n) => self.find_class(n),
             ClassRef::Dynamic(e) => match self.expr(e)? {
                 Value::Object(o) => Ok(Some(o.class.clone())),
                 Value::Str(s) => {
@@ -1412,11 +1400,11 @@ impl<W: Write> Interp<W> {
         let (this, class) = match target {
             Value::Object(o) => (Some(o.clone()), o.class.clone()),
             Value::Str(s) => {
-                let n = String::from_utf8_lossy(&s).to_ascii_lowercase();
-                let class = match n.as_str() {
-                    "self" | "static" | "parent" => self.resolve_class(&ClassRef::from_name(&n))?,
-                    _ => match self.classes.get(&n) {
-                        Some(c) => c.clone(),
+                let n = String::from_utf8_lossy(&s).into_owned();
+                let class = match n.to_ascii_lowercase().as_str() {
+                    l @ ("self" | "static" | "parent") => self.resolve_class(&ClassRef::from_name(l))?,
+                    _ => match self.find_class(&n)? {
+                        Some(c) => c,
                         None => return Ok(None),
                     },
                 };
@@ -1463,8 +1451,8 @@ impl<W: Write> Interp<W> {
                 let name = String::from_utf8_lossy(&other.to_bytes()).into_owned();
                 match name.to_ascii_lowercase().as_str() {
                     "self" | "static" | "parent" => self.resolve_class(&ClassRef::from_name(&name))?,
-                    lname => match self.classes.get(lname.trim_start_matches('\\')) {
-                        Some(c) => c.clone(),
+                    _ => match self.find_class(&name)? {
+                        Some(c) => c,
                         None => return Ok(format!("class \"{name}\" not found")),
                     },
                 }
@@ -1490,13 +1478,18 @@ impl<W: Write> Interp<W> {
 
     /// Built-in functions about classes and objects, which need the class table or scope
     pub(super) fn object_builtin(&mut self, lname: &str, vals: &[Value]) -> EResult<Option<Value>> {
-        let class_arg = |this: &Self, v: Option<&Value>| -> Option<Rc<ClassEntry>> {
-            match v? {
-                Value::Object(o) => Some(o.class.clone()),
-                Value::Str(s) => this.classes.get(&String::from_utf8_lossy(s).trim_start_matches('\\').to_ascii_lowercase()).cloned(),
-                _ => None,
+        // A class named by an object or a string; strings run the autoloaders unless told not to
+        let class_arg = |this: &mut Self, v: Option<&Value>, autoload: bool| -> EResult<Option<Rc<ClassEntry>>> {
+            match v {
+                Some(Value::Object(o)) => Ok(Some(o.class.clone())),
+                Some(Value::Str(s)) if autoload => this.find_class(&String::from_utf8_lossy(s)),
+                Some(Value::Str(s)) => {
+                    Ok(this.classes.get(&String::from_utf8_lossy(s).trim_start_matches('\\').to_ascii_lowercase()).cloned())
+                }
+                _ => Ok(None),
             }
         };
+        let autoload = |i: usize| vals.get(i).is_none_or(Value::to_bool);
         let name_arg = |v: Option<&Value>| v.map(|v| String::from_utf8_lossy(&v.to_bytes()).into_owned()).unwrap_or_default();
         Ok(Some(match lname {
             "get_class" => match vals.first() {
@@ -1513,7 +1506,7 @@ impl<W: Write> Interp<W> {
                 }
             },
             "get_parent_class" => {
-                let class = if vals.is_empty() { self.ctx().scope.clone() } else { class_arg(self, vals.first()) };
+                let class = if vals.is_empty() { self.ctx().scope.clone() } else { class_arg(self, vals.first(), true)? };
                 match class.and_then(|c| c.parent.clone()) {
                     Some(p) => Value::str(p.name),
                     None => Value::Bool(false),
@@ -1530,27 +1523,27 @@ impl<W: Write> Interp<W> {
                 }
                 _ => return Err(Fatal::type_error("get_object_vars(): Argument #1 ($object) must be of type object")),
             },
-            "method_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| c.find_method(&name_arg(vals.get(1))).is_some())),
+            "method_exists" => Value::Bool(class_arg(self, vals.first(), true)?.is_some_and(|c| c.find_method(&name_arg(vals.get(1))).is_some())),
             "property_exists" => {
                 let name = name_arg(vals.get(1));
-                let declared = class_arg(self, vals.first())
+                let declared = class_arg(self, vals.first(), true)?
                     .is_some_and(|c| c.props.iter().any(|p| p.name == name) || c.find_static(&name).is_some());
                 let dynamic = matches!(vals.first(), Some(Value::Object(o)) if Self::stored(o, &Key::Str(name.as_bytes().into())).is_some());
                 Value::Bool(declared || dynamic)
             }
-            "class_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| !c.is_interface && !c.is_trait)),
-            "trait_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| c.is_trait)),
-            "enum_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| c.is_enum)),
-            "class_uses" => match class_arg(self, vals.first()) {
+            "class_exists" => Value::Bool(class_arg(self, vals.first(), autoload(1))?.is_some_and(|c| !c.is_interface && !c.is_trait)),
+            "trait_exists" => Value::Bool(class_arg(self, vals.first(), autoload(1))?.is_some_and(|c| c.is_trait)),
+            "enum_exists" => Value::Bool(class_arg(self, vals.first(), autoload(1))?.is_some_and(|c| c.is_enum)),
+            "class_uses" => match class_arg(self, vals.first(), autoload(1))? {
                 Some(c) => Value::Array(Rc::new(c.traits.iter().map(|t| (Key::from_bytes(t.as_bytes()), Value::str(*t))).collect())),
                 None => Value::Bool(false),
             },
-            "interface_exists" => Value::Bool(class_arg(self, vals.first()).is_some_and(|c| c.is_interface)),
+            "interface_exists" => Value::Bool(class_arg(self, vals.first(), autoload(1))?.is_some_and(|c| c.is_interface)),
             "is_a" | "is_subclass_of" => {
                 let allow_string = lname == "is_subclass_of" || vals.get(2).is_some_and(Value::to_bool);
                 let class = match vals.first() {
                     Some(Value::Object(o)) => Some(o.class.clone()),
-                    Some(Value::Str(_)) if allow_string => class_arg(self, vals.first()),
+                    Some(Value::Str(_)) if allow_string => class_arg(self, vals.first(), true)?,
                     _ => None,
                 };
                 let target = name_arg(vals.get(1));
