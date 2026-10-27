@@ -269,6 +269,8 @@ pub struct ClassDecl {
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
+    /// #[AllowDynamicProperties]
+    pub allow_dynamic: bool,
     pub parent: Option<String>,
     /// For an interface, the interfaces it extends
     pub interfaces: Vec<String>,

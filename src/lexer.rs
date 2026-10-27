@@ -46,6 +46,9 @@ const OPS: &[&str] = &[
 ];
 
 /// The tokens of a file; `file` names it in compile-time deprecations
+/// The token that stands for #[AllowDynamicProperties]
+pub const ALLOW_DYNAMIC: &str = "\0AllowDynamicProperties";
+
 pub fn lex(src: &[u8], file: &str) -> Result<Vec<Token>, LexError> {
     Lexer { src, pos: 0, line: 1, out: Vec::new(), file }.run()
 }
@@ -208,8 +211,10 @@ impl<'a> Lexer<'a> {
                     self.bump();
                 }
                 Some(b'#') if self.peek_at(1) != Some(b'[') => self.line_comment(),
-                // Attributes are accepted and ignored for now
+                // Attributes are ignored, except #[AllowDynamicProperties], which
+                // becomes a modifier token for the class after it
                 Some(b'#') => {
+                    let (start, line) = (self.pos, self.line);
                     let mut depth = 0;
                     while let Some(c) = self.bump() {
                         match c {
@@ -222,6 +227,10 @@ impl<'a> Lexer<'a> {
                             }
                             _ => {}
                         }
+                    }
+                    let text = String::from_utf8_lossy(&self.src[start..self.pos]).to_ascii_lowercase();
+                    if text.contains("allowdynamicproperties") {
+                        self.out.push(Token { tok: Tok::Ident(ALLOW_DYNAMIC.into()), line });
                     }
                 }
                 Some(b'/') if self.peek_at(1) == Some(b'/') => self.line_comment(),

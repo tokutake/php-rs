@@ -760,7 +760,7 @@ impl Parser {
                 "namespace" if self.at_namespace_decl() => {
                     Err(ParseError { msg: "Namespace declarations cannot be nested".into(), line: self.line() })
                 }
-                "class" | "interface" | "trait" | "abstract" | "final" | "readonly"
+                "class" | "interface" | "trait" | "abstract" | "final" | "readonly" | "\0allowdynamicproperties"
                     if matches!(self.peek_at(1), Tok::Ident(_)) =>
                 {
                     self.class_decl()
@@ -1227,9 +1227,11 @@ impl Parser {
 
     fn class_definition(&mut self, anonymous: bool) -> PResult<(Rc<ClassDecl>, Vec<Arg>)> {
         let line = self.line();
-        let (mut is_abstract, mut is_final, mut is_readonly) = (false, false, false);
+        let (mut is_abstract, mut is_final, mut is_readonly, mut allow_dynamic) = (false, false, false, false);
         loop {
-            if self.eat_kw("abstract") {
+            if self.eat_kw(crate::lexer::ALLOW_DYNAMIC) {
+                allow_dynamic = true;
+            } else if self.eat_kw("abstract") {
                 is_abstract = true;
             } else if self.eat_kw("final") {
                 is_final = true;
@@ -1302,6 +1304,7 @@ impl Parser {
             is_abstract,
             is_final,
             is_readonly,
+            allow_dynamic,
             parent,
             interfaces,
             members,

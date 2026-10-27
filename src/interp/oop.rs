@@ -74,7 +74,7 @@ impl<W: Write> Interp<W> {
         entry.is_final = decl.is_final;
         entry.is_readonly = decl.is_readonly;
         // A readonly class cannot get dynamic properties at all
-        entry.allow_dynamic &= !decl.is_readonly;
+        entry.allow_dynamic = (entry.allow_dynamic || decl.allow_dynamic) && !decl.is_readonly;
         if decl.is_enum {
             self.enum_entry(&mut entry, decl);
         }
