@@ -2676,6 +2676,12 @@ impl<W: Write> Interp<W> {
                         i + 1
                     )));
                 }
+                if matches!(&a.value.kind, ExprKind::Var(n) if n == "this") {
+                    // `$this` cannot be rebound; the parameter gets a copy of the handle
+                    let this = self.lookup("this");
+                    bound.push(ArgVal::Ref(Rc::new(RefCell::new(this))));
+                    continue;
+                }
                 let path = self.path(&a.value)?;
                 bound.push(ArgVal::Ref(self.make_ref(&path)?));
             } else {
