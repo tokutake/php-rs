@@ -187,7 +187,7 @@ fn open(fname: &str, path: &[u8], mode: &str) -> Option<Stream> {
             b"stdout" => Backend::Stdout,
             b"stderr" => Backend::Stderr,
             b"output" => Backend::Output,
-            b"input" => Backend::Memory { data: Vec::new(), pos: 0 },
+            b"input" => Backend::Memory { data: stream::request_body(), pos: 0 },
             b"memory" => Backend::Memory { data: Vec::new(), pos: 0 },
             _ if rest.starts_with(b"temp") => {
                 // A temp stream wraps a memory stream, which takes an id of its own

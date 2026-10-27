@@ -15,7 +15,7 @@ mod regex;
 mod stream;
 mod value;
 
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::process::ExitCode;
 
 /// Reserved address space only; pages are committed as the stack actually grows
@@ -83,6 +83,10 @@ fn run(src: &[u8], file: String, argv: Vec<String>, lint: bool, cgi: bool) -> u8
     }
     if cgi {
         // The body is held back until the end, since headers set after output still count
+        // The request body comes on stdin, which php://input reads
+        let mut body = Vec::new();
+        let _ = std::io::stdin().read_to_end(&mut body);
+        stream::set_request_body(body);
         let mut interp = interp::Interp::new(Vec::new(), program.file.clone());
         interp.set_globals(&argv);
         let status = interp.run(&program);

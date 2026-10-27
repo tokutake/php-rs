@@ -53,6 +53,21 @@ pub fn alloc_id() -> i64 {
     })
 }
 
+thread_local! {
+    /// What php://input reads: the request body, which a CGI host passes on stdin
+    static REQUEST_BODY: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Sets the request body that php://input reads
+pub fn set_request_body(body: Vec<u8>) {
+    REQUEST_BODY.with(|b| *b.borrow_mut() = body);
+}
+
+/// A copy of the request body, for a php://input stream
+pub fn request_body() -> Vec<u8> {
+    REQUEST_BODY.with(|b| b.borrow().clone())
+}
+
 /// php-src creates the default stream context (taking a resource id) the
 /// first time a function that accepts a context opens something
 pub fn ensure_context() {
