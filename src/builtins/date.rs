@@ -854,3 +854,48 @@ pub fn debug_properties(obj: &Object) -> Option<Vec<(&'static str, Value)>> {
         _ => None,
     }
 }
+
+/// The properties that stand for the native state of a date or timezone
+/// object, which unserialize() hands to `restore` instead of storing
+pub fn state_properties(obj: &Object) -> &'static [&'static str] {
+    match &obj.internal {
+        Internal::DateTime(_) => &["date", "timezone_type", "timezone"],
+        Internal::TimeZone(_) => &["timezone_type", "timezone"],
+        _ => &[],
+    }
+}
+
+/// Restores a DateTime or DateTimeZone from its serialized properties
+/// (php_date_initialize_from_hash and its timezone counterpart)
+pub fn restore(obj: &Object, props: &[(&str, Value)]) -> EResult<()> {
+    let get = |name: &str| props.iter().find(|(n, _)| *n == name).map(|(_, v)| v.copy_out());
+    let zone = match (get("timezone_type"), get("timezone")) {
+        (Some(Value::Int(1..=3)), Some(Value::Str(name))) => Zone::load(&String::from_utf8_lossy(&name)),
+        _ => None,
+    };
+    match &obj.internal {
+        Internal::DateTime(_) => {
+            let date = match get("date") {
+                Some(Value::Str(d)) => Some(String::from_utf8_lossy(&d).into_owned()),
+                _ => None,
+            };
+            let restored = zone.zip(date).and_then(|(zone, date)| {
+                let mut b = base();
+                b.zone = zone;
+                datetime::parse(&date, &b)
+            });
+            match restored {
+                Some(d) => store(obj, d),
+                None => {
+                    return Err(Fatal::error(format!("Invalid serialization data for {} object", obj.class.name)));
+                }
+            }
+        }
+        Internal::TimeZone(z) => match zone {
+            Some(zone) => *z.borrow_mut() = Some(zone),
+            None => return Err(Fatal::error(format!("Invalid serialization data for {} object", obj.class.name))),
+        },
+        _ => {}
+    }
+    Ok(())
+}

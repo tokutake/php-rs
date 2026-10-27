@@ -99,6 +99,11 @@ Early stage. Implemented so far:
   adjustments. Named zones use `/usr/share/zoneinfo` (IANA TZif), including
   historical transitions and future POSIX `M` rules for daylight saving;
   UTC and fixed offsets work without the database
+- `serialize()` / `unserialize()`: php-src's format with its back-reference numbering
+  (`R:`/`r:` for references and shared objects, cycles included), `__serialize` /
+  `__unserialize`, `__sleep` / `__wakeup`, enums, `__PHP_Incomplete_Class`, the
+  `allowed_classes` and `max_depth` options, DateTime and DateTimeZone, and php-src's
+  warnings and error offsets for malformed data
 - Random numbers: `mt_rand`/`rand` on php-src's Mt19937 (including `MT_RAND_PHP`), so
   seeded `mt_srand` sequences, `shuffle()`, `str_shuffle()` and `array_rand()` give the
   same results as php-src; `random_int()` and `random_bytes()` from the OS CSPRNG,
@@ -125,7 +130,7 @@ Early stage. Implemented so far:
 
 Not yet: the rest of the date extension (the full timelib free-form/relative
 parsing grammar and diagnostics),
-network streams and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
+network streams, the `Serializable` interface, and most other extensions. Performance is well behind php-src (roughly 6-10x slower).
 
 ## Usage
 

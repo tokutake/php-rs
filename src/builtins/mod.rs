@@ -105,7 +105,7 @@ const NAMES: &[&str] = &[
     "iterator_to_array", "iterator_count", "is_iterable", "var_export", "printf", "vprintf", "array_walk",
     "array_reduce", "compact", "extract", "ob_start", "ob_get_clean", "ob_get_contents", "ob_get_length",
     "ob_get_level", "ob_flush", "ob_clean", "ob_end_flush", "ob_end_clean", "ob_get_flush", "ob_list_handlers",
-    "ob_get_status", "ob_implicit_flush", "flush", "shuffle",
+    "ob_get_status", "ob_implicit_flush", "flush", "shuffle", "serialize", "unserialize",
 ];
 
 /// A built-in's parameter, for named arguments
@@ -221,7 +221,7 @@ pub fn arg_count(name: &str, min: usize, given: usize) -> Fatal {
     )
 }
 
-fn args<const MIN: usize, const MAX: usize>(name: &str, vals: Vec<Value>) -> EResult<[Option<Value>; MAX]> {
+pub fn args<const MIN: usize, const MAX: usize>(name: &str, vals: Vec<Value>) -> EResult<[Option<Value>; MAX]> {
     let given = vals.len();
     if given < MIN || given > MAX {
         let (kind, n) = if MIN == MAX {

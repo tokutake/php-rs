@@ -1,0 +1,110 @@
+a:3:{s:1:"p";a:1:{s:1:"x";i:1;}s:1:"q";R:2;s:1:"r";a:1:{s:1:"x";i:1;}}
+array(3) {
+  ["p"]=>
+  &array(1) {
+    ["x"]=>
+    int(5)
+  }
+  ["q"]=>
+  &array(1) {
+    ["x"]=>
+    int(5)
+  }
+  ["r"]=>
+  array(1) {
+    ["x"]=>
+    int(1)
+  }
+}
+a:2:{i:0;O:8:"stdClass":1:{s:4:"peer";O:8:"stdClass":1:{s:4:"peer";r:2;}}i:1;r:3;}
+bool(true)
+bool(true)
+O:4:"Node":3:{s:8:"children";a:2:{i:0;O:4:"Node":3:{s:8:"children";a:0:{}s:6:"parent";r:1;s:4:"name";s:1:"c";}i:1;r:3;}s:6:"parent";N;s:4:"name";s:4:"root";}
+bool(true)
+bool(true)
+a:2:{i:0;O:1:"W":2:{s:4:"self";r:2;s:1:"n";i:3;}i:1;r:2;}
+bool(true)
+array(2) {
+  [0]=>
+  object(W)#10 (1) {
+    ["n"]=>
+    int(3)
+  }
+  [1]=>
+  object(W)#10 (1) {
+    ["n"]=>
+    int(3)
+  }
+}
+no wakeup
+no sleep
+object(V)#11 (3) {
+  ["pub"]=>
+  int(9)
+  ["prot":protected]=>
+  int(8)
+  ["priv":"V":private]=>
+  int(7)
+}
+object(V)#11 (3) {
+  ["pub"]=>
+  int(6)
+  ["prot":protected]=>
+  int(5)
+  ["priv":"V":private]=>
+  int(3)
+}
+
+Notice: Illegal member variable name in serialize_refs.php on line 22
+
+Warning: unserialize(): Error at offset 20 of 25 bytes in serialize_refs.php on line 22
+bool(false)
+bool(true)
+
+Warning: unserialize(): Maximum depth of 10 exceeded. The depth limit can be changed using the max_depth unserialize() option or the unserialize_max_depth ini setting in serialize_refs.php on line 25
+
+Warning: unserialize(): Error at offset 95 of 504 bytes in serialize_refs.php on line 25
+bool(false)
+int(1010)
+a:4:{i:0;d:1;i:1;d:0.30000000000000004;i:2;d:-1.5E-7;i:3;i:123456789012345678;}
+array(1) {
+  [0]=>
+  int(2)
+}
+array(1) {
+  [0]=>
+  &array(1) {
+    [0]=>
+    *RECURSION*
+  }
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  *RECURSION*
+}
+
+Warning: unserialize(): Error at offset 36 of 37 bytes in serialize_refs.php on line 32
+bool(false)
+
+Warning: unserialize(): Error at offset 25 of 26 bytes in serialize_refs.php on line 33
+bool(false)
+object(stdClass)#11 (1) {
+  ["a"]=>
+  object(stdClass)#13 (1) {
+    ["b"]=>
+    *RECURSION*
+  }
+}
+string(10) "d:1.0E+25;"
+string(5) "d:-0;"
+string(22) "d:0.30000000000000004;"
+Cannot instantiate abstract class Abs
+Cannot instantiate interface If1
+
+Warning: unserialize(): E1::B is not an enum case in serialize_refs.php on line 40
+
+Warning: unserialize(): Error at offset 11 of 11 bytes in serialize_refs.php on line 40
+bool(false)
+bool(true)

@@ -8,6 +8,7 @@ use references::RefSource;
 mod closure;
 mod oop;
 mod output;
+mod serialize;
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -2349,6 +2350,25 @@ impl<W: Write> Interp<W> {
                 Ok(Value::Bool(self.is_traversable(&v)))
             }
             "array_filter" => self.array_filter(vals, line),
+            "serialize" => {
+                let [v] = builtins::args::<1, 1>(lname, vals)?;
+                self.serialize(&v.unwrap())
+            }
+            "unserialize" => {
+                let [data, options] = builtins::args::<1, 2>(lname, vals)?;
+                let data = builtins::arg_str(self, lname, 1, "data", &data.unwrap())?;
+                let options = match options.map(|o| o.copy_out()) {
+                    None => None,
+                    Some(Value::Array(a)) => Some(a),
+                    Some(other) => {
+                        return Err(Fatal::type_error(format!(
+                            "unserialize(): Argument #2 ($options) must be of type array, {} given",
+                            other.value_name()
+                        )));
+                    }
+                };
+                self.unserialize(&data, options.as_deref())
+            }
             _ if lname.starts_with("ob_") || lname == "flush" => self.output_builtin(lname, vals),
             _ => {
                 if let Some(v) = self.object_builtin(lname, &vals)? {
