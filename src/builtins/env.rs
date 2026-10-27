@@ -13,7 +13,8 @@ pub const NAMES: &[&str] =
     &["getenv", "putenv", "php_sapi_name", "phpversion", "php_uname", "getmypid", "extension_loaded", "get_loaded_extensions"];
 
 /// The extensions whose functions php-rs provides, as php-src names them
-const EXTENSIONS: &[&str] = &["Core", "date", "hash", "json", "pcre", "random", "SPL", "standard", "ctype"];
+const EXTENSIONS: &[&str] =
+    &["Core", "date", "hash", "json", "pcre", "random", "SPL", "standard", "ctype", "mbstring", "filter", "mysqli", "iconv"];
 
 thread_local! {
     /// putenv() changes, over the process environment. Changing the real one

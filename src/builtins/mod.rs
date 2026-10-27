@@ -20,6 +20,7 @@ mod entities;
 mod html;
 mod pack;
 mod filter;
+mod mbstring;
 mod password;
 mod blowfish_pi;
 pub mod mysqli;
@@ -60,6 +61,7 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| password::constant(name))
         .or_else(|| hash::constant(name))
         .or_else(|| filter::constant(name))
+        .or_else(|| mbstring::constant(name))
         .or_else(|| url::constant(name))
 }
 
@@ -167,6 +169,7 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (html::NAMES, html::call),
     (pack::NAMES, pack::call),
     (filter::NAMES, filter::call),
+    (mbstring::NAMES, mbstring::call),
     (password::NAMES, password::call),
     (mysqli::NAMES, mysqli::call),
     (url::NAMES, url::call),
