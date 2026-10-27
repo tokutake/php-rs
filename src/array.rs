@@ -51,6 +51,9 @@ pub struct PhpArray {
     index: HashMap<Key, usize>,
     /// Next key for `$a[] = ...`; None until an int key has been used
     next_free: Option<i64>,
+    /// The internal pointer (current(), next(), ...): the storage position at
+    /// or after which the current element is; past the end when there is none
+    pos: usize,
 }
 
 #[derive(Debug)]
@@ -134,6 +137,7 @@ impl PhpArray {
     }
 
     fn compact(&mut self) {
+        self.pos = self.slots[..self.pos.min(self.slots.len())].iter().filter(|e| e.is_some()).count();
         self.slots.retain(Option::is_some);
         for (slot, entry) in self.slots.iter().enumerate() {
             let (key, _) = entry.as_ref().unwrap();
@@ -150,6 +154,42 @@ impl PhpArray {
     /// is not modified
     pub fn entry_from(&self, pos: usize) -> Option<(usize, &Key, &Value)> {
         self.slots.iter().enumerate().skip(pos).find_map(|(i, e)| e.as_ref().map(|(k, v)| (i + 1, k, v)))
+    }
+
+    /// The storage position of the element the internal pointer is on
+    fn current_slot(&self) -> Option<usize> {
+        (self.pos..self.slots.len()).find(|&i| self.slots[i].is_some())
+    }
+
+    /// The element the internal pointer is on (current() and key())
+    pub fn current(&self) -> Option<(&Key, &Value)> {
+        self.current_slot().and_then(|i| self.slots[i].as_ref().map(|(k, v)| (k, v)))
+    }
+
+    /// reset(): the pointer to the first element
+    pub fn reset(&mut self) {
+        self.pos = 0;
+    }
+
+    /// end(): the pointer to the last element
+    pub fn end(&mut self) {
+        self.pos = self.slots.iter().rposition(Option::is_some).unwrap_or(self.slots.len());
+    }
+
+    /// next(): the pointer to the following element (past the end after the last)
+    pub fn advance(&mut self) {
+        self.pos = match self.current_slot() {
+            Some(i) => i + 1,
+            None => self.slots.len(),
+        };
+    }
+
+    /// prev(): the pointer to the preceding element, or past the end before the first
+    pub fn retreat(&mut self) {
+        self.pos = match self.current_slot() {
+            Some(i) => self.slots[..i].iter().rposition(Option::is_some).unwrap_or(self.slots.len()),
+            None => self.slots.len(),
+        };
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &Key> {

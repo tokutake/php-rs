@@ -1,0 +1,51 @@
+int(1)
+string(1) "x"
+int(2)
+string(1) "y"
+int(3)
+bool(false)
+NULL
+bool(false)
+bool(false)
+int(1)
+int(3)
+string(1) "z"
+int(2)
+int(1)
+bool(false)
+bool(false)
+NULL
+string(1) "z"
+int(3)
+int(2)
+bool(false)
+NULL
+bool(false)
+bool(false)
+int(6)
+a=1 b=2 
+int(1)
+int(1)
+int(2)
+string(4) "refd"
+string(4) "refd"
+string(4) "refd"
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+reset(): Argument #1 ($array) must be of type array, null given
+int(16)
+int(15)
+int(20)
+int(19)
+int(2)
+int(0)
+int(2)
+int(1)
+int(1)
+int(2)
+int(2)
+int(2)
+int(0)
+int(1)

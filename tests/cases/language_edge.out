@@ -1,6 +1,10 @@
 int(8)
 multi X end
 one
+
+Warning: Cannot use string as array in language_edge.php on line 10
+
+Warning: Cannot use string as array in language_edge.php on line 10
 NULL
 array(2) {
   [0]=>
@@ -17,7 +21,7 @@ Unhandled match case '\x01\xC3\xA9'
 Unhandled match case 0.3
 Unhandled match case 2.0
 
-Warning: Constant A already defined in language_edge.php on line 26
+Warning: Constant A already defined, this will be an error in PHP 9 in language_edge.php on line 26
 1
 bool(true)
 int(1)

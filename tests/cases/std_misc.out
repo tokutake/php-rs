@@ -1,0 +1,143 @@
+5.2 vs 5.2.0: -1 false true
+1.0rc1 vs 1.0: -1 false true
+1.0 vs 1.0.0: -1 false true
+7.4 vs 8.0: -1 false true
+8.0.1 vs 8.0.0: 1 true false
+1.0-dev vs 1.0alpha: -1 false true
+1.0a vs 1.0b: -1 false true
+1.0pl1 vs 1.0: 1 true false
+1.0#1 vs 1.0.1: 1 true false
+ vs 1: -1 false true
+1..2 vs 1.2: 0 true false
+1.0RC1 vs 1.0rc1: 0 true false
+5.6.40-1+ubuntu vs 5.6.40: 1 true false
+10 vs 9: 1 true false
+version_compare(): Argument #3 ($operator) must be a valid comparison operator
+int(0)
+int(0)
+int(0)
+int(0)
+substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+[a][b][c][d]
+bool(false)
+string(1) "x"
+string(1) "y"
+bool(false)
+Array
+(
+    [A] => 1
+    [B] => 2
+    [5] => 3
+    [C] => 4
+)
+Array
+(
+    [a] => 2
+)
+Array
+(
+    [a] => Array
+        (
+            [0] => 9
+            [1] => 2
+            [x] => Array
+                (
+                    [y] => 1
+                    [z] => 2
+                )
+
+        )
+
+    [b] => Array
+        (
+            [0] => 1
+        )
+
+    [c] => 3
+)
+int(1)
+int(3)
+NULL
+NULL
+bool(true)
+bool(true)
+int(2)
+string(1) "b"
+NULL
+
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives in std_misc.php on line 15
+
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives in std_misc.php on line 15
+string(5) "café"
+string(10) "636166e93f"
+bool(true)
+int(0)
+NULL
+bool(true)
+float(24)
+int(1)
+int(7)
+string(18) "a<br />
+b<br />
+c"
+string(19) "Hello <b>World</b>!"
+string(8) "foo[bar]"
+string(4) "a	bA"
+int(6)
+string(23) "Hello World-foo Bar_baz"
+string(11) "Hello-World"
+string(3) "aBC"
+string(8) "1\+1=2\?"
+string(11) "s is a test"
+int(2)
+string(2) "/c"
+string(5) "Stack"
+int(0)
+string(4) "xx  "
+int(3)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    string(1) "a"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    string(1) "b"
+  }
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "c"
+  [2]=>
+  string(1) "e"
+}
+array(2) {
+  ["a"]=>
+  int(0)
+  ["b"]=>
+  int(1)
+}
+array(4) {
+  [3]=>
+  string(8) "img1.png"
+  [2]=>
+  string(8) "img2.png"
+  [1]=>
+  string(9) "img10.png"
+  [0]=>
+  string(9) "img12.png"
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}

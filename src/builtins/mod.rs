@@ -13,6 +13,7 @@ mod streams;
 mod math;
 mod preg;
 mod random;
+mod misc;
 mod url;
 mod hash;
 mod string;
@@ -43,6 +44,7 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| streams::constant(name))
         .or_else(|| date::constant(name))
         .or_else(|| random::constant(name))
+        .or_else(|| misc::constant(name))
         .or_else(|| url::constant(name))
 }
 
@@ -81,7 +83,7 @@ pub trait Runtime {
 }
 
 /// Built-ins whose first parameter is by reference
-const BY_REF_HERE: &[&str] = &["sort", "rsort", "array_push", "array_pop", "shuffle"];
+const BY_REF_HERE: &[&str] = &["sort", "rsort", "array_push", "array_pop", "shuffle", "reset", "end", "next", "prev"];
 
 pub fn is_by_ref(lname: &str) -> bool {
     BY_REF_HERE.contains(&lname) || array::BY_REF.contains(&lname)
@@ -103,10 +105,16 @@ const NAMES: &[&str] = &[
     "strrev", "trim", "ltrim", "rtrim", "chop", "str_contains", "str_starts_with", "str_ends_with", "strpos",
     "substr", "define", "defined", "constant", "trait_exists", "class_uses", "enum_exists",
     "iterator_to_array", "iterator_count", "is_iterable", "var_export", "printf", "vprintf", "array_walk",
+    "array_walk_recursive",
     "array_reduce", "compact", "extract", "ob_start", "ob_get_clean", "ob_get_contents", "ob_get_length",
     "ob_get_level", "ob_flush", "ob_clean", "ob_end_flush", "ob_end_clean", "ob_get_flush", "ob_list_handlers",
     "ob_get_status", "ob_implicit_flush", "flush", "shuffle", "serialize", "unserialize", "spl_autoload_register", "spl_autoload_unregister",
-    "spl_autoload_functions", "spl_autoload_call", "spl_autoload", "spl_autoload_extensions",
+    "spl_autoload_functions", "spl_autoload_call", "spl_autoload", "spl_autoload_extensions", "error_reporting",
+    "set_error_handler", "restore_error_handler", "set_exception_handler", "restore_exception_handler", "trigger_error",
+    "user_error", "error_get_last", "error_clear_last", "error_log", "register_shutdown_function", "assert",
+    "func_get_arg", "debug_backtrace", "debug_print_backtrace", "ini_get", "ini_set", "ini_alter", "ini_restore",
+    "set_time_limit", "ignore_user_abort", "headers_sent", "header", "header_remove", "headers_list",
+    "http_response_code", "setcookie", "setrawcookie", "connection_status", "connection_aborted",
 ];
 
 /// A built-in's parameter, for named arguments
@@ -140,6 +148,7 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (preg::NAMES, preg::call),
     (streams::NAMES, streams::call),
     (random::NAMES, random::call),
+    (misc::NAMES, misc::call),
     (url::NAMES, url::call),
     (hash::NAMES, hash::call),
 ];
@@ -193,7 +202,7 @@ pub fn call_out(rt: &mut dyn Runtime, lname: &str, vals: Vec<Value>) -> EResult<
 }
 
 pub fn exists(lname: &str) -> bool {
-    NAMES.contains(&lname) || SUBMODULES.iter().any(|(names, _)| names.contains(&lname))
+    NAMES.contains(&lname) || is_by_ref(lname) || SUBMODULES.iter().any(|(names, _)| names.contains(&lname))
 }
 
 fn undefined_function(name: &str) -> Fatal {
@@ -659,7 +668,29 @@ pub fn call_by_ref(lname: &str, target: &mut Value, vals: Vec<Value>) -> EResult
             }
             Ok(Value::Int(arr.len() as i64))
         }
-        "array_pop" => Ok(Rc::make_mut(arr).pop().unwrap_or(Value::Null)),
+        "array_pop" => {
+            // Like php-src, array_pop() resets the internal pointer
+            let a = Rc::make_mut(arr);
+            let v = a.pop().unwrap_or(Value::Null);
+            a.reset();
+            Ok(v)
+        }
+        "reset" | "end" | "next" | "prev" => {
+            if !vals.is_empty() {
+                return Err(Fatal::new(
+                    "ArgumentCountError",
+                    format!("{lname}() expects exactly 1 argument, {} given", vals.len() + 1),
+                ));
+            }
+            let a = Rc::make_mut(arr);
+            match lname {
+                "reset" => a.reset(),
+                "end" => a.end(),
+                "next" => a.advance(),
+                _ => a.retreat(),
+            }
+            Ok(a.current().map_or(Value::Bool(false), |(_, v)| v.copy_out()))
+        }
         "shuffle" => {
             if !vals.is_empty() {
                 return Err(Fatal::new(

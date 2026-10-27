@@ -1,0 +1,93 @@
+int(30719)
+int(30719)
+
+Warning: Undefined variable $undefined2 in error_handling.php on line 8
+array(4) {
+  ["type"]=>
+  int(2)
+  ["message"]=>
+  string(30) "Undefined variable $undefined2"
+  ["file"]=>
+  string(18) "error_handling.php"
+  ["line"]=>
+  int(8)
+}
+NULL
+string(30) "Undefined variable $undefined3"
+NULL
+handler(2): Undefined variable $undefined4 at line 21
+after
+handler(1024): custom notice at line 22
+handler(512): custom warning at line 23
+handler(16384): custom deprecated at line 24
+handler(2): Undefined array key "x" at line 25
+declined: Undefined variable $undefined5
+
+Warning: Undefined variable $undefined5 in error_handling.php on line 28
+handler(2): Undefined variable $undefined6 at line 30
+
+Warning: Undefined variable $undefined7 in error_handling.php on line 32
+
+Notice: a notice in error_handling.php on line 35
+only warnings: Undefined variable $undefined8
+caught: Undefined variable $undefined9 severity 2
+
+Warning: plain user warning in error_handling.php on line 47
+trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED
+explained
+bool(true)
+string(4) "128M"
+string(2) "14"
+bool(false)
+string(1) "1"
+string(4) "128M"
+string(4) "256M"
+bool(false)
+string(4) "128M"
+bool(true)
+int(0)
+array(2) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  int(3)
+}
+m K -> 64 K [5]
+s K :: 65 - []
+outer - - 66 - []
+int(1)
+array(7) {
+  [0]=>
+  string(4) "file"
+  [1]=>
+  string(4) "line"
+  [2]=>
+  string(8) "function"
+  [3]=>
+  string(5) "class"
+  [4]=>
+  string(6) "object"
+  [5]=>
+  string(4) "type"
+  [6]=>
+  string(4) "args"
+}
+array(3) {
+  [0]=>
+  string(4) "file"
+  [1]=>
+  string(4) "line"
+  [2]=>
+  string(8) "function"
+}
+bool(true)
+array(0) {
+}
+
+Warning: Cannot modify header information - headers already sent by (output started at error_handling.php:3) in error_handling.php on line 74
+bool(false)
+exception handler: uncaught
+shutdown 1 arg
+shutdown 2
+nested shutdown
+destructed

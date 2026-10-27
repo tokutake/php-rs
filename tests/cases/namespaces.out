@@ -5,7 +5,7 @@ my strlen
 3
 FALLBACK
 1.0 42 1.0 1.0
-8 8 32767
+8 8 30719
 App\Models\User ann
 Hello from App\Models\User / App\Models\Greets / App\Models\Greets::greet
 bool(true)
