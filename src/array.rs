@@ -45,7 +45,7 @@ fn is_canonical_int(s: &[u8]) -> bool {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct PhpArray {
     slots: Vec<Option<(Key, Value)>>,
     index: HashMap<Key, usize>,
@@ -54,6 +54,28 @@ pub struct PhpArray {
     /// The internal pointer (current(), next(), ...): the storage position at
     /// or after which the current element is; past the end when there is none
     pos: usize,
+}
+
+/// Copying an array (copy-on-write separation) turns references nothing else
+/// holds into plain values, as php-src's zend_array_dup does; otherwise a
+/// reference left behind by `foreach (... as &$v)` would join the copies
+impl Clone for PhpArray {
+    fn clone(&self) -> Self {
+        let slots = self
+            .slots
+            .iter()
+            .map(|e| {
+                e.as_ref().map(|(k, v)| {
+                    let v = match v {
+                        Value::Ref(r) if Rc::strong_count(r) == 1 => crate::value::with_deref(r, Value::clone),
+                        v => v.clone(),
+                    };
+                    (k.clone(), v)
+                })
+            })
+            .collect();
+        PhpArray { slots, index: self.index.clone(), next_free: self.next_free, pos: self.pos }
+    }
 }
 
 #[derive(Debug)]
