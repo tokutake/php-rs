@@ -3,6 +3,7 @@
 
 pub(crate) mod generator;
 mod arguments;
+mod autoload;
 mod references;
 use references::RefSource;
 mod closure;
@@ -280,6 +281,7 @@ pub struct Interp<W: Write> {
     /// scope, since each class using a trait gets its own copy of the method
     statics: HashMap<(*const FuncDecl, &'static str), HashMap<String, RefCellValue>>,
     classes: HashMap<String, Rc<ClassEntry>>,
+    autoload: autoload::Autoload,
     reference_sources: Vec<RefSource>,
     /// Class declarations already executed (hoisted ones are seen twice)
     declared: HashSet<*const ClassDecl>,
@@ -406,6 +408,7 @@ impl<W: Write> Interp<W> {
             constants: HashMap::new(),
             statics: HashMap::new(),
             classes: object::builtin_classes(),
+            autoload: autoload::Autoload::default(),
             reference_sources: Vec::new(),
             declared: HashSet::new(),
             magic_guard: HashSet::new(),
@@ -2350,6 +2353,7 @@ impl<W: Write> Interp<W> {
                 Ok(Value::Bool(self.is_traversable(&v)))
             }
             "array_filter" => self.array_filter(vals, line),
+            _ if autoload::NAMES.contains(&lname) => self.autoload_builtin(lname, vals),
             "serialize" => {
                 let [v] = builtins::args::<1, 1>(lname, vals)?;
                 self.serialize(&v.unwrap())

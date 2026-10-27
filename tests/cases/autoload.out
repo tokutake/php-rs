@@ -1,0 +1,76 @@
+autoload(App\Models\User)
+autoload(App\Models\Base)
+loading Base
+autoload(App\Greets)
+hi ann {"user":"ann"} model
+bool(true)
+bool(true)
+autoload(Nope1)
+autoload(NopeI)
+autoload(NopeE)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+autoload(Missing)
+Error: Class "Missing" not found
+autoload(Missing2)
+Class "Missing2" not found
+autoload(Missing3)
+Class "Missing3" not found
+autoload(Missing4)
+autoload(Missing5)
+autoload(Missing6)
+bool(false)
+bool(false)
+bool(false)
+autoload(Missing7)
+autoload(Missing8)
+bool(false)
+bool(false)
+autoload(Missing9)
+object(__PHP_Incomplete_Class)#4 (1) {
+  ["__PHP_Incomplete_Class_Name"]=>
+  string(8) "Missing9"
+}
+Missing10
+typed ok
+first(Dyn)
+autoload(Dyn)
+second(Dyn)
+42
+int(3)
+bool(true)
+bool(false)
+int(2)
+int(4)
+first(Nothing)
+autoload(Nothing)
+Loader::load(Nothing)
+Loader::sload(Nothing)
+first(ViaCall)
+autoload(ViaCall)
+Loader::load(ViaCall)
+Loader::sload(ViaCall)
+first(Boom)
+autoload(Boom)
+Loader::load(Boom)
+Loader::sload(Boom)
+cannot load Boom
+recursive(Self1)
+bool(false)
+bool(false)
+spl_autoload_register(): Argument #1 ($callback) must be a valid callback or null, function "no_such_function" not found or invalid function name
+bool(true)
+recursive(LateParent)
+bool(false)
+parent(LateParent)
+late
+.inc,.php
+array(1) {
+  [0]=>
+  string(12) "spl_autoload"
+}
+spl hi

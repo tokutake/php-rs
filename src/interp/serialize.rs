@@ -683,7 +683,13 @@ impl<W: Write> Interp<W> {
                 let name = name.to_vec();
                 let lname = String::from_utf8_lossy(&name).to_ascii_lowercase();
                 let allowed = p.allowed.as_ref().is_none_or(|a| a.contains(&lname));
-                let class = if allowed { self.classes.get(&lname).cloned() } else { None };
+                let class = if allowed && valid_class_name(&name) {
+                    self.find_class(&String::from_utf8_lossy(&name))?
+                } else if allowed {
+                    self.classes.get(&lname).cloned()
+                } else {
+                    None
+                };
                 if class.is_none() && !valid_class_name(&name) {
                     return Err(Fail::Data);
                 }
@@ -790,7 +796,7 @@ impl<W: Write> Interp<W> {
                 if !valid_class_name(enum_name.as_bytes()) || enum_name.is_empty() {
                     return Err(Fail::Data);
                 }
-                let Some(class) = self.classes.get(&enum_name.to_ascii_lowercase()).cloned() else {
+                let Some(class) = self.find_class(&enum_name)? else {
                     diag::warning(format!("unserialize(): Class '{enum_name}' not found"));
                     return Err(Fail::Data);
                 };

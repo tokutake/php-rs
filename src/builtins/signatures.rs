@@ -213,6 +213,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("ceil", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
+    ("chdir", &[
+        Param { name: "directory", default: None, variadic: false, by_ref: false },
+    ]),
     ("checkdate", &[
         Param { name: "month", default: None, variadic: false, by_ref: false },
         Param { name: "day", default: None, variadic: false, by_ref: false },
@@ -1416,6 +1419,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "sorting_order", default: Some("SCANDIR_SORT_ASCENDING"), variadic: false, by_ref: false },
         Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
     ]),
+    ("serialize", &[
+        Param { name: "value", default: None, variadic: false, by_ref: false },
+    ]),
     ("sha1", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
         Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
@@ -1445,6 +1451,26 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("sort", &[
         Param { name: "array", default: None, variadic: false, by_ref: true },
         Param { name: "flags", default: Some("SORT_REGULAR"), variadic: false, by_ref: false },
+    ]),
+    ("spl_autoload", &[
+        Param { name: "class", default: None, variadic: false, by_ref: false },
+        Param { name: "file_extensions", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("spl_autoload_call", &[
+        Param { name: "class", default: None, variadic: false, by_ref: false },
+    ]),
+    ("spl_autoload_extensions", &[
+        Param { name: "file_extensions", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("spl_autoload_functions", &[
+    ]),
+    ("spl_autoload_register", &[
+        Param { name: "callback", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "throw", default: Some("true"), variadic: false, by_ref: false },
+        Param { name: "prepend", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("spl_autoload_unregister", &[
+        Param { name: "callback", default: None, variadic: false, by_ref: false },
     ]),
     ("spl_object_hash", &[
         Param { name: "object", default: None, variadic: false, by_ref: false },
@@ -1719,6 +1745,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("unlink", &[
         Param { name: "filename", default: None, variadic: false, by_ref: false },
         Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("unserialize", &[
+        Param { name: "data", default: None, variadic: false, by_ref: false },
+        Param { name: "options", default: Some("[]"), variadic: false, by_ref: false },
     ]),
     ("urldecode", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },

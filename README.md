@@ -42,6 +42,11 @@ Early stage. Implemented so far:
   visibility, typed and readonly properties, constructor promotion, static members, constants,
   `self`/`parent`/`static` (late static binding), magic methods (`__get`,
   `__set`, `__call`, `__toString`, `__invoke`, ...), `clone`, user exceptions
+- Autoloading: `spl_autoload_register()` (closures, functions, methods, prepend,
+  duplicates ignored), `spl_autoload_unregister`/`_functions`/`_call`, the default
+  `spl_autoload` loader; `new`, static access, `extends`/`implements`/`use`, callables,
+  `class_exists()` and friends, `is_a()` and `unserialize()` load classes, while
+  `instanceof`, `catch` and type declarations do not, as in php-src
 - Namespaces: `namespace A;` and braced `namespace A { }`, `use` imports (classes,
   `function`, `const`, aliases, group use), resolution of qualified, fully qualified
   and `namespace\` names, and the global fallback for unqualified functions and constants
