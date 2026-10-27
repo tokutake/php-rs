@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use super::{builtins, list, EResult, Fatal, Interp};
 use crate::array::{Key, PhpArray};
+use crate::datetime::{DateTime, Zone};
 use crate::diag::{self, Diag, Level};
 use crate::object::Object;
 use crate::value::Value;
@@ -84,7 +85,10 @@ pub(super) struct ErrorState {
     ini: HashMap<String, String>,
     /// Where output first went to the client, which makes headers "sent"
     pub(super) output_started: Option<(Rc<str>, u32)>,
-    headers: Vec<String>,
+    /// Header lines for the response, as "Name: value"
+    pub(super) headers: Vec<String>,
+    /// The response code, once header() or http_response_code() set one
+    pub(super) status: Option<u16>,
 }
 
 impl Default for ErrorState {
@@ -97,11 +101,37 @@ impl Default for ErrorState {
             ini: HashMap::new(),
             output_started: None,
             headers: Vec::new(),
+            status: None,
         }
     }
 }
 
 impl ErrorState {
+    /// The name of a "Name: value" header line
+    fn header_name(line: &str) -> Option<&str> {
+        line.split_once(':').map(|(name, _)| name.trim())
+    }
+
+    /// Drops the header lines called `name`, ignoring case
+    fn remove_header(&mut self, name: &[u8]) {
+        self.headers.retain(|h| Self::header_name(h).is_none_or(|n| !n.as_bytes().eq_ignore_ascii_case(name)));
+    }
+
+    /// header(): a status line sets the response code, other lines are kept for
+    /// the response, replacing earlier lines of the same name when asked to
+    fn add_header(&mut self, line: String, replace: bool) {
+        if line.starts_with("HTTP/") {
+            if let Some(code) = line.split_whitespace().nth(1).and_then(|c| c.parse().ok()) {
+                self.status = Some(code);
+            }
+            return;
+        }
+        if replace && let Some(name) = Self::header_name(&line) {
+            self.remove_header(name.as_bytes());
+        }
+        self.headers.push(line);
+    }
+
     pub(super) fn has_handler(&self) -> bool {
         !self.handlers.is_empty()
     }
@@ -504,22 +534,98 @@ impl<W: Write> Interp<W> {
                     ));
                     return Ok(if lname.ends_with("cookie") { Value::Bool(false) } else { Value::Null });
                 }
-                if lname == "header"
-                    && let Some(h) = vals.first()
-                {
-                    let h = builtins::arg_str(self, lname, 1, "header", h)?;
-                    self.errors.headers.push(String::from_utf8_lossy(&h).into_owned());
+                match lname {
+                    "header" => {
+                        let [line, replace, code] = builtins::args::<1, 3>(lname, vals)?;
+                        let line = builtins::arg_str(self, lname, 1, "header", &line.unwrap())?;
+                        let replace = replace.is_none_or(|r| r.to_bool());
+                        if let Some(code) = code.filter(|c| !c.is_null()) {
+                            let code = builtins::arg_int(lname, 3, "response_code", &code)?;
+                            if code > 0 {
+                                self.errors.status = Some(code as u16);
+                            }
+                        }
+                        self.errors.add_header(String::from_utf8_lossy(&line).into_owned(), replace);
+                        Ok(Value::Null)
+                    }
+                    "header_remove" => {
+                        let [name] = builtins::args::<0, 1>(lname, vals)?;
+                        match name.filter(|n| !n.is_null()) {
+                            Some(name) => {
+                                let name = builtins::arg_str(self, lname, 1, "name", &name)?;
+                                self.errors.remove_header(&name);
+                            }
+                            None => self.errors.headers.clear(),
+                        }
+                        Ok(Value::Null)
+                    }
+                    // setcookie() and setrawcookie(): the value is urlencoded only by setcookie()
+                    _ => {
+                        let [name, value, expires, path, domain, secure, httponly] = builtins::args::<1, 7>(lname, vals)?;
+                        let name = builtins::arg_str(self, lname, 1, "name", &name.unwrap())?;
+                        let value = value.map(|v| builtins::arg_str(self, lname, 2, "value", &v)).transpose()?.unwrap_or_default();
+                        let value = if lname == "setcookie" { builtins::url::encode(&value, false) } else { value };
+                        // Either the options array (PHP 7.3+) or the positional arguments
+                        let (expires, path, domain, secure, httponly, samesite) = match expires {
+                            Some(Value::Array(opts)) => {
+                                let opt = |key: &[u8]| opts.get(&Key::Str(key.into())).cloned();
+                                (
+                                    opt(b"expires").map_or(0, |v| v.to_int()),
+                                    opt(b"path").map_or_else(Vec::new, |v| v.to_bytes()),
+                                    opt(b"domain").map_or_else(Vec::new, |v| v.to_bytes()),
+                                    opt(b"secure").is_some_and(|v| v.to_bool()),
+                                    opt(b"httponly").is_some_and(|v| v.to_bool()),
+                                    opt(b"samesite").map_or_else(Vec::new, |v| v.to_bytes()),
+                                )
+                            }
+                            expires => (
+                                expires.map_or(0, |v| v.to_int()),
+                                path.map(|p| builtins::arg_str(self, lname, 4, "path", &p)).transpose()?.unwrap_or_default(),
+                                domain.map(|d| builtins::arg_str(self, lname, 5, "domain", &d)).transpose()?.unwrap_or_default(),
+                                secure.is_some_and(|v| v.to_bool()),
+                                httponly.is_some_and(|v| v.to_bool()),
+                                Vec::new(),
+                            ),
+                        };
+                        let mut attrs = vec![format!("{}={}", String::from_utf8_lossy(&name), String::from_utf8_lossy(&value))];
+                        if expires > 0 {
+                            let zone = Zone::load("UTC").unwrap();
+                            let when = DateTime { seconds: expires, micros: 0, zone }.format_gmt(b"D, d-M-Y H:i:s T");
+                            attrs.push(format!("expires={}", String::from_utf8_lossy(&when)));
+                        }
+                        if !path.is_empty() {
+                            attrs.push(format!("path={}", String::from_utf8_lossy(&path)));
+                        }
+                        if !domain.is_empty() {
+                            attrs.push(format!("domain={}", String::from_utf8_lossy(&domain)));
+                        }
+                        if secure {
+                            attrs.push("secure".to_owned());
+                        }
+                        if httponly {
+                            attrs.push("HttpOnly".to_owned());
+                        }
+                        if !samesite.is_empty() {
+                            attrs.push(format!("SameSite={}", String::from_utf8_lossy(&samesite)));
+                        }
+                        self.errors.add_header(format!("Set-Cookie: {}", attrs.join("; ")), false);
+                        Ok(Value::Bool(true))
+                    }
                 }
-                Ok(if lname.ends_with("cookie") { Value::Bool(true) } else { Value::Null })
             }
             "headers_list" => {
                 builtins::args::<0, 0>(lname, vals)?;
-                // The CLI sends no headers
-                Ok(list(Vec::new()))
+                Ok(list(self.errors.headers.iter().map(|h| Value::str(h.as_str())).collect()))
             }
             "http_response_code" => {
-                builtins::args::<0, 1>(lname, vals)?;
-                Ok(Value::Bool(false))
+                let [code] = builtins::args::<0, 1>(lname, vals)?;
+                match code.filter(|c| !c.is_null()) {
+                    Some(code) => {
+                        self.errors.status = Some(builtins::arg_int(lname, 1, "response_code", &code)? as u16);
+                        Ok(Value::Bool(true))
+                    }
+                    None => Ok(self.errors.status.map_or(Value::Bool(false), |c| Value::Int(c.into()))),
+                }
             }
             _ => Err(Fatal::error(format!("Call to undefined function {lname}()"))),
         }

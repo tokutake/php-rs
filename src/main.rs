@@ -28,6 +28,11 @@ fn main() -> ExitCode {
     if lint {
         args.remove(1);
     }
+    // `--cgi`: the output starts with the header lines the script set, then a blank line
+    let cgi = args.get(1).is_some_and(|a| a == "--cgi");
+    if cgi {
+        args.remove(1);
+    }
     let Some(path) = args.get(1) else {
         eprintln!("usage: php-rs <file.php>");
         return ExitCode::from(1);
@@ -46,7 +51,7 @@ fn main() -> ExitCode {
     // run it on a thread whose stack fits interp::MAX_CALL_DEPTH nested calls
     // $argv: the script as given, then its arguments
     let argv = args[1..].to_vec();
-    let runner = std::thread::Builder::new().stack_size(INTERP_STACK_SIZE).spawn(move || run(&src, file, argv, lint));
+    let runner = std::thread::Builder::new().stack_size(INTERP_STACK_SIZE).spawn(move || run(&src, file, argv, lint, cgi));
     match runner.map(|t| t.join()) {
         Ok(Ok(status)) => ExitCode::from(status),
         _ => ExitCode::from(255),
@@ -54,7 +59,7 @@ fn main() -> ExitCode {
 }
 
 /// Runs a script; the exit status
-fn run(src: &[u8], file: String, argv: Vec<String>, lint: bool) -> u8 {
+fn run(src: &[u8], file: String, argv: Vec<String>, lint: bool, cgi: bool) -> u8 {
     let parsed = lexer::lex(src, &file)
         .map_err(|e| ("Parse error", e.msg, e.line))
         .and_then(|tokens| parser::parse(tokens, &file).map_err(|e| (e.label(), e.msg, e.line)));
@@ -75,6 +80,24 @@ fn run(src: &[u8], file: String, argv: Vec<String>, lint: bool) -> u8 {
     if lint {
         println!("No syntax errors detected in {file}");
         return 0;
+    }
+    if cgi {
+        // The body is held back until the end, since headers set after output still count
+        let mut interp = interp::Interp::new(Vec::new(), program.file.clone());
+        interp.set_globals(&argv);
+        let status = interp.run(&program);
+        let mut head = Vec::new();
+        let (code, headers) = interp.response_head();
+        if let Some(code) = code {
+            let _ = writeln!(head, "Status: {code}");
+        }
+        for line in headers {
+            let _ = writeln!(head, "{line}");
+        }
+        let _ = writeln!(head);
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(&head).and_then(|()| stdout.write_all(&interp.into_output())).and_then(|()| stdout.flush());
+        return status;
     }
     let stdout = std::io::stdout().lock();
     let mut interp = interp::Interp::new(BufWriter::new(stdout), program.file.clone());

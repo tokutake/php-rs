@@ -49,7 +49,7 @@ fn encode_into(out: &mut Vec<u8>, s: &[u8], raw: bool) {
     }
 }
 
-fn encode(s: &[u8], raw: bool) -> Vec<u8> {
+pub fn encode(s: &[u8], raw: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     encode_into(&mut out, s, raw);
     out

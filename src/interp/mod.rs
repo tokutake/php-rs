@@ -437,6 +437,11 @@ impl<W: Write> Interp<W> {
         self.out
     }
 
+    /// The response code and header lines, which a CGI host sends before the body
+    pub fn response_head(&self) -> (Option<u16>, &[String]) {
+        (self.errors.status, &self.errors.headers)
+    }
+
     /// Switches to the code of another file, returning the one left
     fn enter_file(&mut self, file: &Rc<SourceFile>) -> Rc<SourceFile> {
         if Rc::ptr_eq(&self.file, file) {

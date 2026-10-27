@@ -14,7 +14,7 @@ mod math;
 mod preg;
 mod random;
 mod misc;
-mod url;
+pub mod url;
 mod hash;
 mod entities;
 mod html;
