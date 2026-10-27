@@ -33,7 +33,9 @@ Error: Cannot resume an already running generator
 Exception: Cannot get return value of a generator that hasn't returned
 bool(false)
 int(5)
-object(Generator)#3 (0) {
+object(Generator)#3 (1) {
+  ["function"]=>
+  string(2) "g5"
 }
 TypeError at call: g8(): Argument #1 ($x) must be of type int, string given, called in generators_errors.php on line 82
 NULL

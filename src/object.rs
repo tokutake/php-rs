@@ -125,6 +125,8 @@ pub enum Native {
     ThrowableConstruct,
     ErrorExceptionConstruct,
     GetSeverity,
+    /// A method of mysqli or mysqli_result
+    Mysqli,
     GetMessage,
     GetCode,
     GetPrevious,
@@ -192,6 +194,8 @@ pub struct ClassEntry {
     pub traits: Vec<&'static str>,
     /// Built-ins like Closure that `new` refuses
     pub internal_only: bool,
+    /// Where a user class was declared, for redeclaration errors
+    pub declared_at: Option<(Rc<str>, u32)>,
     /// A built-in class, whose scope closures cannot be bound to
     pub is_internal: bool,
     pub is_throwable: bool,
@@ -260,6 +264,11 @@ pub enum Internal {
     None,
     Closure(Closure),
     Generator(Box<RefCell<crate::interp::generator::GenState>>),
+    /// A mysqli connection or result
+    Mysqli(Box<RefCell<crate::builtins::mysqli::State>>),
+    /// hash_init()'s context: the algorithm, the data so far and the HMAC key;
+    /// None once finalized
+    HashContext(RefCell<Option<(String, Vec<u8>, Option<Vec<u8>>)>>),
 }
 
 #[derive(Debug, Clone)]
@@ -422,6 +431,8 @@ impl Object {
             Internal::Period(Box::new(RefCell::new(None)))
         } else if matches!(internal, Internal::None) && class.name == "InternalIterator" {
             Internal::PeriodIterator(RefCell::new(None))
+        } else if matches!(internal, Internal::None) && (class.is_subclass_of("mysqli") || class.is_subclass_of("mysqli_result")) {
+            Internal::Mysqli(Box::new(RefCell::new(crate::builtins::mysqli::State::None)))
         } else { internal };
         let id = alloc_id();
         let mut props = PhpArray::new();
@@ -500,7 +511,7 @@ impl Object {
     pub fn closure(&self) -> Option<&Closure> {
         match &self.internal {
             Internal::Closure(c) => Some(c),
-            Internal::None | Internal::Generator(_) | Internal::DateTime(_) | Internal::TimeZone(_) | Internal::Interval(_) | Internal::Period(_) | Internal::PeriodIterator(_) => None,
+            _ => None,
         }
     }
 
@@ -675,6 +686,28 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     put(ClassEntry { name: "Throwable", is_interface: true, interfaces: vec!["Stringable"], ..Default::default() });
     put(ClassEntry { name: "stdClass", allow_dynamic: true, ..Default::default() });
     put(ClassEntry { name: "__PHP_Incomplete_Class", allow_dynamic: true, is_final: true, ..Default::default() });
+    put(ClassEntry { name: "HashContext", is_final: true, internal_only: true, ..Default::default() });
+    let mysqli_methods = |class: &'static str, names: &[&str]| -> HashMap<String, Rc<Method>> {
+        names.iter().map(|m| native(m, class, Native::Mysqli, false)).collect()
+    };
+    put(ClassEntry {
+        name: "mysqli",
+        methods: mysqli_methods("mysqli", &[
+            "__construct", "connect", "real_connect", "select_db", "set_charset", "character_set_name", "query",
+            "real_query", "multi_query", "more_results", "next_result", "store_result", "use_result",
+            "real_escape_string", "escape_string", "close", "ping", "options", "autocommit", "begin_transaction",
+            "commit", "rollback", "get_server_info", "get_client_info",
+        ]),
+        ..Default::default()
+    });
+    put(ClassEntry {
+        name: "mysqli_result",
+        methods: mysqli_methods("mysqli_result", &[
+            "fetch_assoc", "fetch_row", "fetch_array", "fetch_object", "fetch_all", "fetch_column", "fetch_field",
+            "fetch_fields", "free", "close", "free_result", "data_seek", "field_seek",
+        ]),
+        ..Default::default()
+    });
     put(ClassEntry { name: "UnitEnum", is_interface: true, ..Default::default() });
     put(ClassEntry { name: "BackedEnum", is_interface: true, interfaces: vec!["UnitEnum"], ..Default::default() });
     let exception = put(throwable_base("Exception"));
@@ -705,6 +738,7 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         ("RangeException", "RuntimeException"),
         ("UnderflowException", "RuntimeException"),
         ("UnexpectedValueException", "RuntimeException"),
+        ("mysqli_sql_exception", "RuntimeException"),
         ("JsonException", "Exception"),
         ("ClosedGeneratorException", "Exception"),
         ("DateError", "Error"),
@@ -819,7 +853,14 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         for m in ["createFromFormat", "getLastErrors"] { let (key, method) = static_native(m, name, Native::DateFactory); methods.insert(key, method); }
         put(ClassEntry { name, interfaces: vec!["DateTimeInterface"], consts: date_constants(), methods, ..Default::default() });
     }
-    put(ClassEntry { name: "DateTimeZone", methods: ["__construct", "getName", "getOffset"].iter().map(|m| native(m, "DateTimeZone", Native::TimeZone, false)).collect(), ..Default::default() });
+    let zone_consts = [
+        ("AFRICA", 1), ("AMERICA", 2), ("ANTARCTICA", 4), ("ARCTIC", 8), ("ASIA", 16), ("ATLANTIC", 32), ("AUSTRALIA", 64),
+        ("EUROPE", 128), ("INDIAN", 256), ("PACIFIC", 512), ("UTC", 1024), ("ALL", 2047), ("ALL_WITH_BC", 4095), ("PER_COUNTRY", 4096),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.into(), Rc::new(ClassConst { vis: Visibility::Public, class: "DateTimeZone", state: RefCell::new(ConstState::Done(Value::Int(value))) })))
+    .collect();
+    put(ClassEntry { name: "DateTimeZone", consts: zone_consts, methods: ["__construct", "getName", "getOffset"].iter().map(|m| native(m, "DateTimeZone", Native::TimeZone, false)).collect(), ..Default::default() });
     let mut methods: HashMap<_, _> = ["__construct", "format"].iter().map(|m| native(m, "DateInterval", Native::Interval, false)).collect();
     let (key, method) = static_native("createFromDateString", "DateInterval", Native::IntervalFactory);
     methods.insert(key, method);

@@ -37,11 +37,13 @@ impl<W: Write> Interp<W> {
     pub(super) fn declare_class(&mut self, decl: &Rc<ClassDecl>) -> EResult<()> {
         diag::set_line(decl.line);
         let kind = decl.kind();
-        if self.classes.contains_key(&decl.name.to_ascii_lowercase()) {
-            return Err(Fatal::compile(format!(
-                "Cannot declare {kind} {}, because the name is already in use",
-                decl.name
-            )));
+        if let Some(existing) = self.classes.get(&decl.name.to_ascii_lowercase()) {
+            return Err(Fatal::compile(match &existing.declared_at {
+                Some((file, line)) => {
+                    format!("Cannot redeclare {kind} {} (previously declared in {file}:{line})", decl.name)
+                }
+                None => format!("Cannot declare {kind} {}, because the name is already in use", decl.name),
+            }));
         }
         // Class names live as long as the program, like the class table in php-src
         let name: &'static str = Box::leak(decl.name.clone().into_boxed_str());
@@ -65,6 +67,7 @@ impl<W: Write> Interp<W> {
         };
         // Private constants stay with the class that declares them
         entry.consts.retain(|_, c| c.vis != Visibility::Private);
+        entry.declared_at = Some((diag::file(), decl.line));
         entry.is_interface = decl.is_interface;
         entry.is_trait = decl.is_trait;
         entry.is_abstract = decl.is_abstract;
@@ -609,7 +612,11 @@ impl<W: Write> Interp<W> {
         let Value::Object(o) = v else {
             return Err(Fatal::error("__clone method called on non-object"));
         };
-        if o.class.is_throwable || o.class.is_enum || matches!(o.internal, Internal::Generator(_) | Internal::PeriodIterator(_)) {
+        if o.class.is_throwable
+            || o.class.is_enum
+            || matches!(o.internal, Internal::Generator(_) | Internal::PeriodIterator(_) | Internal::Mysqli(_))
+            || matches!(&o.internal, Internal::HashContext(c) if c.borrow().is_none())
+        {
             // The error exists before the object being cloned is released, as in php-src
             let e = Fatal::error(format!("Trying to clone an uncloneable object of class {}", o.class.name));
             return Err(Fatal::thrown(self.exception_object(e)));
@@ -625,7 +632,8 @@ impl<W: Write> Interp<W> {
                 forward: c.forward.clone(),
             }),
             Internal::Period(p) => Internal::Period(Box::new(RefCell::new(p.borrow().clone()))),
-            Internal::PeriodIterator(_) => unreachable!("uncloneable iterator"),
+            Internal::PeriodIterator(_) | Internal::Mysqli(_) => unreachable!("uncloneable object"),
+            Internal::HashContext(c) => Internal::HashContext(RefCell::new(c.borrow().clone())),
             Internal::Interval(i) => Internal::Interval(RefCell::new(i.borrow().clone())),
             Internal::DateTime(d) => Internal::DateTime(RefCell::new(d.borrow().clone())),
             Internal::TimeZone(z) => Internal::TimeZone(RefCell::new(z.borrow().clone())),
@@ -881,6 +889,9 @@ impl<W: Write> Interp<W> {
         if n == Native::TimeZone {
             return builtins::date::timezone_method(self, &this, &fname, &method.name.to_ascii_lowercase(), vals);
         }
+        if n == Native::Mysqli {
+            return builtins::mysqli::method(self, &this, &method.name.to_ascii_lowercase(), vals);
+        }
         if n == Native::GetSeverity {
             return Ok(this.get("\0*\0severity"));
         }
@@ -1049,6 +1060,11 @@ impl<W: Write> Interp<W> {
 
     pub(super) fn read_prop(&mut self, obj: &Rc<Object>, name: &str) -> EResult<Value> {
         if let Some(value) = builtins::date_period::property(obj,name) {return Ok(value);}
+        if matches!(obj.internal, Internal::Mysqli(_))
+            && let Some(value) = builtins::mysqli::property(obj, name)
+        {
+            return Ok(value);
+        }
         let class = obj.class.name;
         match self.find_prop(&obj.class, name) {
             PropLookup::Declared(p) => {

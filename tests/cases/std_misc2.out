@@ -1,0 +1,178 @@
+bool(true)
+int(12)
+bool(true)
+int(12)
+bool(true)
+float(12.5)
+bool(true)
+float(12.5)
+bool(true)
+string(7) "12.5abc"
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+array(1) {
+  [0]=>
+  string(7) "12.5abc"
+}
+bool(true)
+NULL
+bool(true)
+object(stdClass)#1 (1) {
+  ["scalar"]=>
+  int(5)
+}
+settype(): Argument #2 ($type) must be a valid type
+int(42)
+int(42)
+bool(false)
+bool(false)
+int(-7)
+int(3)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+int(9)
+int(26)
+int(10)
+float(1.5)
+float(1000)
+float(0.5)
+bool(false)
+float(2)
+bool(false)
+float(1000.5)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+NULL
+bool(true)
+bool(true)
+string(6) "a@b.co"
+bool(false)
+string(21) "x.y+z@sub.example.org"
+bool(false)
+string(9) ""q"@x.com"
+bool(false)
+string(18) "http://example.com"
+string(19) "https://a.b/c?d=e#f"
+bool(false)
+string(7) "ftp://x"
+bool(false)
+bool(false)
+bool(false)
+string(12) "mailto:a@b.c"
+bool(false)
+bool(false)
+string(9) "127.0.0.1"
+string(9) "127.0.0.1"
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+string(3) "::1"
+bool(false)
+bool(false)
+string(11) "2001:db8::1"
+bool(false)
+string(11) "2001:db8::1"
+bool(false)
+bool(false)
+bool(false)
+string(8) "10.0.0.1"
+string(8) "10.0.0.1"
+bool(false)
+string(11) "192.168.1.1"
+string(11) "192.168.1.1"
+bool(false)
+string(7) "fe80::1"
+bool(false)
+bool(false)
+string(7) " x <b> "
+string(3) "123"
+string(3) "a-b"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  bool(false)
+}
+bool(false)
+string(43) "&#60;b&#62;hi&#60;/b&#62; &#38; &#34;q&#34;"
+string(3) "123"
+string(4) "12.3"
+string(5) "a@b.c"
+string(20) "&lt;p&gt;x&lt;/p&gt;"
+string(7) "ab%20cd"
+string(1) "X"
+string(9) "'it'\''s'"
+string(2) "''"
+string(25) "ls\; rm -rf / 'x' "y" \#z"
+string(1) "C"
+bool(false)
+bool(true)
+string(14) "Africa/Abidjan"
+bool(true)
+bool(true)
+string(3) "UTC"
+bool(true)
+array(1) {
+  [0]=>
+  string(3) "UTC"
+}
+string(4) "café"
+string(10) "636166c3a9"
+string(5) "caf'e"
+string(3) "caf"
+int(4)
+string(2) "ab"
+array(2) {
+  [0]=>
+  int(25)
+  [1]=>
+  string(3) "Bob"
+}
+array(2) {
+  [0]=>
+  int(12)
+  [1]=>
+  string(6) "apples"
+}
+array(1) {
+  [0]=>
+  NULL
+}
+array(2) {
+  [0]=>
+  float(3.5)
+  [1]=>
+  string(2) "kg"
+}
+array(1) {
+  [0]=>
+  string(2) "ab"
+}
+array(1) {
+  [0]=>
+  int(31)
+}

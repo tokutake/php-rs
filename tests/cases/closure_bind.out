@@ -1,20 +1,20 @@
 
-Warning: Cannot bind an instance to a static closure in closure_bind.php on line 8
+Warning: Cannot bind an instance to a static closure, this will be an error in PHP 9 in closure_bind.php on line 8
 NULL
 
-Warning: Cannot rebind scope of closure created from function in closure_bind.php on line 9
+Warning: Cannot rebind scope of closure created from function, this will be an error in PHP 9 in closure_bind.php on line 9
 NULL
 
-Warning: Cannot bind method P::m() to object of class stdClass in closure_bind.php on line 10
+Warning: Cannot bind method P::m() to object of class stdClass, this will be an error in PHP 9 in closure_bind.php on line 10
 NULL
 
-Warning: Cannot unbind $this of method in closure_bind.php on line 11
+Warning: Cannot unbind $this of method, this will be an error in PHP 9 in closure_bind.php on line 11
 NULL
 
-Warning: Cannot unbind $this of closure using $this in closure_bind.php on line 12
+Warning: Cannot unbind $this of closure using $this, this will be an error in PHP 9 in closure_bind.php on line 12
 NULL
 
-Warning: Cannot bind closure to scope of internal class stdClass in closure_bind.php on line 13
+Warning: Cannot bind closure to scope of internal class stdClass, this will be an error in PHP 9 in closure_bind.php on line 13
 NULL
 
 Warning: Class "Nope" not found in closure_bind.php on line 14
@@ -43,10 +43,10 @@ array(3) {
 }
 int(2)
 
-Warning: Cannot bind closure to scope of internal class stdClass in closure_bind.php on line 39
+Warning: Cannot bind closure to scope of internal class stdClass, this will be an error in PHP 9 in closure_bind.php on line 39
 NULL
 
-Warning: Cannot bind closure to scope of internal class stdClass in closure_bind.php on line 41
+Warning: Cannot bind closure to scope of internal class stdClass, this will be an error in PHP 9 in closure_bind.php on line 41
 
 Warning: foreach() argument must be of type array|object, null given in closure_bind.php on line 41
 string(2) "iv"
@@ -54,7 +54,7 @@ string(7) "no this"
 string(2) "iv"
 string(7) "no this"
 
-Warning: Cannot unbind $this of closure using $this in closure_bind.php on line 57
+Warning: Cannot unbind $this of closure using $this, this will be an error in PHP 9 in closure_bind.php on line 57
 NULL
 string(7) "no this"
 string(2) "iv"

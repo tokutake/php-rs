@@ -97,7 +97,7 @@ impl Sink for Out<'_> {
 fn arg_stream(fname: &str, n: usize, param: &str, v: &Value) -> EResult<Rc<Resource>> {
     match v {
         Value::Resource(r) if r.is_open() => Ok(r.clone()),
-        Value::Resource(_) => Err(Fatal::type_error(format!("{fname}(): supplied resource is not a valid stream resource"))),
+        Value::Resource(_) => Err(Fatal::type_error(format!("{fname}(): Argument #{n} (${param}) must be an open stream resource"))),
         other => Err(Fatal::type_error(format!(
             "{fname}(): Argument #{n} (${param}) must be of type resource, {} given",
             other.value_name()
@@ -161,7 +161,7 @@ fn write_notice(fname: &str, n: usize, e: IoFail) -> Value {
 pub fn read_file(rt: &mut dyn Runtime, fname: &str, n: usize, param: &str, v: &Value) -> EResult<Result<Vec<u8>, Value>> {
     let path = arg_path(rt, fname, n, param, v)?;
     if path.is_empty() {
-        return Err(Fatal::value_error("Path cannot be empty"));
+        return Err(Fatal::value_error("Path must not be empty"));
     }
     stream::ensure_context();
     let Some(mut s) = open(fname, &path, "rb") else { return Ok(Err(Value::Bool(false))) };
@@ -289,7 +289,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             let path = arg_path(rt, lname, 1, "filename", &path.unwrap())?;
             let mode = arg_str(rt, lname, 2, "mode", &mode.unwrap())?;
             if path.is_empty() {
-                return Err(Fatal::value_error("Path cannot be empty"));
+                return Err(Fatal::value_error("Path must not be empty"));
             }
             stream::ensure_context();
             let mode = String::from_utf8_lossy(&mode).into_owned();
@@ -662,7 +662,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
                 _ => None,
             };
             if path.is_empty() {
-                return Err(Fatal::value_error("Path cannot be empty"));
+                return Err(Fatal::value_error("Path must not be empty"));
             }
             stream::ensure_context();
             let Some(mut s) = open(lname, &path, "rb") else { return Ok(Value::Bool(false)) };
@@ -683,7 +683,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             let data = data.unwrap();
             let flags = opt_int(lname, 3, "flags", flags, 0)?;
             if path.is_empty() {
-                return Err(Fatal::value_error("Path cannot be empty"));
+                return Err(Fatal::value_error("Path must not be empty"));
             }
             let mode = if flags & 8 != 0 { "ab" } else if flags & 2 != 0 { "cb" } else { "wb" };
             if flags & 2 != 0 && flags & 8 == 0 && path.windows(3).any(|w| w == b"://") && !path.starts_with(b"file://") {
@@ -732,7 +732,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
                 return Err(Fatal::value_error("file(): Argument #2 ($flags) must be a valid flag value"));
             }
             if path.is_empty() {
-                return Err(Fatal::value_error("Path cannot be empty"));
+                return Err(Fatal::value_error("Path must not be empty"));
             }
             stream::ensure_context();
             let Some(mut s) = open(lname, &path, "rb") else { return Ok(Value::Bool(false)) };
@@ -747,7 +747,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             let [path, ..] = args::<1, 3>(name, vals)?;
             let path = arg_path(rt, lname, 1, "filename", &path.unwrap())?;
             if path.is_empty() {
-                return Err(Fatal::value_error("Path cannot be empty"));
+                return Err(Fatal::value_error("Path must not be empty"));
             }
             stream::ensure_context();
             let Some(mut s) = open(lname, &path, "rb") else { return Ok(Value::Bool(false)) };
@@ -764,10 +764,6 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             let [path, _] = args::<1, 2>(name, vals)?;
             let path = arg_path(rt, lname, 1, "filename", &path.unwrap())?;
             let p = os_path(&path);
-            if p.is_dir() {
-                diag::warning(format!("{lname}({}): Is a directory", show(&path)));
-                return Ok(Value::Bool(false));
-            }
             Ok(fs_result(fs::remove_file(&p), || format!("{lname}({})", show(&path))))
         }
         "mkdir" => {
@@ -952,7 +948,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             let r = match &d {
                 Value::Resource(r) if r.is_open() && with_stream(r, |s| matches!(s.backend, Backend::Dir { .. })) => r.clone(),
                 Value::Resource(_) => {
-                    return Err(Fatal::type_error(format!("{lname}(): supplied resource is not a valid Directory resource")));
+                    return Err(Fatal::type_error(format!("{lname}(): Argument #1 ($dir_handle) must be an open stream resource")));
                 }
                 other => {
                     return Err(Fatal::type_error(format!(
@@ -978,7 +974,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             let path = arg_path(rt, lname, 1, "directory", &path.unwrap())?;
             let order = opt_int(lname, 2, "sorting_order", order, 0)?;
             if path.is_empty() {
-                return Err(Fatal::value_error("scandir(): Argument #1 ($directory) cannot be empty"));
+                return Err(Fatal::value_error("scandir(): Argument #1 ($directory) must not be empty"));
             }
             stream::ensure_context();
             let mut entries = match read_dir(&path) {

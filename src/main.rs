@@ -8,6 +8,7 @@ mod datetime;
 mod genlower;
 mod interp;
 mod lexer;
+mod mysql;
 mod object;
 mod parser;
 mod regex;

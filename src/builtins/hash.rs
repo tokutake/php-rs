@@ -7,8 +7,34 @@ use crate::value::Value;
 
 pub const NAMES: &[&str] = &[
     "md5", "sha1", "md5_file", "sha1_file", "hash", "hash_file", "hash_hmac", "hash_hmac_file", "hash_algos",
-    "hash_hmac_algos", "hash_equals",
+    "hash_hmac_algos", "hash_equals", "hash_init", "hash_update", "hash_update_file", "hash_final", "hash_copy",
 ];
+
+pub fn constant(name: &str) -> Option<Value> {
+    match name {
+        "HASH_HMAC" => Some(Value::Int(1)),
+        _ => None,
+    }
+}
+
+/// The state of a HashContext argument
+fn context(lname: &str, v: &Value) -> EResult<std::rc::Rc<crate::object::Object>> {
+    match v.copy_out() {
+        Value::Object(o) if matches!(o.internal, crate::object::Internal::HashContext(_)) => Ok(o),
+        other => Err(Fatal::type_error(format!(
+            "{lname}(): Argument #1 ($context) must be of type HashContext, {} given",
+            other.value_name()
+        ))),
+    }
+}
+
+fn with_context<T>(lname: &str, o: &crate::object::Object, f: impl FnOnce(&mut (String, Vec<u8>, Option<Vec<u8>>)) -> T) -> EResult<T> {
+    let crate::object::Internal::HashContext(c) = &o.internal else { unreachable!("checked") };
+    match c.borrow_mut().as_mut() {
+        Some(state) => Ok(f(state)),
+        None => Err(Fatal::type_error(format!("{lname}(): Argument #1 ($context) must be a valid, non-finalized HashContext"))),
+    }
+}
 
 /// An algorithm: name, block size (for HMAC; 0 for the non-cryptographic
 /// checksums) and the digest function
@@ -457,6 +483,77 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             args::<0, 0>(name, vals)?;
             let hmac = lname == "hash_hmac_algos";
             Ok(super::list(ALGOS.iter().filter(|a| !hmac || a.1 > 0).map(|a| Value::str(a.0))))
+        }
+        "hash_init" => {
+            let [algo, flags, key, _options] = args::<1, 4>(name, vals)?;
+            let flags = match flags {
+                Some(f) => super::arg_int(lname, 2, "flags", &f)?,
+                None => 0,
+            };
+            let hmac = flags & 1 != 0;
+            let algo = algo.unwrap();
+            let (algo_name, _, _) = algo_arg(rt, algo.clone(), false)?;
+            if hmac && algo_arg(rt, algo, true).is_err() {
+                return Err(Fatal::value_error("hash_init(): Argument #1 ($algo) must be a cryptographic hashing algorithm if HMAC is requested"));
+            }
+            let key = match key {
+                Some(k) if hmac => {
+                    let k = arg_str(rt, lname, 3, "key", &k)?;
+                    if k.is_empty() {
+                        return Err(Fatal::value_error("hash_init(): Argument #3 ($key) must not be empty when HMAC is requested"));
+                    }
+                    Some(k)
+                }
+                None if hmac => {
+                    return Err(Fatal::value_error("hash_init(): Argument #3 ($key) must not be empty when HMAC is requested"));
+                }
+                _ => None,
+            };
+            let Some(template) = rt.new_object("HashContext") else { return Err(Fatal::error("HashContext is not available")) };
+            let class = template.class.clone();
+            drop(template);
+            let state = Some((algo_name.to_string(), Vec::new(), key));
+            Ok(Value::Object(crate::object::Object::new(class, crate::object::Internal::HashContext(std::cell::RefCell::new(state)))))
+        }
+        "hash_update" => {
+            let [ctx, data] = args::<2, 2>(name, vals)?;
+            let ctx = context(lname, &ctx.unwrap())?;
+            let data = arg_str(rt, lname, 2, "data", &data.unwrap())?;
+            with_context(lname, &ctx, |s| s.1.extend_from_slice(&data))?;
+            Ok(Value::Bool(true))
+        }
+        "hash_update_file" => {
+            let [ctx, path, _] = args::<2, 3>(name, vals)?;
+            let ctx = context(lname, &ctx.unwrap())?;
+            match super::streams::read_file(rt, lname, 2, "filename", &path.unwrap())? {
+                Ok(d) => {
+                    with_context(lname, &ctx, |s| s.1.extend_from_slice(&d))?;
+                    Ok(Value::Bool(true))
+                }
+                Err(v) => Ok(v),
+            }
+        }
+        "hash_final" => {
+            let [ctx, binary] = args::<1, 2>(name, vals)?;
+            let ctx = context(lname, &ctx.unwrap())?;
+            let binary = opt_binary(lname, 2, binary)?;
+            let (algo, data, key) = with_context(lname, &ctx, |s| s.clone())?;
+            if let crate::object::Internal::HashContext(c) = &ctx.internal {
+                *c.borrow_mut() = None;
+            }
+            let (_, block, f) = find(algo.as_bytes()).expect("known algorithm");
+            let digest = match key {
+                Some(k) => hmac(*f, *block, &k, &data),
+                None => f(&data),
+            };
+            Ok(digest_value(digest, binary))
+        }
+        "hash_copy" => {
+            let [ctx] = args::<1, 1>(name, vals)?;
+            let ctx = context(lname, &ctx.unwrap())?;
+            let state = with_context(lname, &ctx, |s| s.clone())?;
+            let internal = crate::object::Internal::HashContext(std::cell::RefCell::new(Some(state)));
+            Ok(Value::Object(crate::object::Object::new(ctx.class.clone(), internal)))
         }
         "hash_equals" => {
             let [known, user] = args::<2, 2>(name, vals)?;

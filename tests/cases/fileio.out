@@ -37,7 +37,7 @@ array(1) {
   [0]=>
   resource(6) of type (stream)
 }
-TypeError: fread(): supplied resource is not a valid stream resource
+TypeError: fread(): Argument #1 ($stream) must be an open stream resource
 TypeError: fread(): Argument #1 ($stream) must be of type resource, string given
 -- reading and seeking
 == file
@@ -336,7 +336,7 @@ array(6) {
   string(5) "z.txt"
 }
 bool(true)
-readdir(): supplied resource is not a valid Directory resource
+readdir(): Argument #1 ($dir_handle) must be an open stream resource
 bool(true)
 bool(false)
 bool(false)
@@ -389,7 +389,7 @@ bool(false)
 bool(false)
 bool(false)
 
-Warning: unlink(fileio_tmp): Is a directory in fileio.php on line 78
+Warning: unlink(fileio_tmp): Operation not permitted in fileio.php on line 78
 
 Warning: mkdir(): File exists in fileio.php on line 78
 bool(false)
@@ -403,7 +403,7 @@ bool(true)
 bool(true)
 bool(true)
 bool(false)
-Path cannot be empty
+Path must not be empty
 file_get_contents(): Argument #1 ($filename) must not contain any null bytes
 file(): Argument #2 ($flags) must be a valid flag value
 bool(true)

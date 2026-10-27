@@ -1,3 +1,5 @@
+
+Deprecated: Case statements followed by a semicolon (;) are deprecated, use a colon (:) instead in switch_match.php on line 54
 small
 small
 three

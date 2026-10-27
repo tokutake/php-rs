@@ -1,4 +1,4 @@
-0: ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+0: ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 1: ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 2: ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0
 3: ValueError: str_split(): Argument #2 ($length) must be greater than 0
@@ -11,7 +11,7 @@
 10: ValueError: round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)
 11: ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
 12: ValueError: strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
-13: ValueError: substr_count(): Argument #2 ($needle) cannot be empty
+13: ValueError: substr_count(): Argument #2 ($needle) must not be empty
 int(0)
 15: ValueError: base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)
 16: ValueError: log(): Argument #2 ($base) must be greater than 0

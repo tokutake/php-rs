@@ -96,6 +96,10 @@ string(6) "ababab"
 int(4)
 int(3)
 -- chars
+
+Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 in std_strings.php on line 23
+
+Deprecated: ord(): Providing an empty string is deprecated in std_strings.php on line 23
 string(1) "A"
 string(1) "A"
 int(65)

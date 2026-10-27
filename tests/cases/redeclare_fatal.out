@@ -1,0 +1,4 @@
+
+Fatal error: Cannot redeclare function from_inc() (previously declared in inc/redeclare.php:2) in inc/redeclare.php on line 2
+Stack trace:
+#0 {main}

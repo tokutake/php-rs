@@ -50,6 +50,8 @@ NULL => null
 array => array
 
 Deprecated: Implicit conversion from float 1.5 to int loses precision in generators_more.php on line 130
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in generators_more.php on line 130
 array(2) {
   [1]=>
   string(1) "b"

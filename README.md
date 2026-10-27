@@ -122,6 +122,13 @@ Early stage. Implemented so far:
 - URLs and encodings: `urlencode`/`rawurlencode` and their decoders, `parse_url()` (a
   port of php-src's parser), `http_build_query()` (nested arrays, objects, enums,
   RFC 3986), `base64_encode()`/`base64_decode()` (with strict mode)
+- Strings and data: `html_entity_decode()`/`htmlentities()` with php-src's HTML 4.01,
+  XHTML, XML and HTML 5 entity tables, `pack()`/`unpack()`, `parse_str()`, `sscanf()`,
+  `iconv()` (UTF-8, ISO-8859-1, ASCII), `filter_var()` with the validate and sanitize
+  filters, `hash_init()`/`hash_update()`/`hash_final()`, `password_hash()` /
+  `password_verify()` / `crypt()` with bcrypt
+- MySQL: `mysqli` (procedural and object API) over a wire-protocol client of its own,
+  for MySQL and MariaDB servers over TCP or a Unix socket
 - Output buffering: `ob_start()` with handlers, chunk sizes and flags, `ob_get_clean()`,
   `ob_end_flush()` and the rest of the ob_* functions. Diagnostics and uncaught errors
   go to the buffers, writes to `STDOUT` bypass them, and buffers left open are
