@@ -52,6 +52,20 @@ fn huge_allocations_are_refused() {
 }
 
 #[test]
+fn deep_serialized_data_is_bounded() {
+    assert_php_error(
+        "serialize_deep",
+        "<?php $d = []; for ($i = 0; $i < 100000; $i++) { $d = [$d]; } serialize($d);",
+        "Maximum call stack size of",
+    );
+    let src = format!("<?php unserialize('{}i:1;{}', ['max_depth' => 0]);", "a:1:{i:0;".repeat(100_000), "}".repeat(100_000));
+    assert_php_error("unserialize_deep", &src, "Maximum call stack size of");
+    let (code, out) = run("unserialize_default_depth", &format!("<?php var_dump(unserialize('{}i:1;{}'));", "a:1:{i:0;".repeat(5000), "}".repeat(5000)));
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Maximum depth of 4096 exceeded") && out.contains("bool(false)"), "{out}");
+}
+
+#[test]
 fn deep_query_data_is_bounded() {
     assert_php_error(
         "http_build_query",

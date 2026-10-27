@@ -672,6 +672,7 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     put(ClassEntry { name: "Stringable", is_interface: true, ..Default::default() });
     put(ClassEntry { name: "Throwable", is_interface: true, interfaces: vec!["Stringable"], ..Default::default() });
     put(ClassEntry { name: "stdClass", allow_dynamic: true, ..Default::default() });
+    put(ClassEntry { name: "__PHP_Incomplete_Class", allow_dynamic: true, is_final: true, ..Default::default() });
     put(ClassEntry { name: "UnitEnum", is_interface: true, ..Default::default() });
     put(ClassEntry { name: "BackedEnum", is_interface: true, interfaces: vec!["UnitEnum"], ..Default::default() });
     let exception = put(throwable_base("Exception"));
