@@ -3,6 +3,9 @@
 A PHP interpreter written in Rust, aiming for compatibility with PHP 8 while
 removing the memory-safety bug classes of the C implementation.
 
+WordPress 7.1 installs and serves its front page on php-rs (against MariaDB), with
+output byte-identical to php-src's.
+
 ## Goals
 
 - **Safety**: no undefined behavior on integer edge cases (`PHP_INT_MIN % -1`,
@@ -129,6 +132,10 @@ Early stage. Implemented so far:
   `password_verify()` / `crypt()` with bcrypt
 - MySQL: `mysqli` (procedural and object API) over a wire-protocol client of its own,
   for MySQL and MariaDB servers over TCP or a Unix socket
+- SPL: ArrayIterator, ArrayObject, the recursive, filter, regex, limit and append
+  iterators, DirectoryIterator / FilesystemIterator / RecursiveDirectoryIterator,
+  SplFileInfo, SplObjectStorage, SplDoublyLinkedList / SplStack / SplQueue and
+  SplFixedArray, written in PHP (src/prelude/spl.php) and loaded on first use
 - Output buffering: `ob_start()` with handlers, chunk sizes and flags, `ob_get_clean()`,
   `ob_end_flush()` and the rest of the ob_* functions. Diagnostics and uncaught errors
   go to the buffers, writes to `STDOUT` bypass them, and buffers left open are

@@ -7,3 +7,13 @@ function dispatch($hook, $parameters = []) { foreach ([[new J, 'before_request']
 $url = 'u'; $headers = []; $data = []; $type = 'GET'; $options = [];
 dispatch('h', [&$url, &$headers, &$data, &$type, &$options]);
 var_dump($options);
+function f(&$b) { $b['x'] = 1; }
+$cb = 'f';
+$blk = [];
+call_user_func_array($cb, array(&$blk, null, null));
+var_dump($blk);
+$a = [];
+call_user_func_array('f', [&$a]);
+var_dump($a);
+function g($b) { $b = 5; }
+$x = 1; call_user_func_array('g', [&$x]); var_dump($x);

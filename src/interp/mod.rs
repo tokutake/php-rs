@@ -2425,6 +2425,18 @@ impl<W: Write> Interp<W> {
                         args.value_name()
                     )));
                 };
+                // Reference elements reach by-reference parameters as references
+                if !matches!(f, Callable::Builtin(_)) && arr.keys().all(|k| matches!(k, Key::Int(_))) {
+                    let args = arr
+                        .values()
+                        .map(|v| match v {
+                            Value::Ref(r) => ArgVal::Ref(r.clone()),
+                            v => ArgVal::Val(v.clone()),
+                        })
+                        .collect();
+                    drop(arr);
+                    return self.call_value_args(&f, args, line);
+                }
                 let mut positional = Vec::new();
                 let mut named = Vec::new();
                 for (k, v) in arr.iter() {
@@ -2916,7 +2928,12 @@ impl<W: Write> Interp<W> {
                 self.frame().vars.insert(p.name.clone(), Value::Array(Rc::new(rest)));
                 break;
             }
-            let slot = match args.next() {
+            // A reference given for a by-value parameter passes its value
+            let arg = match args.next() {
+                Some(ArgVal::Ref(r)) if !p.by_ref => Some(ArgVal::Val(value::with_deref(&r, Value::copy_out))),
+                other => other,
+            };
+            let slot = match arg {
                 Some(ArgVal::Ref(r)) => {
                     if p.ty.is_some() {
                         let v = value::with_deref(&r, Value::clone);
