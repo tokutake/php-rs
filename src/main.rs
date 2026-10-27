@@ -21,7 +21,12 @@ use std::process::ExitCode;
 const INTERP_STACK_SIZE: usize = 1 << 30;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    // `-l`: check the syntax only, as php -l does
+    let lint = args.get(1).is_some_and(|a| a == "-l");
+    if lint {
+        args.remove(1);
+    }
     let Some(path) = args.get(1) else {
         eprintln!("usage: php-rs <file.php>");
         return ExitCode::from(1);
@@ -40,7 +45,7 @@ fn main() -> ExitCode {
     // run it on a thread whose stack fits interp::MAX_CALL_DEPTH nested calls
     // $argv: the script as given, then its arguments
     let argv = args[1..].to_vec();
-    let runner = std::thread::Builder::new().stack_size(INTERP_STACK_SIZE).spawn(move || run(&src, file, argv));
+    let runner = std::thread::Builder::new().stack_size(INTERP_STACK_SIZE).spawn(move || run(&src, file, argv, lint));
     match runner.map(|t| t.join()) {
         Ok(Ok(status)) => ExitCode::from(status),
         _ => ExitCode::from(255),
@@ -48,8 +53,8 @@ fn main() -> ExitCode {
 }
 
 /// Runs a script; the exit status
-fn run(src: &[u8], file: String, argv: Vec<String>) -> u8 {
-    let parsed = lexer::lex(src)
+fn run(src: &[u8], file: String, argv: Vec<String>, lint: bool) -> u8 {
+    let parsed = lexer::lex(src, &file)
         .map_err(|e| ("Parse error", e.msg, e.line))
         .and_then(|tokens| parser::parse(tokens, &file).map_err(|e| (e.label(), e.msg, e.line)));
     let program = match parsed {
@@ -60,9 +65,16 @@ fn run(src: &[u8], file: String, argv: Vec<String>) -> u8 {
             if label == "Fatal error" {
                 println!("Stack trace:\n#0 {{main}}");
             }
+            if lint {
+                println!("Errors parsing {file}");
+            }
             return 255;
         }
     };
+    if lint {
+        println!("No syntax errors detected in {file}");
+        return 0;
+    }
     let stdout = std::io::stdout().lock();
     let mut interp = interp::Interp::new(BufWriter::new(stdout), program.file.clone());
     interp.set_globals(&argv);

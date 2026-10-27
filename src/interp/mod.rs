@@ -119,6 +119,8 @@ enum Flow {
     Break(u32),
     Continue(u32),
     Return(Value),
+    /// A goto looking for its label in the enclosing statement lists
+    Goto(Rc<str>),
 }
 
 type RefCellValue = Rc<RefCell<Value>>;
@@ -126,8 +128,8 @@ type RefCellValue = Rc<RefCell<Value>>;
 /// Where a write lands before any array offsets are applied
 #[derive(Clone)]
 enum Base<'e> {
-    /// A variable of the current frame, named in the AST
-    Var(&'e str),
+    /// A variable of the current frame, named in the AST or by a variable variable
+    Var(std::borrow::Cow<'e, str>),
     /// A global variable, through `$GLOBALS['name']`
     Global(String),
     /// `$obj->name`
@@ -148,7 +150,7 @@ struct Path<'e> {
 
 impl<'e> Path<'e> {
     fn var(name: &'e str) -> Self {
-        Path { base: Base::Var(name), dims: Vec::new() }
+        Path { base: Base::Var(std::borrow::Cow::Borrowed(name)), dims: Vec::new() }
     }
 }
 
@@ -281,6 +283,8 @@ pub struct Interp<W: Write> {
     /// scope, since each class using a trait gets its own copy of the method
     statics: HashMap<(*const FuncDecl, &'static str), HashMap<String, RefCellValue>>,
     classes: HashMap<String, Rc<ClassEntry>>,
+    /// The reference a by-reference function returned last, for `=&`
+    return_ref: Option<RefCellValue>,
     autoload: autoload::Autoload,
     reference_sources: Vec<RefSource>,
     /// Class declarations already executed (hoisted ones are seen twice)
@@ -408,6 +412,7 @@ impl<W: Write> Interp<W> {
             constants: HashMap::new(),
             statics: HashMap::new(),
             classes: object::builtin_classes(),
+            return_ref: None,
             autoload: autoload::Autoload::default(),
             reference_sources: Vec::new(),
             declared: HashSet::new(),
@@ -508,6 +513,7 @@ impl<W: Write> Interp<W> {
         self.internal_calls.pop();
         Ok(match result? {
             Flow::Return(v) => v,
+            Flow::Goto(label) => return Err(undefined_label(&label)),
             _ => Value::Int(1),
         })
     }
@@ -521,7 +527,7 @@ impl<W: Write> Interp<W> {
                 return Ok(None);
             }
         };
-        let parsed = crate::lexer::lex(&src)
+        let parsed = crate::lexer::lex(&src, shown)
             .map_err(|e| ("Parse error", e.msg, e.line))
             .and_then(|tokens| crate::parser::parse(tokens, shown).map_err(|e| (e.label(), e.msg, e.line)));
         match parsed {
@@ -558,7 +564,10 @@ impl<W: Write> Interp<W> {
         STRICT_TYPES.with(|s| s.set(program.file.strict));
         diag::set_file(program.file.path.clone());
         self.file = program.file.clone();
-        let result = self.hoist(stmts).and_then(|_| self.block(stmts));
+        let result = self.hoist(stmts).and_then(|_| self.block(stmts)).and_then(|flow| match flow {
+            Flow::Goto(label) => Err(undefined_label(&label)),
+            flow => Ok(flow),
+        });
         let mut status = 0;
         match result {
             Ok(_) => {}
@@ -788,11 +797,19 @@ impl<W: Write> Interp<W> {
     }
 
     fn block(&mut self, stmts: &[Stmt]) -> EResult<Flow> {
-        for s in stmts {
+        let mut i = 0;
+        while let Some(s) = stmts.get(i) {
             let flow = self.stmt(s)?;
             self.run_destructors()?;
-            if !matches!(flow, Flow::Normal) {
-                return Ok(flow);
+            i += 1;
+            match flow {
+                Flow::Normal => {}
+                // A goto continues after its label when it is in this list
+                Flow::Goto(label) => match label_index(stmts, &label) {
+                    Some(at) => i = at + 1,
+                    None => return Ok(Flow::Goto(label)),
+                },
+                flow => return Ok(flow),
             }
         }
         Ok(Flow::Normal)
@@ -961,14 +978,27 @@ impl<W: Write> Interp<W> {
                 };
                 // Execution falls through the following cases until a break.
                 // A switch counts as a loop level for break and continue
-                for (_, body) in &cases[start..] {
-                    match self.block(body)? {
+                let (mut case, mut from) = (start, 0);
+                while let Some((_, body)) = cases.get(case) {
+                    match self.block(&body[from..])? {
                         Flow::Normal => {}
                         Flow::Break(1) | Flow::Continue(1) => break,
                         Flow::Break(n) => return Ok(Flow::Break(n - 1)),
                         Flow::Continue(n) => return Ok(Flow::Continue(n - 1)),
                         ret @ Flow::Return(_) => return Ok(ret),
+                        // A label in another case of this switch
+                        Flow::Goto(label) => {
+                            let found = cases.iter().enumerate().find_map(|(c, (_, b))| label_index(b, &label).map(|i| (c, i)));
+                            match found {
+                                Some((c, i)) => {
+                                    (case, from) = (c, i + 1);
+                                    continue;
+                                }
+                                None => return Ok(Flow::Goto(label)),
+                            }
+                        }
                     }
+                    (case, from) = (case + 1, 0);
                 }
             }
             Stmt::StrictTypes => {}
@@ -983,6 +1013,8 @@ impl<W: Write> Interp<W> {
                 }
             }
             Stmt::Break(n) => return Ok(Flow::Break(*n)),
+            Stmt::Goto(label, _) => return Ok(Flow::Goto(label.clone())),
+            Stmt::Label(..) => {}
             Stmt::Continue(n) => return Ok(Flow::Continue(*n)),
             Stmt::Unset(targets) => {
                 for t in targets {
@@ -1037,10 +1069,26 @@ impl<W: Write> Interp<W> {
                 return result;
             }
             Stmt::Return(value) => {
+                let by_ref = self.frame().func.as_ref().is_some_and(|f| f.returns_ref && !f.is_generator);
                 let v = match value {
-                    Some(e) => self.expr(e)?,
+                    // A by-reference function hands out a reference to what it returns
+                    Some(e) if by_ref && e.is_lvalue() => {
+                        let path = self.path(e)?;
+                        let r = self.make_ref(&path)?;
+                        let v = value::with_deref(&r, Value::clone);
+                        self.return_ref = Some(r);
+                        return Ok(Flow::Return(v));
+                    }
+                    Some(e) => {
+                        let v = self.expr(e)?;
+                        if by_ref && !e.is_call() {
+                            diag::notice("Only variable references should be returned by reference");
+                        }
+                        v
+                    }
                     None => Value::Null,
                 };
+                self.return_ref = None;
                 return Ok(Flow::Return(v));
             }
             Stmt::Global(names) => {
@@ -1084,6 +1132,12 @@ impl<W: Write> Interp<W> {
             }
         }
         Ok(Flow::Normal)
+    }
+
+    /// The name a variable variable stands for
+    fn var_var(&mut self, name: &Expr) -> EResult<String> {
+        let v = self.expr(name)?;
+        Ok(String::from_utf8_lossy(&self.stringify(&v)?).into_owned())
     }
 
     fn lookup(&mut self, name: &str) -> Value {
@@ -1196,6 +1250,10 @@ impl<W: Write> Interp<W> {
                 Value::str(s)
             }
             ExprKind::Var(name) => self.lookup(name),
+            ExprKind::VarVar(name) => {
+                let name = self.var_var(name)?;
+                self.lookup(&name)
+            }
             ExprKind::Const(name) => self.constant(name.trim_start_matches('\\'))?,
             ExprKind::NsConst(name, global) => match self.lookup_const(name) {
                 Some(v) => v,
@@ -1287,6 +1345,19 @@ impl<W: Write> Interp<W> {
                     v
                 }
             },
+            ExprKind::AssignRef(target, source) if source.is_call() => {
+                self.return_ref = None;
+                let v = self.expr(source)?;
+                let returned = self.return_ref.take();
+                let by_value = returned.is_none();
+                let r = returned.unwrap_or_else(|| Rc::new(RefCell::new(v.clone())));
+                self.bind_ref(target, r)?;
+                if by_value {
+                    diag::set_line(e.line);
+                    diag::notice("Only variables should be assigned by reference");
+                }
+                v
+            }
             ExprKind::AssignRef(target, source) => {
                 let path = self.path(source)?;
                 let r = self.make_ref(&path)?;
@@ -1566,6 +1637,13 @@ impl<W: Write> Interp<W> {
                 Ok(self.frames[0].vars.get(&name).map(Value::copy_out))
             }
             ExprKind::Var(name) => Ok(self.frame().vars.get(name).map(Value::copy_out)),
+            ExprKind::VarVar(name) => {
+                let name = self.var_var(name)?;
+                if name == "this" {
+                    return Ok(self.ctx().this.clone().map(Value::Object));
+                }
+                Ok(self.frame().vars.get(&name).map(Value::copy_out))
+            }
             ExprKind::Index(base, Some(index)) if self.is_globals(base) => {
                 let name = self.expr(index)?;
                 let name = String::from_utf8_lossy(&self.stringify(&name)?).into_owned();
@@ -1683,6 +1761,13 @@ impl<W: Write> Interp<W> {
                 Ok(Path { base: Base::Global(self.superglobal(name)), dims: Vec::new() })
             }
             ExprKind::Var(name) => Ok(Path::var(name)),
+            ExprKind::VarVar(name) => {
+                let name = self.var_var(name)?;
+                if name == "this" {
+                    return Err(Fatal::error("Cannot re-assign $this"));
+                }
+                Ok(Path { base: Base::Var(std::borrow::Cow::Owned(name)), dims: Vec::new() })
+            }
             ExprKind::Argument(cell) => Ok(Path {base:Base::Cell(cell.clone(),None),dims:Vec::new()}),
             ExprKind::Index(base, Some(index)) if self.is_globals(base) => {
                 let name = self.expr(index)?;
@@ -2756,6 +2841,7 @@ impl<W: Write> Interp<W> {
 
         let ret = match self.block(&f.body)? {
             Flow::Return(v) => Some(v),
+            Flow::Goto(label) => return Err(undefined_label(&label)),
             _ => None,
         };
         let Some(ty) = &f.ret else { return Ok(ret.unwrap_or(Value::Null)) };
@@ -3661,7 +3747,24 @@ fn loop_flow(flow: Flow) -> Option<Flow> {
         Flow::Break(n) => Some(Flow::Break(n - 1)),
         Flow::Continue(n) => Some(Flow::Continue(n - 1)),
         Flow::Return(v) => Some(Flow::Return(v)),
+        Flow::Goto(label) => Some(Flow::Goto(label)),
     }
+}
+
+/// A goto whose label is not in a statement list around it. php-src finds
+/// this when compiling
+fn undefined_label(label: &str) -> Fatal {
+    Fatal::compile(format!("'goto' to undefined label '{label}'"))
+}
+
+/// The position of `label:` among the statements
+fn label_index(stmts: &[Stmt], label: &str) -> Option<usize> {
+    stmts.iter().position(|s| match s {
+        Stmt::Label(l, _) => &**l == label,
+        // Generator bodies wrap the statements without yields
+        Stmt::Plain(inner) => matches!(&**inner, Stmt::Label(l, _) if &**l == label),
+        _ => false,
+    })
 }
 
 fn binary(op: &str, l: &Value, r: &Value) -> EResult<Value> {

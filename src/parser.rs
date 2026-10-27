@@ -149,7 +149,7 @@ pub fn parse_expr(src: &[u8]) -> PResult<Expr> {
     let mut code = b"<?php ".to_vec();
     code.extend_from_slice(src);
     code.push(b';');
-    let tokens = crate::lexer::lex(&code).map_err(|e| ParseError { msg: e.msg, line: e.line })?;
+    let tokens = crate::lexer::lex(&code, "").map_err(|e| ParseError { msg: e.msg, line: e.line })?;
     let mut p = Parser::new(tokens, Rc::new(SourceFile { path: "".into(), strict: false }));
     let e = p.expr()?;
     if !p.at(&Tok::Semicolon) {
@@ -177,7 +177,54 @@ pub fn parse(tokens: Vec<Token>, path: &str) -> PResult<Program> {
         stmts.push(s);
         p.seen_stmt = true;
     }
+    check_labels(&stmts)?;
     Ok(Program { stmts, file: p.file })
+}
+
+/// php-src's compile-time checks of goto: every label defined once in the
+/// function, and every goto naming one
+fn check_labels(body: &[Stmt]) -> PResult<()> {
+    type Found<'a> = Option<(&'a str, u32)>;
+    fn walk<'a>(stmts: &'a [Stmt], labels: &mut Vec<&'a str>, gotos: &mut Vec<(&'a str, u32)>, dup: &mut Found<'a>) {
+        for s in stmts {
+            match s {
+                Stmt::Label(l, line) => {
+                    if labels.contains(&&**l) {
+                        dup.get_or_insert((l, *line));
+                    }
+                    labels.push(l);
+                }
+                Stmt::Goto(l, line) => gotos.push((l, *line)),
+                Stmt::If(branches, else_body) => {
+                    branches.iter().for_each(|(_, b)| walk(b, labels, gotos, dup));
+                    if let Some(b) = else_body {
+                        walk(b, labels, gotos, dup);
+                    }
+                }
+                Stmt::While(_, b) | Stmt::DoWhile(b, _) | Stmt::For(_, _, _, b) | Stmt::Block(b) => walk(b, labels, gotos, dup),
+                Stmt::Foreach { body, .. } => walk(body, labels, gotos, dup),
+                Stmt::Switch(_, cases) => cases.iter().for_each(|(_, b)| walk(b, labels, gotos, dup)),
+                Stmt::Try { body, catches, finally } => {
+                    walk(body, labels, gotos, dup);
+                    catches.iter().for_each(|c| walk(&c.body, labels, gotos, dup));
+                    if let Some(f) = finally {
+                        walk(f, labels, gotos, dup);
+                    }
+                }
+                Stmt::Plain(inner) => walk(std::slice::from_ref(&**inner), labels, gotos, dup),
+                _ => {}
+            }
+        }
+    }
+    let (mut labels, mut gotos, mut dup) = (Vec::new(), Vec::new(), None);
+    walk(body, &mut labels, &mut gotos, &mut dup);
+    if let Some((l, line)) = dup {
+        return Err(ParseError { msg: format!("Label '{l}' already defined"), line });
+    }
+    match gotos.iter().find(|(l, _)| !labels.contains(l)) {
+        Some((l, line)) => Err(ParseError { msg: format!("'goto' to undefined label '{l}'"), line: *line }),
+        None => Ok(()),
+    }
 }
 
 /// The current namespace and its `use` imports. Class and function aliases are
@@ -512,6 +559,7 @@ impl Parser {
         returns_ref: bool,
         line: u32,
     ) -> PResult<Rc<FuncDecl>> {
+        check_labels(&body)?;
         let Some(yield_line) = self.yield_line else {
             let file = self.file.clone();
             return Ok(Rc::new(FuncDecl { kind, name, uses, params, ret, body, line, is_generator: false, returns_ref, is_static: false, file }));
@@ -641,7 +689,23 @@ impl Parser {
                 }
                 Ok(Stmt::Block(body))
             }
+            Tok::Ident(label)
+                if matches!(self.peek_at(1), Tok::Op(":"))
+                    && !matches!(label.to_ascii_lowercase().as_str(), "default" | "case" | "else") =>
+            {
+                let line = self.line();
+                self.next();
+                self.next();
+                Ok(Stmt::Label(label.as_str().into(), line))
+            }
             Tok::Ident(kw) => match kw.to_ascii_lowercase().as_str() {
+                "goto" if matches!(self.peek_at(1), Tok::Ident(_)) => {
+                    let line = self.line();
+                    self.next();
+                    let Tok::Ident(label) = self.next() else { unreachable!() };
+                    self.end_statement()?;
+                    Ok(Stmt::Goto(label.as_str().into(), line))
+                }
                 "echo" => {
                     self.next();
                     let mut args = vec![self.expr()?];
@@ -1795,7 +1859,7 @@ impl Parser {
                     self.next();
                     self.next();
                     let source = self.postfix_expr()?;
-                    if !source.is_lvalue() {
+                    if !source.is_lvalue() && !source.is_call() {
                         return Err(ParseError {
                             msg: "Cannot assign reference to non referenceable value".into(),
                             line: self.line(),
@@ -2031,6 +2095,24 @@ impl Parser {
         Ok(Expr::new(kind, line))
     }
 
+    /// The name after `$` of a variable variable: `{expr}`, a variable, or another `$...`
+    fn var_var_name(&mut self) -> PResult<Expr> {
+        let line = self.line();
+        match self.next() {
+            Tok::Op("{") => {
+                let e = self.expr()?;
+                self.expect(Tok::Op("}"))?;
+                Ok(e)
+            }
+            Tok::Variable(v) => Ok(Expr::new(ExprKind::Var(v), line)),
+            Tok::Op("$") => Ok(Expr::new(ExprKind::VarVar(Box::new(self.var_var_name()?)), line)),
+            _ => {
+                self.pos -= 1;
+                self.unexpected()
+            }
+        }
+    }
+
     fn primary(&mut self) -> PResult<Expr> {
         let start = self.pos;
         let line = self.line();
@@ -2050,6 +2132,7 @@ impl Parser {
                 ExprKind::Interp(exprs)
             }
             Tok::Variable(name) => ExprKind::Var(name),
+            Tok::Op("$") => ExprKind::VarVar(Box::new(self.var_var_name()?)),
             Tok::Op("[") => self.array_literal(&Tok::Op("]"), line)?,
             Tok::Op("(") => {
                 let e = self.expr()?;
@@ -2217,6 +2300,7 @@ fn free_vars(e: &Expr, out: &mut Vec<String>) {
             }
         }
         ExprKind::Var(name) => add(name, out),
+        ExprKind::VarVar(e) => free_vars(e, out),
         ExprKind::Interp(parts) => parts.iter().for_each(|p| free_vars(p, out)),
         ExprKind::Array(items) => {
             for item in items {

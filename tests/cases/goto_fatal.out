@@ -1,0 +1,4 @@
+
+Fatal error: 'goto' to undefined label 'missing' in goto_fatal.php on line 3
+Stack trace:
+#0 {main}

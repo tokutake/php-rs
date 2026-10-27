@@ -219,6 +219,7 @@ impl<W: Write> Interp<W> {
             Ok(G::Flow(flow)) => {
                 st.ret = Some(match flow {
                     Flow::Return(v) => v,
+                    Flow::Goto(label) => return Err(super::undefined_label(&label)),
                     _ => Value::Null,
                 });
                 Ok(())
@@ -382,15 +383,22 @@ impl<W: Write> Interp<W> {
             Some(Saved::Block(i)) => i,
             Some(_) => return Err(state_mismatch()),
         };
-        for (i, s) in stmts.iter().enumerate().skip(start) {
+        let mut i = start;
+        while let Some(s) = stmts.get(i) {
             let r = self.gstmt(s)?;
             if let G::Suspend = r {
                 self.g_push(Saved::Block(i));
                 return Ok(G::Suspend);
             }
             self.run_destructors()?;
-            if !matches!(r, G::Flow(Flow::Normal)) {
-                return Ok(r);
+            i += 1;
+            match r {
+                G::Flow(Flow::Normal) => {}
+                G::Flow(Flow::Goto(label)) => match super::label_index(stmts, &label) {
+                    Some(at) => i = at + 1,
+                    None => return Ok(G::Flow(Flow::Goto(label))),
+                },
+                r => return Ok(r),
             }
         }
         Ok(G::Flow(Flow::Normal))
@@ -550,7 +558,7 @@ impl<W: Write> Interp<W> {
                         G::Flow(Flow::Break(1) | Flow::Continue(1)) => break,
                         G::Flow(Flow::Break(n)) => return Ok(G::Flow(Flow::Break(n - 1))),
                         G::Flow(Flow::Continue(n)) => return Ok(G::Flow(Flow::Continue(n - 1))),
-                        G::Flow(ret @ Flow::Return(_)) => return Ok(G::Flow(ret)),
+                        G::Flow(ret @ (Flow::Return(_) | Flow::Goto(_))) => return Ok(G::Flow(ret)),
                     }
                 }
                 Ok(G::Flow(Flow::Normal))

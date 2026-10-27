@@ -1,0 +1,37 @@
+
+Notice: Only variables should be assigned by reference in return_ref.php on line 5
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+
+Notice: Only variables should be assigned by reference in return_ref.php on line 8
+object(O)#2 (1) {
+  ["p"]=>
+  int(5)
+}
+int(9)
+
+Notice: Only variables should be assigned by reference in return_ref.php on line 10
+int(3)
+
+Notice: Only variables should be assigned by reference in return_ref.php on line 11
+array(1) {
+  ["k"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+
+Deprecated: Creation of dynamic property O::$q is deprecated in return_ref.php on line 12
+
+Notice: Only variables should be assigned by reference in return_ref.php on line 12
