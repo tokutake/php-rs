@@ -11,7 +11,7 @@ use crate::value::Value;
 
 pub const NAMES: &[&str] = &[
     "urlencode", "rawurlencode", "urldecode", "rawurldecode", "base64_encode", "base64_decode", "parse_url",
-    "http_build_query",
+    "http_build_query", "parse_str",
 ];
 
 const PHP_QUERY_RFC1738: i64 = 1;
@@ -306,6 +306,85 @@ fn parse_url(str: &[u8]) -> Option<Url> {
     Some(ret)
 }
 
+/// Stores a variable of a query string as php_register_variable_ex does:
+/// `a[b][]=v` makes nested arrays, and `.` or ` ` in the base name become `_`
+fn register(out: &mut PhpArray, name: &[u8], value: Vec<u8>) {
+    let name = &name[name.iter().take_while(|&&c| c == b' ').count()..];
+    let bracket = name.iter().position(|&c| c == b'[');
+    let fix = |s: &[u8]| -> Vec<u8> { s.iter().map(|&c| if c == b' ' || c == b'.' { b'_' } else { c }).collect() };
+    let mut base = fix(&name[..bracket.unwrap_or(name.len())]);
+    let mut indexes: Vec<Option<Vec<u8>>> = Vec::new();
+    if let Some(b) = bracket {
+        let mut pos = b;
+        loop {
+            let start = pos + 1;
+            match name[start..].iter().position(|&c| c == b']') {
+                None => {
+                    if indexes.is_empty() {
+                        // Not an index after all: the `[` is part of the name
+                        base.push(b'_');
+                        base.extend(name[start..].iter().map(|&c| if matches!(c, b' ' | b'.' | b'[') { b'_' } else { c }));
+                    }
+                    break;
+                }
+                Some(n) => {
+                    let idx = &name[start..start + n];
+                    indexes.push((!idx.is_empty()).then(|| idx.to_vec()));
+                    pos = start + n + 1;
+                    if name.get(pos) != Some(&b'[') {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if base.is_empty() {
+        return;
+    }
+    let mut slot = out.entry(Key::from_bytes(&base));
+    if indexes.is_empty() {
+        *slot = Value::str(value);
+        return;
+    }
+    // Each level is an array, made fresh when something else is there
+    let depth = indexes.len();
+    for (i, idx) in indexes.into_iter().enumerate() {
+        if !matches!(slot, Value::Array(_)) {
+            *slot = Value::Array(Rc::new(PhpArray::new()));
+        }
+        let Value::Array(a) = slot else { unreachable!() };
+        let a = Rc::make_mut(a);
+        let next = match idx {
+            Some(k) => a.entry(Key::from_bytes(&k)),
+            None => match a.push(Value::Null) {
+                Ok(v) => v,
+                Err(_) => return,
+            },
+        };
+        if i + 1 == depth {
+            *next = Value::str(value);
+            return;
+        }
+        slot = next;
+    }
+}
+
+/// parse_str(): a query string as nested arrays
+pub fn parse_query(s: &[u8]) -> PhpArray {
+    let mut out = PhpArray::new();
+    for pair in s.split(|&c| c == b'&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (k, v) = match pair.iter().position(|&c| c == b'=') {
+            Some(i) => (&pair[..i], &pair[i + 1..]),
+            None => (pair, &b""[..]),
+        };
+        register(&mut out, &decode(k, false), decode(v, false));
+    }
+    out
+}
+
 struct QueryBuilder<'a> {
     rt: &'a mut dyn Runtime,
     out: Vec<u8>,
@@ -488,6 +567,11 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             add("query", url.query.map(Value::str));
             add("fragment", url.fragment.map(Value::str));
             Ok(Value::Array(Rc::new(out)))
+        }
+        "parse_str" => {
+            // With its result argument this runs through the by-reference path
+            args::<2, 2>(name, vals)?;
+            Ok(Value::Null)
         }
         "http_build_query" => {
             let [data, prefix, sep, enc] = args::<1, 4>(name, vals)?;

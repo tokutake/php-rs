@@ -1042,7 +1042,13 @@ impl Parser {
                 return self.unexpected();
             };
             if !self.eat(&Tok::Op(":")) {
+                let line = self.line();
                 self.expect(Tok::Semicolon)?;
+                crate::diag::compile_deprecated(
+                    &self.file.path,
+                    line,
+                    "Case statements followed by a semicolon (;) are deprecated, use a colon (:) instead",
+                );
             }
             let mut body = Vec::new();
             while !self.at_kw("case") && !self.at_kw("default") && !close(self) {

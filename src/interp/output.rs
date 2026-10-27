@@ -311,7 +311,11 @@ impl<W: Write> Interp<W> {
 fn handler_name(h: &Value) -> String {
     match h {
         Value::Str(s) => String::from_utf8_lossy(s).into_owned(),
-        Value::Object(o) => format!("{}::__invoke", o.class.name),
+        // A closure shows its own name, {closure:FILE:LINE}
+        Value::Object(o) => match o.closure() {
+            Some(c) if c.forward.is_none() => c.name.clone(),
+            _ => format!("{}::__invoke", o.class.name),
+        },
         Value::Array(a) => {
             let class = match a.get(&Key::Int(0)) {
                 Some(Value::Object(o)) => o.class.name.to_string(),

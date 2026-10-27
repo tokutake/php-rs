@@ -361,7 +361,7 @@ impl<W: Write> Interp<W> {
             _ => false,
         };
         let refuse = |msg: String| {
-            diag::warning(msg);
+            diag::warning(format!("{msg}, this will be an error in PHP 9"));
             false
         };
         if let Some(t) = new_this {

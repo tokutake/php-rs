@@ -122,7 +122,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
                 return Ok(Value::str(s));
             }
             if pad.is_empty() {
-                return Err(Fatal::value_error("str_pad(): Argument #3 ($pad_string) must be a non-empty string"));
+                return Err(Fatal::value_error("str_pad(): Argument #3 ($pad_string) must not be empty"));
             }
             if !(STR_PAD_LEFT..=STR_PAD_BOTH).contains(&ty) {
                 return Err(Fatal::value_error(
@@ -180,7 +180,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
                 return Ok(Value::str(""));
             }
             if brk.is_empty() {
-                return Err(Fatal::value_error("wordwrap(): Argument #3 ($break) cannot be empty"));
+                return Err(Fatal::value_error("wordwrap(): Argument #3 ($break) must not be empty"));
             }
             if width == 0 && cut {
                 return Err(Fatal::value_error("wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0"));
@@ -430,7 +430,7 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
             let h = arg_str(rt, lname, 1, "haystack", &h.unwrap())?;
             let n = arg_str(rt, lname, 2, "needle", &n.unwrap())?;
             if n.is_empty() {
-                return Err(Fatal::value_error("substr_count(): Argument #2 ($needle) cannot be empty"));
+                return Err(Fatal::value_error("substr_count(): Argument #2 ($needle) must not be empty"));
             }
             let size = h.len() as i64;
             let mut off = match off {
@@ -612,11 +612,19 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
         "chr" => {
             let [c] = args::<1, 1>(name, vals)?;
             let c = arg_int(lname, 1, "codepoint", &c.unwrap())?;
+            if !(0..=255).contains(&c) {
+                diag::deprecated(
+                    "chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256",
+                );
+            }
             Ok(Value::str(vec![c.rem_euclid(256) as u8]))
         }
         "ord" => {
             let [s] = args::<1, 1>(name, vals)?;
             let s = arg_str(rt, lname, 1, "character", &s.unwrap())?;
+            if s.is_empty() {
+                diag::deprecated("ord(): Providing an empty string is deprecated");
+            }
             Ok(Value::Int(s.first().copied().unwrap_or(0) as i64))
         }
         "bin2hex" => {

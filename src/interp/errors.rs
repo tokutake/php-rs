@@ -181,10 +181,7 @@ impl<W: Write> Interp<W> {
         let Some(handler) = self.errors.exception_handlers.pop() else { return Some(e) };
         let ex = self.exception_object(e);
         let line = diag::line();
-        match self.callback("set_exception_handler", 1, &handler).and_then(|f| self.call_value(&f, vec![Value::Object(ex)], line)) {
-            Ok(_) => None,
-            Err(e) => Some(e),
-        }
+        self.callback("set_exception_handler", 1, &handler).and_then(|f| self.call_value(&f, vec![Value::Object(ex)], line)).err()
     }
 
     /// Runs the shutdown functions, including ones they register

@@ -33,7 +33,7 @@ X[5]Z[8]
     [0] => WRAP
     [1] => UPPER::__INVOKE
     [2] => UPPER::M
-    [3] => CLOSURE::__INVOKE
+    [3] => {CLOSURE:/USERS/TOKUTAKE/PROJECT/PHP-RS/TESTS/CASES/OUTPUT_BUFFERING.PHP:46}
 )
 )>
 -- printing functions and diagnostics go to the buffer
@@ -69,7 +69,7 @@ array (
     ),
     1 => 
     array (
-      'name' => 'Closure::__invoke',
+      'name' => '{closure:output_buffering.php:73}',
       'type' => 1,
       'flags' => 113,
       'level' => 1,

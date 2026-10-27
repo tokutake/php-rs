@@ -36,6 +36,8 @@ pub(super) enum G {
 
 pub(crate) struct GenState {
     func: Rc<FuncDecl>,
+    /// The generator function as var_dump() shows it: `f`, `A::m` or a closure's name
+    pub(crate) name: String,
     /// The generator's variables, taken out while it runs. None once finished
     frame: Option<Frame>,
     saved: Vec<Saved>,
@@ -143,7 +145,12 @@ impl<W: Write> Interp<W> {
     /// Called instead of running the body of a generator function: its frame,
     /// with the arguments bound, becomes the generator
     pub(super) fn make_generator(&mut self, func: &Rc<FuncDecl>, frame: Frame) -> Value {
+        let name = match (&frame.ctx.trace_class, func.kind) {
+            (Some((class, _)), crate::ast::FuncKind::Method) => format!("{class}::{}", frame.ctx.trace_fn),
+            _ => frame.ctx.trace_fn.clone(),
+        };
         let state = GenState {
+            name,
             func: func.clone(),
             frame: Some(frame),
             saved: Vec::new(),
@@ -998,7 +1005,10 @@ impl<W: Write> Interp<W> {
             }
             if preserve_keys {
                 let key = match &k {
-                    Value::Null => Key::Str(Default::default()),
+                    Value::Null => {
+                        diag::deprecated("Using null as an array offset is deprecated, use an empty string instead");
+                        Key::Str(Default::default())
+                    }
                     Value::Bool(b) => Key::Int(i64::from(*b)),
                     Value::Float(f) => Key::Int(float_to_int_implicit(*f, &k)),
                     Value::Int(_) | Value::Str(_) => to_key(&k, "array")?,

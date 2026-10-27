@@ -1,0 +1,8 @@
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603
+9d5c73ef85594d34ec4438b7c97e51d8 9d5c73ef85594d34ec4438b7c97e51d8
+string(11) "HashContext"
+hash_update(): Argument #1 ($context) must be a valid, non-finalized HashContext
+hash_init(): Argument #3 ($key) must not be empty when HMAC is requested
+hash_init(): Argument #1 ($algo) must be a cryptographic hashing algorithm if HMAC is requested
+00000000

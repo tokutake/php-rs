@@ -16,10 +16,20 @@ mod random;
 mod misc;
 mod url;
 mod hash;
+mod entities;
+mod html;
+mod pack;
+mod filter;
+mod password;
+mod blowfish_pi;
+pub mod mysqli;
 mod string;
 mod types;
 
 pub use string::{similar_text, str_replace};
+pub use hash::sha1;
+pub use streams::strerror;
+pub use url::parse_query;
 
 /// Built-ins with a by-reference output parameter other than the first: its
 /// position and name
@@ -27,6 +37,7 @@ pub fn out_param(lname: &str) -> Option<(usize, &'static str)> {
     match lname {
         "str_replace" | "str_ireplace" => Some((3, "count")),
         "similar_text" => Some((2, "percent")),
+        "parse_str" => Some((1, "result")),
         _ => preg::out_param(lname),
     }
 }
@@ -45,6 +56,10 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| date::constant(name))
         .or_else(|| random::constant(name))
         .or_else(|| misc::constant(name))
+        .or_else(|| mysqli::constant(name))
+        .or_else(|| password::constant(name))
+        .or_else(|| hash::constant(name))
+        .or_else(|| filter::constant(name))
         .or_else(|| url::constant(name))
 }
 
@@ -108,7 +123,7 @@ const NAMES: &[&str] = &[
     "array_walk_recursive",
     "array_reduce", "compact", "extract", "ob_start", "ob_get_clean", "ob_get_contents", "ob_get_length",
     "ob_get_level", "ob_flush", "ob_clean", "ob_end_flush", "ob_end_clean", "ob_get_flush", "ob_list_handlers",
-    "ob_get_status", "ob_implicit_flush", "flush", "shuffle", "serialize", "unserialize", "spl_autoload_register", "spl_autoload_unregister",
+    "ob_get_status", "ob_implicit_flush", "flush", "shuffle", "serialize", "unserialize", "spl_autoload_register", "spl_autoload_unregister", "settype",
     "spl_autoload_functions", "spl_autoload_call", "spl_autoload", "spl_autoload_extensions", "error_reporting",
     "set_error_handler", "restore_error_handler", "set_exception_handler", "restore_exception_handler", "trigger_error",
     "user_error", "error_get_last", "error_clear_last", "error_log", "register_shutdown_function", "assert",
@@ -149,6 +164,11 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (streams::NAMES, streams::call),
     (random::NAMES, random::call),
     (misc::NAMES, misc::call),
+    (html::NAMES, html::call),
+    (pack::NAMES, pack::call),
+    (filter::NAMES, filter::call),
+    (password::NAMES, password::call),
+    (mysqli::NAMES, mysqli::call),
     (url::NAMES, url::call),
     (hash::NAMES, hash::call),
 ];
@@ -859,6 +879,12 @@ fn debug_props(o: &Object) -> Vec<DebugProp> {
     }
     if date::debug_properties(o).is_some() {
         return o.export_props().into_iter().map(|(key, value)| DebugProp { key, value: Some(value), ty: String::new() }).collect();
+    }
+    if let Internal::Generator(g) = &o.internal {
+        return match g.try_borrow() {
+            Ok(g) => vec![prop("function", Value::str(g.name.clone()))],
+            Err(_) => Vec::new(),
+        };
     }
     if let Internal::Closure(c) = &o.internal {
         let mut props = vec![prop("name", Value::str(c.name.clone()))];

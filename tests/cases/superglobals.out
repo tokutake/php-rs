@@ -34,17 +34,17 @@ array(1) {
 }
 array(7) {
   [0]=>
-  string(4) "_GET"
-  [1]=>
-  string(5) "_POST"
-  [2]=>
-  string(7) "_COOKIE"
-  [3]=>
-  string(6) "_FILES"
-  [4]=>
   string(4) "argv"
-  [5]=>
+  [1]=>
   string(4) "argc"
+  [2]=>
+  string(4) "_GET"
+  [3]=>
+  string(5) "_POST"
+  [4]=>
+  string(7) "_COOKIE"
+  [5]=>
+  string(6) "_FILES"
   [6]=>
   string(7) "_SERVER"
 }

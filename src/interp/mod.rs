@@ -474,15 +474,30 @@ impl<W: Write> Interp<W> {
             return Ok(Value::Bool(true));
         }
         self.included.insert(shown.clone());
-        let program = match self.programs.get(&shown) {
-            Some(p) => p.clone(),
+        let (program, again) = match self.programs.get(&shown) {
+            Some(p) => (p.clone(), true),
             None => {
                 let p = self.load(fname, path, &found, &shown)?;
                 let Some(p) = p else { return Ok(Value::Bool(false)) };
                 self.programs.insert(shown.clone(), p.clone());
-                p
+                (p, false)
             }
         };
+        // Compiling the file declares its functions (and the classes php-src
+        // binds early); this happens before the include runs, so errors here
+        // have no frame for it
+        let prev = self.enter_file(&program.file);
+        let declared = if again { self.redeclared(&program.stmts) } else { Ok(()) }.and_then(|_| self.hoist(&program.stmts));
+        if let Err(mut e) = declared {
+            e.line = Some(e.line.unwrap_or_else(diag::line));
+            e.file.get_or_insert_with(diag::file);
+            if e.trace.is_none() {
+                e.trace = Some(self.trace());
+            }
+            self.enter_file(&prev);
+            return Err(e);
+        }
+        self.enter_file(&prev);
         // The include shows in stack traces like a call.
         // Its argument (the file) only shows when the trace continues inside it
         let args = vec![Value::str(shown.clone())];
@@ -496,7 +511,7 @@ impl<W: Write> Interp<W> {
         }
         let prev = self.enter_file(&program.file);
         self.nesting += 1;
-        let result = self.hoist(&program.stmts).and_then(|_| self.block(&program.stmts));
+        let result = self.block(&program.stmts);
         self.nesting -= 1;
         // Errors leaving the file are located while it is current
         let result = result.map_err(|mut e| {
@@ -762,6 +777,27 @@ impl<W: Write> Interp<W> {
 
     /// Unconditional top-level functions and classes exist before any code runs.
     /// A class is hoisted once its parent and interfaces are known
+    /// A file included a second time declares its functions and classes again
+    fn redeclared(&mut self, stmts: &[Stmt]) -> EResult<()> {
+        for s in stmts {
+            if let Stmt::Function(f) = s
+                && let Some(existing) = self.functions.get(&f.name.to_ascii_lowercase())
+            {
+                diag::set_line(f.line);
+                return Err(Fatal::compile(format!(
+                    "Cannot redeclare function {}() (previously declared in {}:{})",
+                    f.name, existing.file.path, existing.line
+                )));
+            }
+        }
+        for s in stmts {
+            if let Stmt::Class(c) = s {
+                self.declared.remove(&Rc::as_ptr(c));
+            }
+        }
+        Ok(())
+    }
+
     fn hoist(&mut self, stmts: &[Stmt]) -> EResult<()> {
         for s in stmts {
             if let Stmt::Function(f) = s {
@@ -1244,11 +1280,11 @@ impl<W: Write> Interp<W> {
         put("argv", args.clone());
         put("argc", argc.clone());
         let vars = &mut self.frames[0].vars;
+        vars.insert("argv".into(), args);
+        vars.insert("argc".into(), argc);
         for k in ["_GET", "_POST", "_COOKIE", "_FILES"] {
             vars.insert(k.to_string(), empty());
         }
-        vars.insert("argv".into(), args);
-        vars.insert("argc".into(), argc);
         vars.insert("_SERVER".into(), Value::Array(Rc::new(server)));
     }
 
@@ -2164,7 +2200,7 @@ impl<W: Write> Interp<W> {
         let args = reordered.as_deref().unwrap_or(args);
 
         // Built-ins that take their first argument by reference
-        if builtins::is_by_ref(&lname) || matches!(lname.as_str(), "usort" | "uasort" | "uksort" | "array_walk" | "array_walk_recursive") {
+        if builtins::is_by_ref(&lname) || matches!(lname.as_str(), "usort" | "uasort" | "uksort" | "array_walk" | "array_walk_recursive" | "settype") {
             let Some((first, rest)) = args.split_first() else {
                 return Err(builtins::arg_count(name, 1, 0));
             };
@@ -2182,6 +2218,9 @@ impl<W: Write> Interp<W> {
                 }
                 if lname.starts_with("array_walk") {
                     return this.array_walk(&lname, &path, vals, line);
+                }
+                if lname == "settype" {
+                    return this.settype(&path, vals);
                 }
                 this.with_place(&path, false, true, |place| builtins::call_by_ref(&lname, place, vals))
             });
@@ -2223,6 +2262,29 @@ impl<W: Write> Interp<W> {
         self.internal_call(lname.clone(), None, vals.clone(), line, |this| this.call_builtin(name, &lname, vals, line))
     }
 
+    /// settype(): converts the variable in place, as the cast to that type does
+    fn settype(&mut self, path: &Path<'_>, vals: Vec<Value>) -> EResult<Value> {
+        let [ty] = builtins::args::<1, 1>("settype", vals)?;
+        let ty = builtins::arg_str(self, "settype", 2, "type", &ty.unwrap())?;
+        let v = self.with_place(path, false, true, |slot| Ok(slot.copy_out()))?;
+        let new = match ty.to_ascii_lowercase().as_slice() {
+            b"int" | b"integer" => Value::Int(v.cast_int()),
+            b"float" | b"double" => Value::Float(v.to_float()),
+            b"string" => Value::str(self.stringify(&v)?),
+            b"bool" | b"boolean" => Value::Bool(v.to_bool()),
+            b"array" => cast_array(v),
+            b"object" => self.cast_object(v),
+            b"null" => Value::Null,
+            b"resource" => return Err(Fatal::value_error("Cannot convert to resource type")),
+            _ => return Err(Fatal::value_error("settype(): Argument #2 ($type) must be a valid type")),
+        };
+        self.with_place(path, false, true, |slot| {
+            *slot = new;
+            Ok(())
+        })?;
+        Ok(Value::Bool(true))
+    }
+
     /// A built-in with an output parameter: its result and the value for the parameter
     fn call_with_out(&mut self, lname: &str, vals: Vec<Value>) -> EResult<(Value, Option<Value>)> {
         if lname.starts_with("preg_") {
@@ -2231,6 +2293,10 @@ impl<W: Write> Interp<W> {
         let mut vals = vals.into_iter();
         let mut next = || vals.next().unwrap_or(Value::Null);
         match lname {
+            "parse_str" => {
+                let s = builtins::arg_str(self, lname, 1, "string", &next())?;
+                Ok((Value::Null, Some(Value::Array(Rc::new(builtins::parse_query(&s))))))
+            }
             "str_replace" | "str_ireplace" => {
                 let (search, replace, subject) = (next(), next(), next());
                 let (v, count) = builtins::str_replace(self, lname, search, replace, subject)?;
