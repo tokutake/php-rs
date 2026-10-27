@@ -12,14 +12,30 @@ pub enum Level {
     Warning,
     Notice,
     Deprecated,
+    /// trigger_error()'s levels
+    UserWarning,
+    UserNotice,
+    UserDeprecated,
 }
 
 impl Level {
     pub fn label(self) -> &'static str {
         match self {
-            Level::Warning => "Warning",
-            Level::Notice => "Notice",
-            Level::Deprecated => "Deprecated",
+            Level::Warning | Level::UserWarning => "Warning",
+            Level::Notice | Level::UserNotice => "Notice",
+            Level::Deprecated | Level::UserDeprecated => "Deprecated",
+        }
+    }
+
+    /// The E_* constant
+    pub fn code(self) -> i64 {
+        match self {
+            Level::Warning => 2,
+            Level::Notice => 8,
+            Level::Deprecated => 8192,
+            Level::UserWarning => 512,
+            Level::UserNotice => 1024,
+            Level::UserDeprecated => 16384,
         }
     }
 }
@@ -39,6 +55,22 @@ thread_local! {
     static PENDING: RefCell<Vec<Diag>> = const { RefCell::new(Vec::new()) };
     /// Nesting of `@` operators being evaluated
     static SILENCED: Cell<u32> = const { Cell::new(0) };
+    /// The last diagnostic, silenced ones included, for error_get_last()
+    static LAST: RefCell<Option<(i64, String, Rc<str>, u32)>> = const { RefCell::new(None) };
+}
+
+/// The last error as error_get_last() reports it: type, message, file and line
+pub fn last() -> Option<(i64, String, Rc<str>, u32)> {
+    LAST.with(|l| l.borrow().clone())
+}
+
+pub fn set_last(last: Option<(i64, String, Rc<str>, u32)>) {
+    LAST.with(|l| *l.borrow_mut() = last);
+}
+
+/// Whether diagnostics are waiting to be reported
+pub fn pending() -> bool {
+    PENDING.with(|p| !p.borrow().is_empty())
 }
 
 /// Runs `f` with diagnostics suppressed, as the `@` operator does
@@ -65,12 +97,13 @@ pub fn file() -> Rc<str> {
     FILE.with(|f| f.borrow().clone())
 }
 
-fn push(level: Level, msg: String) {
+pub fn push(level: Level, msg: String) {
+    let line = line();
+    let file = file();
+    LAST.with(|l| *l.borrow_mut() = Some((level.code(), msg.clone(), file.clone(), line)));
     if SILENCED.with(Cell::get) > 0 {
         return;
     }
-    let line = line();
-    let file = file();
     PENDING.with(|p| p.borrow_mut().push(Diag { level, msg, line, file }));
 }
 
@@ -88,6 +121,8 @@ pub fn deprecated(msg: impl Into<String>) {
 
 /// A deprecation found while compiling `file`, at a line of its own
 pub fn compile_deprecated(file: &str, line: u32, msg: impl Into<String>) {
+    let msg = msg.into();
+    LAST.with(|l| *l.borrow_mut() = Some((Level::Deprecated.code(), msg.clone(), file.into(), line)));
     PENDING.with(|p| p.borrow_mut().push(Diag { level: Level::Deprecated, msg: msg.into(), line, file: file.into() }));
 }
 

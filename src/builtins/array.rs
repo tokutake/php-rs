@@ -14,10 +14,11 @@ pub const NAMES: &[&str] = &[
     "array_slice", "array_search", "array_unique", "array_combine", "array_fill", "array_fill_keys", "array_flip",
     "array_key_first", "array_key_last", "array_column", "array_chunk", "array_pad", "array_count_values",
     "array_diff", "array_diff_key", "array_diff_assoc", "array_intersect", "array_intersect_key",
-    "array_intersect_assoc", "array_replace", "array_is_list", "array_merge_recursive",
+    "array_intersect_assoc", "array_replace", "array_is_list", "array_merge_recursive", "current", "pos", "key",
 ];
 
-pub const BY_REF: &[&str] = &["asort", "arsort", "ksort", "krsort", "array_shift", "array_unshift", "array_splice"];
+pub const BY_REF: &[&str] =
+    &["asort", "arsort", "ksort", "krsort", "array_shift", "array_unshift", "array_splice", "natsort", "natcasesort"];
 
 pub const SORT_REGULAR: i64 = 0;
 pub const SORT_NUMERIC: i64 = 1;
@@ -91,6 +92,16 @@ pub fn call(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> 
 
 fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -> EResult<Value> {
     match lname {
+        "current" | "pos" | "key" => {
+            let [a] = args::<1, 1>(name, vals)?;
+            let arr = expect_array(lname, 1, "array", &a.unwrap())?;
+            Ok(match (arr.current(), lname) {
+                (Some((k, _)), "key") => k.to_value(),
+                (Some((_, v)), _) => v.copy_out(),
+                (None, "key") => Value::Null,
+                (None, _) => Value::Bool(false),
+            })
+        }
         "array_slice" => {
             let [a, off, len, preserve] = args::<2, 4>(name, vals)?;
             let arr = expect_array(lname, 1, "array", &a.unwrap())?;
@@ -498,6 +509,27 @@ pub fn call_by_ref(rt: &mut dyn Runtime, lname: &str, arr: &mut Rc<PhpArray>, va
             } else {
                 entries.into_iter().collect()
             });
+            Ok(Value::Bool(true))
+        }
+        "natsort" | "natcasesort" => {
+            let ci = lname == "natcasesort";
+            let mut entries: Vec<(Key, Value)> = arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut err = None;
+            merge_sort(&mut entries, |a, b| {
+                let x = rt.stringify(&a.1.copy_out());
+                let y = rt.stringify(&b.1.copy_out());
+                match (x, y) {
+                    (Ok(x), Ok(y)) => super::string::strnatcmp(&x, &y, ci).cmp(&0),
+                    (Err(e), _) | (_, Err(e)) => {
+                        err.get_or_insert(e);
+                        Ordering::Equal
+                    }
+                }
+            });
+            if let Some(e) = err {
+                return Err(e);
+            }
+            *arr = Rc::new(entries.into_iter().collect());
             Ok(Value::Bool(true))
         }
         "array_shift" => {

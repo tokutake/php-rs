@@ -4,6 +4,7 @@
 pub(crate) mod generator;
 mod arguments;
 mod autoload;
+mod errors;
 mod references;
 use references::RefSource;
 mod closure;
@@ -286,6 +287,7 @@ pub struct Interp<W: Write> {
     /// The reference a by-reference function returned last, for `=&`
     return_ref: Option<RefCellValue>,
     autoload: autoload::Autoload,
+    errors: errors::ErrorState,
     reference_sources: Vec<RefSource>,
     /// Class declarations already executed (hoisted ones are seen twice)
     declared: HashSet<*const ClassDecl>,
@@ -414,6 +416,7 @@ impl<W: Write> Interp<W> {
             classes: object::builtin_classes(),
             return_ref: None,
             autoload: autoload::Autoload::default(),
+            errors: errors::ErrorState::default(),
             reference_sources: Vec::new(),
             declared: HashSet::new(),
             magic_guard: HashSet::new(),
@@ -569,6 +572,17 @@ impl<W: Write> Interp<W> {
             flow => Ok(flow),
         });
         let mut status = 0;
+        let result = match result {
+            // An exception handler takes uncaught exceptions; the script still fails
+            Err(e) if !e.uncatchable && e.exit.is_none() => match self.handle_uncaught(e) {
+                None => {
+                    status = 255;
+                    Ok(Flow::Normal)
+                }
+                Some(e) => Err(e),
+            },
+            other => other,
+        };
         match result {
             Ok(_) => {}
             // exit ends the script normally, destructors included
@@ -579,11 +593,20 @@ impl<W: Write> Interp<W> {
                 self.report(e);
                 // A fatal error ends the script without destructors, an uncaught exception does not
                 if fatal {
+                    self.after_fatal();
                     object::disable_destructors();
                     self.ob_end_all();
                     self.flush_diags();
                     return status;
                 }
+            }
+        }
+        match self.run_shutdown_functions() {
+            Ok(()) => {}
+            Err(Fatal { exit: Some(s), .. }) => status = s,
+            Err(e) => {
+                status = 255;
+                self.report(e);
             }
         }
         match self.shutdown() {
@@ -631,9 +654,27 @@ impl<W: Write> Interp<W> {
         Ok(())
     }
 
+    /// Shutdown functions still run after a fatal error (and can see it with
+    /// error_get_last()); their own fatal errors end them
+    fn after_fatal(&mut self) {
+        if let Err(e) = self.run_shutdown_functions()
+            && e.exit.is_none()
+        {
+            self.report(e);
+        }
+    }
+
     /// Prints an uncaught error the way PHP does
     fn report(&mut self, e: Fatal) {
         self.flush_diags();
+        if e.uncatchable {
+            let line = e.line.unwrap_or_else(diag::line);
+            let file = e.file.clone().unwrap_or_else(|| self.file.path.clone());
+            diag::set_last(Some((1, e.msg.clone(), file, line)));
+        }
+        if !self.errors.display() {
+            return;
+        }
         let msg = if e.uncatchable {
             let line = e.line.unwrap_or_else(diag::line);
             let trace = object::trace_string(&e.trace.unwrap_or_default());
@@ -778,12 +819,14 @@ impl<W: Write> Interp<W> {
 
     fn flush_diags(&mut self) {
         for d in diag::take() {
-            let msg = format!("\n{}: {} in {} on line {}\n", d.level.label(), d.msg, d.file, d.line);
-            self.emit_quiet(msg.as_bytes());
+            self.show_diag(&d);
         }
     }
 
     fn write(&mut self, bytes: &[u8]) -> EResult<()> {
+        if self.errors.has_handler() {
+            self.dispatch_diags()?;
+        }
         self.flush_diags();
         self.emit(bytes)
     }
@@ -801,6 +844,10 @@ impl<W: Write> Interp<W> {
         while let Some(s) = stmts.get(i) {
             let flow = self.stmt(s)?;
             self.run_destructors()?;
+            // An error handler runs for the statement that raised the error
+            if self.errors.has_handler() && diag::pending() {
+                self.dispatch_diags()?;
+            }
             i += 1;
             match flow {
                 Flow::Normal => {}
@@ -1937,7 +1984,11 @@ impl<W: Write> Interp<W> {
             let elem = match &v {
                 Value::Array(_) => read_dim(&v, &key)?,
                 Value::Object(o) => self.offset_get(o, Some(&key))?,
-                _ => Value::Null,
+                Value::Null => Value::Null,
+                other => {
+                    diag::warning(format!("Cannot use {} as array", other.type_name()));
+                    Value::Null
+                }
             };
             self.assign(&item.target, elem)?;
         }
@@ -2001,7 +2052,7 @@ impl<W: Write> Interp<W> {
     fn define_const(&mut self, name: &str, v: Value) -> bool {
         let key = const_key(name);
         if self.constants.contains_key(&*key) || constant(name).is_some() {
-            diag::warning(format!("Constant {name} already defined"));
+            diag::warning(format!("Constant {name} already defined, this will be an error in PHP 9"));
             return false;
         }
         self.constants.insert(key.into_owned(), v);
@@ -2113,7 +2164,7 @@ impl<W: Write> Interp<W> {
         let args = reordered.as_deref().unwrap_or(args);
 
         // Built-ins that take their first argument by reference
-        if builtins::is_by_ref(&lname) || matches!(lname.as_str(), "usort" | "uasort" | "uksort" | "array_walk") {
+        if builtins::is_by_ref(&lname) || matches!(lname.as_str(), "usort" | "uasort" | "uksort" | "array_walk" | "array_walk_recursive") {
             let Some((first, rest)) = args.split_first() else {
                 return Err(builtins::arg_count(name, 1, 0));
             };
@@ -2129,8 +2180,8 @@ impl<W: Write> Interp<W> {
                 if lname.starts_with('u') {
                     return this.user_sort(&lname, &path, vals, line);
                 }
-                if lname == "array_walk" {
-                    return this.array_walk(&path, vals, line);
+                if lname.starts_with("array_walk") {
+                    return this.array_walk(&lname, &path, vals, line);
                 }
                 this.with_place(&path, false, true, |place| builtins::call_by_ref(&lname, place, vals))
             });
@@ -2439,6 +2490,7 @@ impl<W: Write> Interp<W> {
             }
             "array_filter" => self.array_filter(vals, line),
             _ if autoload::NAMES.contains(&lname) => self.autoload_builtin(lname, vals),
+            _ if errors::NAMES.contains(&lname) => self.errors_builtin(lname, vals),
             "serialize" => {
                 let [v] = builtins::args::<1, 1>(lname, vals)?;
                 self.serialize(&v.unwrap())
@@ -3017,22 +3069,34 @@ impl<W: Write> Interp<W> {
         decl.is_some_and(|f| f.params.get(n).is_some_and(|p| p.by_ref))
     }
 
-    fn array_walk(&mut self, path: &Path<'_>, vals: Vec<Value>, line: u32) -> EResult<Value> {
+    fn array_walk(&mut self, fname: &str, path: &Path<'_>, vals: Vec<Value>, line: u32) -> EResult<Value> {
         let n = vals.len() + 1;
         let mut vals = vals.into_iter();
-        let Some(cb) = vals.next() else { return Err(builtins::arg_count("array_walk", 2, n)) };
+        let Some(cb) = vals.next() else { return Err(builtins::arg_count(fname, 2, n)) };
         let extra = vals.next();
-        let cb = self.callback("array_walk", 2, &cb)?;
-        let by_ref = Self::param_by_ref(&cb, 0);
+        let cb = self.callback(fname, 2, &cb)?;
         let current = self.with_place(path, false, true, |slot| Ok(slot.clone()))?;
-        let Value::Array(arr) = current else {
+        if !matches!(current, Value::Array(_)) {
             return Err(Fatal::type_error(format!(
-                "array_walk(): Argument #1 ($array) must be of type array, {} given",
+                "{fname}(): Argument #1 ($array) must be of type array, {} given",
                 current.value_name()
             )));
+        }
+        self.walk_level(&cb, path, extra.as_ref(), fname == "array_walk_recursive", line, 0)?;
+        Ok(Value::Bool(true))
+    }
+
+    /// Calls the callback on each element of the array at `path`; with
+    /// `recursive`, nested arrays are walked instead
+    fn walk_level(&mut self, cb: &Callable, path: &Path<'_>, extra: Option<&Value>, recursive: bool, line: u32, depth: usize) -> EResult<()> {
+        if depth > MAX_CALL_DEPTH {
+            return Err(Fatal::error("Maximum function nesting level reached"));
+        }
+        let by_ref = Self::param_by_ref(cb, 0);
+        let keys: Vec<Key> = match self.with_place(path, false, true, |slot| Ok(slot.clone()))? {
+            Value::Array(arr) => arr.keys().cloned().collect(),
+            _ => return Ok(()),
         };
-        let keys: Vec<Key> = arr.keys().cloned().collect();
-        drop(arr);
         for k in keys {
             let mut elem = path.clone();
             elem.dims.push(Some(k.to_value()));
@@ -3044,14 +3108,18 @@ impl<W: Write> Interp<W> {
                 })
             })?;
             let Some(value) = value else { continue };
+            if recursive && matches!(value, Value::Array(_)) {
+                self.walk_level(cb, &elem, extra, recursive, line, depth + 1)?;
+                continue;
+            }
             let first = if by_ref { ArgVal::Ref(self.make_ref(&elem)?) } else { ArgVal::Val(value) };
             let mut args = vec![first, ArgVal::Val(k.to_value())];
-            if let Some(e) = &extra {
+            if let Some(e) = extra {
                 args.push(ArgVal::Val(e.clone()));
             }
-            self.call_value_args(&cb, args, line)?;
+            self.call_value_args(cb, args, line)?;
         }
-        Ok(Value::Bool(true))
+        Ok(())
     }
 
     fn call_value_expr(&mut self, f: Value, args: &[Arg], line: u32) -> EResult<Value> {
@@ -3927,7 +3995,14 @@ fn constant(name: &str) -> Option<Value> {
         "E_USER_NOTICE" => Value::Int(1024),
         "E_DEPRECATED" => Value::Int(8192),
         "E_USER_DEPRECATED" => Value::Int(16384),
-        "E_ALL" => Value::Int(32767),
+        "E_ALL" => Value::Int(errors::E_ALL),
+        "E_CORE_ERROR" => Value::Int(16),
+        "E_CORE_WARNING" => Value::Int(32),
+        "E_COMPILE_ERROR" => Value::Int(64),
+        "E_COMPILE_WARNING" => Value::Int(128),
+        "E_RECOVERABLE_ERROR" => Value::Int(4096),
+        "DEBUG_BACKTRACE_PROVIDE_OBJECT" => Value::Int(1),
+        "DEBUG_BACKTRACE_IGNORE_ARGS" => Value::Int(2),
         _ => return builtins::constant(name),
     })
 }

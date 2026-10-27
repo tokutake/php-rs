@@ -10,6 +10,10 @@ NULL
 
 Warning: Undefined array key "nope" in destructuring.php on line 17
 NULL
+
+Warning: Cannot use int as array in destructuring.php on line 20
+
+Warning: Cannot use int as array in destructuring.php on line 20
 NULL
 NULL
 array(2) {

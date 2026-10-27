@@ -9,7 +9,11 @@ use crate::array::{Key, PhpArray};
 use crate::interp::{EResult, Fatal};
 use crate::value::Value;
 
-pub const NAMES: &[&str] = &["getenv", "putenv", "php_sapi_name", "phpversion", "php_uname", "getmypid"];
+pub const NAMES: &[&str] =
+    &["getenv", "putenv", "php_sapi_name", "phpversion", "php_uname", "getmypid", "extension_loaded", "get_loaded_extensions"];
+
+/// The extensions whose functions php-rs provides, as php-src names them
+const EXTENSIONS: &[&str] = &["Core", "date", "hash", "json", "pcre", "random", "SPL", "standard", "ctype"];
 
 thread_local! {
     /// putenv() changes, over the process environment. Changing the real one
@@ -88,6 +92,15 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
                 None | Some(Value::Null) => Value::str("8.5.0"),
                 Some(_) => Value::Bool(false),
             })
+        }
+        "extension_loaded" => {
+            let [ext] = args::<1, 1>(name, vals)?;
+            let ext = arg_str(rt, lname, 1, "extension", &ext.unwrap())?;
+            Ok(Value::Bool(EXTENSIONS.iter().any(|e| e.as_bytes().eq_ignore_ascii_case(&ext))))
+        }
+        "get_loaded_extensions" => {
+            args::<0, 1>(name, vals)?;
+            Ok(Value::Array(Rc::new(PhpArray::from_values(EXTENSIONS.iter().map(|e| Value::str(*e))))))
         }
         "getmypid" => {
             args::<0, 0>(name, vals)?;

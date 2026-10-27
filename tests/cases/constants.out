@@ -4,7 +4,7 @@ bool(true)
 bool(false)
 string(5) "hello"
 
-Warning: Constant DYN already defined in constants.php on line 7
+Warning: Constant DYN already defined, this will be an error in PHP 9 in constants.php on line 7
 bool(false)
 int(42)
 9
@@ -18,7 +18,7 @@ string(0) ""
 bool(true)
 int(8)
 float(3.141592653589793)
-int(32767)
+int(30719)
 bool(true)
 Undefined constant "UNDEFINED_THING"
 Undefined constant "ALSO_UNDEFINED"

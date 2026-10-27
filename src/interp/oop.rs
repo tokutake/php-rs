@@ -881,6 +881,46 @@ impl<W: Write> Interp<W> {
         if n == Native::TimeZone {
             return builtins::date::timezone_method(self, &this, &fname, &method.name.to_ascii_lowercase(), vals);
         }
+        if n == Native::GetSeverity {
+            return Ok(this.get("\0*\0severity"));
+        }
+        if n == Native::ErrorExceptionConstruct {
+            if vals.len() > 6 {
+                return Err(Fatal::new(
+                    "ArgumentCountError",
+                    format!("{fname}() expects at most 6 arguments, {} given", vals.len()),
+                ));
+            }
+            let mut vals = vals.into_iter();
+            let (message, code, severity, file, line, previous) =
+                (vals.next(), vals.next(), vals.next(), vals.next(), vals.next(), vals.next());
+            if let Some(v) = message {
+                this.set("\0*\0message", Value::str(builtins::arg_str(self, &fname, 1, "message", &v)?));
+            }
+            if let Some(v) = code {
+                this.set("\0*\0code", Value::Int(builtins::arg_int(&fname, 2, "code", &v)?));
+            }
+            if let Some(v) = severity {
+                this.set("\0*\0severity", Value::Int(builtins::arg_int(&fname, 3, "severity", &v)?));
+            }
+            if let Some(v) = file.filter(|v| !v.is_null()) {
+                this.set("\0*\0file", Value::str(builtins::arg_str(self, &fname, 4, "filename", &v)?));
+            }
+            if let Some(v) = line.filter(|v| !v.is_null()) {
+                this.set("\0*\0line", Value::Int(builtins::arg_int(&fname, 5, "line", &v)?));
+            }
+            match previous {
+                None | Some(Value::Null) => {}
+                Some(Value::Object(p)) if p.class.is_throwable => this.set(&this.throwable_key("previous"), Value::Object(p)),
+                Some(other) => {
+                    return Err(Fatal::type_error(format!(
+                        "{fname}(): Argument #6 ($previous) must be of type ?Throwable, {} given",
+                        other.value_name()
+                    )))
+                }
+            }
+            return Ok(Value::Null);
+        }
         if n == Native::ThrowableConstruct {
             if vals.len() > 3 {
                 return Err(Fatal::new(

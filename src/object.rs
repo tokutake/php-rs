@@ -123,6 +123,8 @@ pub enum Native {
     DateTime,
     TimeZone,
     ThrowableConstruct,
+    ErrorExceptionConstruct,
+    GetSeverity,
     GetMessage,
     GetCode,
     GetPrevious,
@@ -681,8 +683,8 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
     by_name.insert("Exception", exception);
     by_name.insert("Error", error);
     for (name, parent) in [
-        ("ErrorException", "Exception"),
         ("CompileError", "Error"),
+        ("AssertionError", "Error"),
         ("ParseError", "CompileError"),
         ("TypeError", "Error"),
         ("ArgumentCountError", "TypeError"),
@@ -717,6 +719,22 @@ pub fn builtin_classes() -> HashMap<String, Rc<ClassEntry>> {
         let c = put(plain_subclass(name, &by_name[parent]));
         by_name.insert(name, c);
     }
+    // ErrorException adds a severity to Exception
+    let mut error_exception = plain_subclass("ErrorException", &by_name["Exception"]);
+    error_exception.props.push(PropInfo {
+        name: "severity".into(),
+        key: mangle("severity", Visibility::Protected, "ErrorException"),
+        vis: Visibility::Protected,
+        class: "ErrorException",
+        ty: Some(TypeHint { types: vec![vec!["int".into()]], display: "int".into() }),
+        default: Some(Value::Int(1)),
+        readonly: false,
+    });
+    error_exception.methods.extend([
+        native("__construct", "ErrorException", Native::ErrorExceptionConstruct, false),
+        native("getSeverity", "ErrorException", Native::GetSeverity, true),
+    ]);
+    put(error_exception);
     put(ClassEntry { name: "Traversable", is_interface: true, ..Default::default() });
     let abstract_method = |name: &str, class: &'static str| {
         let (key, m) = native(name, class, Native::Abstract, false);

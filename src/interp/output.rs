@@ -84,6 +84,10 @@ impl<W: Write> Interp<W> {
         if self.stdout_closed {
             return Ok(());
         }
+        // From here on headers count as sent
+        if self.errors.output_started.is_none() && !bytes.is_empty() {
+            self.errors.output_started = Some((crate::diag::file(), crate::diag::line()));
+        }
         self.out.write_all(bytes).map_err(|e| Fatal::error(format!("write failed: {e}")))
     }
 
