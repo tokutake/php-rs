@@ -39,6 +39,14 @@ pub fn constant(name: &str) -> Option<Value> {
         "SORT_DESC" => 3,
         "COUNT_NORMAL" => 0,
         "COUNT_RECURSIVE" => 1,
+        "EXTR_OVERWRITE" => 0,
+        "EXTR_SKIP" => 1,
+        "EXTR_PREFIX_SAME" => 2,
+        "EXTR_PREFIX_ALL" => 3,
+        "EXTR_PREFIX_INVALID" => 4,
+        "EXTR_PREFIX_IF_EXISTS" => 5,
+        "EXTR_IF_EXISTS" => 6,
+        "EXTR_REFS" => 256,
         _ => return None,
     }))
 }

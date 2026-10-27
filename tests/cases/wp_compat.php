@@ -17,3 +17,9 @@ call_user_func_array('f', [&$a]);
 var_dump($a);
 function g($b) { $b = 5; }
 $x = 1; call_user_func_array('g', [&$x]); var_dump($x);
+function make() { $a = [[1], [2]]; foreach ($a as &$x) {} return $a; }
+$store = make();
+$copy = $store;
+foreach ($copy as &$y) { $y = 'changed'; }
+unset($y);
+var_dump($store);
