@@ -18,7 +18,10 @@ Early stage. Implemented so far:
 - Scalars, strings (byte strings), arrays (ordered hash map, copy-on-write)
 - Operators with PHP 8 type juggling and comparison rules
 - Control flow: `if`, `while`, `do`, `for`, `foreach` (incl. by reference), `switch`,
-  `match`, `break`/`continue N`, and the alternative syntax (`if (...): ... endif;`)
+  `match`, `break`/`continue N`, `goto` (with php-src's label checks), and the
+  alternative syntax (`if (...): ... endif;`)
+- Variable variables (`$$name`, `${expr}`, `"${name}"` with its deprecation) and
+  functions returning by reference (`function &f()`, `$x = &f()`)
 - `declare(strict_types=1)` for user functions, typed properties and built-ins
 - Destructuring with `[...]` / `list()` (keyed, nested, by reference, in `foreach`)
 - Heredoc and nowdoc strings, `"$obj->prop"` interpolation
@@ -141,6 +144,7 @@ network streams, the `Serializable` interface, and most other extensions. Perfor
 
 ```sh
 cargo run --release -- script.php
+cargo run --release -- -l script.php   # syntax check only
 ```
 
 ## Tests

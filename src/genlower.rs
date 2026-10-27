@@ -483,6 +483,8 @@ pub fn stmt_has_yield(s: &Stmt) -> bool {
         Stmt::Return(None)
         | Stmt::Break(_)
         | Stmt::Continue(_)
+        | Stmt::Goto(..)
+        | Stmt::Label(..)
         | Stmt::Function(_)
         | Stmt::Class(_)
         | Stmt::Global(_)
@@ -531,7 +533,14 @@ pub fn uses_this(stmts: &[Stmt]) -> bool {
             Stmt::Yield { key, value, .. } => opt(key) || opt(value),
             Stmt::YieldFrom { source, .. } => expr(source),
             Stmt::Plain(s) => stmt(s),
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Function(_) | Stmt::Class(_) | Stmt::Global(_) | Stmt::StrictTypes => false,
+            Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Goto(..)
+            | Stmt::Label(..)
+            | Stmt::Function(_)
+            | Stmt::Class(_)
+            | Stmt::Global(_)
+            | Stmt::StrictTypes => false,
         }
     }
     stmts.iter().any(stmt)
@@ -584,6 +593,7 @@ fn each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         }
         ExprKind::IncDec { target: x, .. }
         | ExprKind::Unary(_, x)
+        | ExprKind::VarVar(x)
         | ExprKind::Empty(x)
         | ExprKind::Throw(x)
         | ExprKind::Clone(x)
@@ -699,6 +709,7 @@ fn each_child_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         }
         ExprKind::IncDec { target: x, .. }
         | ExprKind::Unary(_, x)
+        | ExprKind::VarVar(x)
         | ExprKind::Empty(x)
         | ExprKind::Throw(x)
         | ExprKind::Clone(x)

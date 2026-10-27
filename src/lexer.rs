@@ -45,8 +45,9 @@ const OPS: &[&str] = &[
     ",", "&", "|", "^", "~", "@", "\\",
 ];
 
-pub fn lex(src: &[u8]) -> Result<Vec<Token>, LexError> {
-    Lexer { src, pos: 0, line: 1, out: Vec::new() }.run()
+/// The tokens of a file; `file` names it in compile-time deprecations
+pub fn lex(src: &[u8], file: &str) -> Result<Vec<Token>, LexError> {
+    Lexer { src, pos: 0, line: 1, out: Vec::new(), file }.run()
 }
 
 struct Lexer<'a> {
@@ -54,6 +55,7 @@ struct Lexer<'a> {
     pos: usize,
     line: u32,
     out: Vec<Token>,
+    file: &'a str,
 }
 
 fn is_ident_start(c: u8) -> bool {
@@ -173,6 +175,10 @@ impl<'a> Lexer<'a> {
         let tok = if c == b'$' && self.peek_at(1).is_some_and(is_ident_start) {
             self.pos += 1;
             Tok::Variable(self.ident())
+        } else if c == b'$' && matches!(self.peek_at(1), Some(b'$' | b'{')) {
+            // A variable variable: the name follows
+            self.pos += 1;
+            Tok::Op("$")
         } else if is_ident_start(c) || c == b'\\' && self.peek_at(1).is_some_and(is_ident_start) {
             Tok::Ident(self.qualified_ident())
         } else if c.is_ascii_digit() || (c == b'.' && self.peek_at(1).is_some_and(|d| d.is_ascii_digit())) {
@@ -381,6 +387,10 @@ impl<'a> Lexer<'a> {
                     flush(&mut parts, &mut lit);
                     parts.push(StrPart::Code(self.complex_interpolation()?));
                 }
+                b'$' if self.peek() == Some(b'{') => {
+                    flush(&mut parts, &mut lit);
+                    parts.push(StrPart::Code(self.dollar_brace_interpolation()?));
+                }
                 _ => lit.push(c),
             }
         }
@@ -467,7 +477,7 @@ impl<'a> Lexer<'a> {
         if quote == Some(b'\'') {
             return Ok(Some(Tok::Str(body)));
         }
-        let mut sub = Lexer { src: &body, pos: 0, line: start_line + 1, out: Vec::new() };
+        let mut sub = Lexer { src: &body, pos: 0, line: start_line + 1, out: Vec::new(), file: self.file };
         Ok(Some(sub.interpolated(None)?))
     }
 
@@ -514,6 +524,30 @@ impl<'a> Lexer<'a> {
     }
 
     /// `"{$expr}"`: lexes code tokens up to the matching `}`. The `{` has been consumed
+    /// `"${name}"`, `"${name[expr]}"` (a variable) or `"${expr}"` (a variable
+    /// variable), both deprecated
+    fn dollar_brace_interpolation(&mut self) -> Result<Vec<Token>, LexError> {
+        let line = self.line;
+        self.bump();
+        let name_len = self.rest().iter().take_while(|&&c| is_ident_char(c)).count();
+        let simple = self.peek().is_some_and(is_ident_start) && matches!(self.peek_at(name_len), Some(b'}' | b'['));
+        if simple {
+            crate::diag::compile_deprecated(self.file, line, "Using ${var} in strings is deprecated, use {$var} instead");
+            let mut toks = vec![Token { tok: Tok::Variable(self.ident()), line }];
+            toks.extend(self.complex_interpolation()?);
+            return Ok(toks);
+        }
+        crate::diag::compile_deprecated(
+            self.file,
+            line,
+            "Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead",
+        );
+        let mut toks = vec![Token { tok: Tok::Op("$"), line }, Token { tok: Tok::Op("{"), line }];
+        toks.extend(self.complex_interpolation()?);
+        toks.push(Token { tok: Tok::Op("}"), line: self.line });
+        Ok(toks)
+    }
+
     fn complex_interpolation(&mut self) -> Result<Vec<Token>, LexError> {
         let mut toks = Vec::new();
         let mut depth = 0;

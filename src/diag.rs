@@ -86,6 +86,11 @@ pub fn deprecated(msg: impl Into<String>) {
     push(Level::Deprecated, msg.into());
 }
 
+/// A deprecation found while compiling `file`, at a line of its own
+pub fn compile_deprecated(file: &str, line: u32, msg: impl Into<String>) {
+    PENDING.with(|p| p.borrow_mut().push(Diag { level: Level::Deprecated, msg: msg.into(), line, file: file.into() }));
+}
+
 pub fn take() -> Vec<Diag> {
     PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }

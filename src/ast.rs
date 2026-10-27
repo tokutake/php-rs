@@ -34,6 +34,8 @@ pub enum ExprKind {
     /// Interpolated string: the parts are concatenated
     Interp(Vec<Expr>),
     Var(String),
+    /// A variable variable: `$$name`, `${expr}`
+    VarVar(Box<Expr>),
     Const(String),
     /// An unqualified constant in a namespace, with the global name to fall back to
     NsConst(String, String),
@@ -194,13 +196,22 @@ impl Expr {
 
     /// Whether isset() accepts the expression: a variable, offset or property access
     pub fn is_variable(&self) -> bool {
-        matches!(self.kind, ExprKind::Var(_) | ExprKind::Index(..) | ExprKind::Prop { .. } | ExprKind::StaticProp { .. })
+        matches!(self.kind, ExprKind::Var(_) | ExprKind::VarVar(_) | ExprKind::Index(..) | ExprKind::Prop { .. } | ExprKind::StaticProp { .. })
     }
 
     /// Whether the expression can be assigned to
+    /// A function or method call, which `=&` accepts (with a notice unless it
+    /// returns by reference)
+    pub fn is_call(&self) -> bool {
+        matches!(
+            self.kind,
+            ExprKind::Call(..) | ExprKind::NsCall(..) | ExprKind::CallValue(..) | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. }
+        )
+    }
+
     pub fn is_lvalue(&self) -> bool {
         match &self.kind {
-            ExprKind::Var(_) | ExprKind::Argument(_) | ExprKind::StaticProp { .. } => true,
+            ExprKind::Var(_) | ExprKind::VarVar(_) | ExprKind::Argument(_) | ExprKind::StaticProp { .. } => true,
             ExprKind::Prop { nullsafe, .. } => !nullsafe,
             ExprKind::Index(base, _) => base.is_lvalue(),
             _ => false,
@@ -219,6 +230,10 @@ pub enum Stmt {
     Foreach { subject: Expr, key: Option<Expr>, value: Expr, by_ref: bool, body: Vec<Stmt> },
     Break(u32),
     Continue(u32),
+    /// `goto label;`, with its line
+    Goto(Rc<str>, u32),
+    /// `label:`, where a goto in this statement list or a nested one continues
+    Label(Rc<str>, u32),
     Unset(Vec<Expr>),
     Block(Vec<Stmt>),
     Function(Rc<FuncDecl>),
