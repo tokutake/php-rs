@@ -99,6 +99,16 @@ Early stage. Implemented so far:
   adjustments. Named zones use `/usr/share/zoneinfo` (IANA TZif), including
   historical transitions and future POSIX `M` rules for daylight saving;
   UTC and fixed offsets work without the database
+- Random numbers: `mt_rand`/`rand` on php-src's Mt19937 (including `MT_RAND_PHP`), so
+  seeded `mt_srand` sequences, `shuffle()`, `str_shuffle()` and `array_rand()` give the
+  same results as php-src; `random_int()` and `random_bytes()` from the OS CSPRNG,
+  `lcg_value()`, `uniqid()`
+- Hashing: `md5`, `sha1`, `hash()`, `hash_hmac()` and their `_file` forms with the MD5,
+  SHA-1, SHA-2, SHA-3, CRC32 (all three variants), Adler-32, FNV and Jenkins algorithms;
+  `hash_equals()`
+- URLs and encodings: `urlencode`/`rawurlencode` and their decoders, `parse_url()` (a
+  port of php-src's parser), `http_build_query()` (nested arrays, objects, enums,
+  RFC 3986), `base64_encode()`/`base64_decode()` (with strict mode)
 - Output buffering: `ob_start()` with handlers, chunk sizes and flags, `ob_get_clean()`,
   `ob_end_flush()` and the rest of the ob_* functions. Diagnostics and uncaught errors
   go to the buffers, writes to `STDOUT` bypass them, and buffers left open are

@@ -48,6 +48,16 @@ fn huge_allocations_are_refused() {
     assert_php_error("str_repeat", "<?php echo str_repeat('ab', PHP_INT_MAX);", "overflow in memory allocation");
     assert_php_error("offset", "<?php $s = 'a'; $s[PHP_INT_MAX] = 'b';", "String size overflow");
     assert_php_error("range", "<?php range(PHP_INT_MIN, PHP_INT_MAX);", "exceeds the maximum array size");
+    assert_php_error("random_bytes", "<?php random_bytes(PHP_INT_MAX);", "Allowed memory size");
+}
+
+#[test]
+fn deep_query_data_is_bounded() {
+    assert_php_error(
+        "http_build_query",
+        "<?php $d = []; for ($i = 0; $i < 100000; $i++) { $d = [$d]; } http_build_query(['x' => $d]);",
+        "Maximum call stack size reached.",
+    );
 }
 
 #[test]

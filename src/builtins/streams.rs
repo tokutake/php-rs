@@ -156,6 +156,22 @@ fn write_notice(fname: &str, n: usize, e: IoFail) -> Value {
     Value::Bool(false)
 }
 
+/// The whole content of a file for md5_file() and the like: false (after a
+/// warning) when it cannot be opened
+pub fn read_file(rt: &mut dyn Runtime, fname: &str, n: usize, param: &str, v: &Value) -> EResult<Result<Vec<u8>, Value>> {
+    let path = arg_path(rt, fname, n, param, v)?;
+    if path.is_empty() {
+        return Err(Fatal::value_error("Path cannot be empty"));
+    }
+    stream::ensure_context();
+    let Some(mut s) = open(fname, &path, "rb") else { return Ok(Err(Value::Bool(false))) };
+    stream::alloc_id();
+    match s.read_all() {
+        Ok(b) => Ok(Ok(b)),
+        Err(e) => read_notice(fname, e).map(Err),
+    }
+}
+
 fn open_failed(fname: &str, path: &[u8], why: &str) -> Value {
     diag::warning(format!("{fname}({}): Failed to open stream: {why}", show(path)));
     Value::Bool(false)
