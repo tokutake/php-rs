@@ -12,6 +12,9 @@ mod signatures;
 mod streams;
 mod math;
 mod preg;
+mod random;
+mod url;
+mod hash;
 mod string;
 mod types;
 
@@ -39,6 +42,8 @@ pub fn constant(name: &str) -> Option<Value> {
         .or_else(|| preg::constant(name))
         .or_else(|| streams::constant(name))
         .or_else(|| date::constant(name))
+        .or_else(|| random::constant(name))
+        .or_else(|| url::constant(name))
 }
 
 pub use format::{sprintf, vsprintf};
@@ -76,7 +81,7 @@ pub trait Runtime {
 }
 
 /// Built-ins whose first parameter is by reference
-const BY_REF_HERE: &[&str] = &["sort", "rsort", "array_push", "array_pop"];
+const BY_REF_HERE: &[&str] = &["sort", "rsort", "array_push", "array_pop", "shuffle"];
 
 pub fn is_by_ref(lname: &str) -> bool {
     BY_REF_HERE.contains(&lname) || array::BY_REF.contains(&lname)
@@ -100,7 +105,7 @@ const NAMES: &[&str] = &[
     "iterator_to_array", "iterator_count", "is_iterable", "var_export", "printf", "vprintf", "array_walk",
     "array_reduce", "compact", "extract", "ob_start", "ob_get_clean", "ob_get_contents", "ob_get_length",
     "ob_get_level", "ob_flush", "ob_clean", "ob_end_flush", "ob_end_clean", "ob_get_flush", "ob_list_handlers",
-    "ob_get_status", "ob_implicit_flush", "flush",
+    "ob_get_status", "ob_implicit_flush", "flush", "shuffle",
 ];
 
 /// A built-in's parameter, for named arguments
@@ -133,6 +138,9 @@ const SUBMODULES: &[(&[&str], BuiltinFn)] = &[
     (json::NAMES, json::call),
     (preg::NAMES, preg::call),
     (streams::NAMES, streams::call),
+    (random::NAMES, random::call),
+    (url::NAMES, url::call),
+    (hash::NAMES, hash::call),
 ];
 
 pub fn next_occupied() -> Fatal {
@@ -651,6 +659,16 @@ pub fn call_by_ref(lname: &str, target: &mut Value, vals: Vec<Value>) -> EResult
             Ok(Value::Int(arr.len() as i64))
         }
         "array_pop" => Ok(Rc::make_mut(arr).pop().unwrap_or(Value::Null)),
+        "shuffle" => {
+            if !vals.is_empty() {
+                return Err(Fatal::new(
+                    "ArgumentCountError",
+                    format!("shuffle() expects exactly 1 argument, {} given", vals.len() + 1),
+                ));
+            }
+            random::shuffle(arr);
+            Ok(Value::Bool(true))
+        }
         _ => unreachable!("{lname} is not a by-ref builtin"),
     }
 }

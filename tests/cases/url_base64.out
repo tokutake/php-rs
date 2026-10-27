@@ -1,0 +1,161 @@
+"http:\/\/user:pw@example.com:8080\/path\/to?x=1&y=2#frag" => array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'port' => 8080,
+  'user' => 'user',
+  'pass' => 'pw',
+  'path' => '/path/to',
+  'query' => 'x=1&y=2',
+  'fragment' => 'frag',
+)
+"https:\/\/example.com" => array (
+  'scheme' => 'https',
+  'host' => 'example.com',
+)
+"\/\/example.com\/p" => array (
+  'host' => 'example.com',
+  'path' => '/p',
+)
+"\/just\/path?q" => array (
+  'path' => '/just/path',
+  'query' => 'q',
+)
+"mailto:joe@example.com" => array (
+  'scheme' => 'mailto',
+  'path' => 'joe@example.com',
+)
+"example.com:80" => array (
+  'host' => 'example.com',
+  'port' => 80,
+)
+"a.com:80\/x" => array (
+  'host' => 'a.com',
+  'port' => 80,
+  'path' => '/x',
+)
+"file:\/\/\/etc\/passwd" => array (
+  'scheme' => 'file',
+  'path' => '/etc/passwd',
+)
+"file:\/\/\/c:\/dir\/f.txt" => array (
+  'scheme' => 'file',
+  'path' => 'c:/dir/f.txt',
+)
+"http:\/\/[::1]:80\/x" => array (
+  'scheme' => 'http',
+  'host' => '[::1]',
+  'port' => 80,
+  'path' => '/x',
+)
+"http:\/\/host:99999\/" => false
+"http:\/\/\/x" => false
+"?q=1#" => array (
+  'query' => 'q=1',
+  'fragment' => '',
+)
+"#" => array (
+  'fragment' => '',
+)
+"" => array (
+  'path' => '',
+)
+":" => false
+":80" => false
+"http:\/\/a:b@c:d@e\/" => array (
+  'scheme' => 'http',
+  'host' => 'e',
+  'user' => 'a',
+  'pass' => 'b@c:d',
+  'path' => '/',
+)
+"foo:bar" => array (
+  'scheme' => 'foo',
+  'path' => 'bar',
+)
+"http:\/\/h\/p#f?q" => array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'path' => '/p',
+  'fragment' => 'f?q',
+)
+"http:\/\/h?#" => array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'query' => '',
+  'fragment' => '',
+)
+"x:\/y" => array (
+  'scheme' => 'x',
+  'path' => '/y',
+)
+"http:\/\/host:\/p" => array (
+  'scheme' => 'http',
+  'host' => 'host',
+  'path' => '/p',
+)
+"http:\/\/ex\u0001ample.com\/a b" => array (
+  'scheme' => 'http',
+  'host' => 'ex_ample.com',
+  'path' => '/a b',
+)
+"abc:123456\/x" => array (
+  'scheme' => 'abc',
+  'path' => '123456/x',
+)
+"1http:\/\/x" => array (
+  'scheme' => '1http',
+  'host' => 'x',
+)
+"http:\/\/u@h" => array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'user' => 'u',
+)
+"\/\/h:8" => array (
+  'host' => 'h',
+  'port' => 8,
+)
+"h:8\/x?y" => array (
+  'host' => 'h',
+  'port' => 8,
+  'path' => '/x',
+  'query' => 'y',
+)
+int(81)
+NULL
+string(1) "h"
+parse_url(): Argument #2 ($component) must be a valid URL component identifier, 9 given
+a+b%2Bc%7Ed.e_f-g%2Fh%3Fi%3Dj%26k%FF%00%C3%A9
+a%20b%2Bc~d.e_f-g%2Fh%3Fi%3Dj%26k%FF%00%C3%A9
+a b c%zz%4
+a+b cA%4g
+|Zg==|Zm8=|Zm9v|Zm9vYg==|Zm9vYmE=|Zm9vYmFy|//4A|
+string(4) "foob"
+string(4) "foob"
+string(4) "foob"
+string(4) "foob"
+string(4) "foob"
+string(4) "foob"
+string(4) "foob"
+bool(false)
+string(3) "foo"
+bool(false)
+string(4) "foob"
+bool(false)
+string(6) "foob`"
+bool(false)
+string(0) ""
+bool(false)
+string(4) "foob"
+bool(false)
+string(3) "foo"
+bool(false)
+a=1&b=x+y&c%5B0%5D=1&c%5B1%5D=2&c%5Bk%5D%5Bz%5D=1&e=0&f=1.5&3=n
+p_0=1&p_1=2&x%5B0%5D=3
+a%20b=c%20d~
+a=1&d%5Bx%5D=y
+o%5Ba%5D=1&o%5Bd%5D%5Bx%5D=y
+e=aa
+Unbacked enum U cannot be converted to a string
+http_build_query(): Argument #1 ($data) must not be an enum, S given
+a=1

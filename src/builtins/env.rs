@@ -9,7 +9,7 @@ use crate::array::{Key, PhpArray};
 use crate::interp::{EResult, Fatal};
 use crate::value::Value;
 
-pub const NAMES: &[&str] = &["getenv", "putenv", "php_sapi_name", "phpversion", "php_uname"];
+pub const NAMES: &[&str] = &["getenv", "putenv", "php_sapi_name", "phpversion", "php_uname", "getmypid"];
 
 thread_local! {
     /// putenv() changes, over the process environment. Changing the real one
@@ -88,6 +88,10 @@ fn call_inner(rt: &mut dyn Runtime, name: &str, lname: &str, vals: Vec<Value>) -
                 None | Some(Value::Null) => Value::str("8.5.0"),
                 Some(_) => Value::Bool(false),
             })
+        }
+        "getmypid" => {
+            args::<0, 0>(name, vals)?;
+            Ok(Value::Int(std::process::id() as i64))
         }
         "php_uname" => {
             let [mode] = args::<0, 1>(name, vals)?;

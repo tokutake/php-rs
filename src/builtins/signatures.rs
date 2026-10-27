@@ -118,6 +118,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "array", default: None, variadic: false, by_ref: true },
         Param { name: "values", default: None, variadic: true, by_ref: false },
     ]),
+    ("array_rand", &[
+        Param { name: "array", default: None, variadic: false, by_ref: false },
+        Param { name: "num", default: Some("1"), variadic: false, by_ref: false },
+    ]),
     ("array_reduce", &[
         Param { name: "array", default: None, variadic: false, by_ref: false },
         Param { name: "callback", default: None, variadic: false, by_ref: false },
@@ -172,6 +176,13 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("atanh", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
+    ]),
+    ("base64_decode", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
+        Param { name: "strict", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("base64_encode", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
     ("base_convert", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
@@ -862,6 +873,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "name", default: Some("null"), variadic: false, by_ref: false },
         Param { name: "local_only", default: Some("false"), variadic: false, by_ref: false },
     ]),
+    ("getmypid", &[
+    ]),
+    ("getrandmax", &[
+    ]),
     ("gettimeofday", &[
         Param { name: "as_float", default: Some("false"), variadic: false, by_ref: false },
     ]),
@@ -884,6 +899,38 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "day", default: Some("NULL"), variadic: false, by_ref: false },
         Param { name: "year", default: Some("NULL"), variadic: false, by_ref: false },
     ]),
+    ("hash", &[
+        Param { name: "algo", default: None, variadic: false, by_ref: false },
+        Param { name: "data", default: None, variadic: false, by_ref: false },
+        Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
+        Param { name: "options", default: Some("[]"), variadic: false, by_ref: false },
+    ]),
+    ("hash_algos", &[
+    ]),
+    ("hash_equals", &[
+        Param { name: "known_string", default: None, variadic: false, by_ref: false },
+        Param { name: "user_string", default: None, variadic: false, by_ref: false },
+    ]),
+    ("hash_file", &[
+        Param { name: "algo", default: None, variadic: false, by_ref: false },
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
+        Param { name: "options", default: Some("[]"), variadic: false, by_ref: false },
+    ]),
+    ("hash_hmac", &[
+        Param { name: "algo", default: None, variadic: false, by_ref: false },
+        Param { name: "data", default: None, variadic: false, by_ref: false },
+        Param { name: "key", default: None, variadic: false, by_ref: false },
+        Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("hash_hmac_algos", &[
+    ]),
+    ("hash_hmac_file", &[
+        Param { name: "algo", default: None, variadic: false, by_ref: false },
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "key", default: None, variadic: false, by_ref: false },
+        Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("hex2bin", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
@@ -899,6 +946,12 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("htmlspecialchars_decode", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
         Param { name: "flags", default: Some("ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401"), variadic: false, by_ref: false },
+    ]),
+    ("http_build_query", &[
+        Param { name: "data", default: None, variadic: false, by_ref: false },
+        Param { name: "numeric_prefix", default: Some("\"\""), variadic: false, by_ref: false },
+        Param { name: "arg_separator", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "encoding_type", default: Some("PHP_QUERY_RFC1738"), variadic: false, by_ref: false },
     ]),
     ("hypot", &[
         Param { name: "x", default: None, variadic: false, by_ref: false },
@@ -1067,6 +1120,8 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("lcfirst", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
+    ("lcg_value", &[
+    ]),
     ("levenshtein", &[
         Param { name: "string1", default: None, variadic: false, by_ref: false },
         Param { name: "string2", default: None, variadic: false, by_ref: false },
@@ -1099,6 +1154,14 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "value", default: None, variadic: false, by_ref: false },
         Param { name: "values", default: None, variadic: true, by_ref: false },
     ]),
+    ("md5", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
+        Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("md5_file", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("method_exists", &[
         Param { name: "object_or_class", default: None, variadic: false, by_ref: false },
         Param { name: "method", default: None, variadic: false, by_ref: false },
@@ -1123,6 +1186,16 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "month", default: Some("NULL"), variadic: false, by_ref: false },
         Param { name: "day", default: Some("NULL"), variadic: false, by_ref: false },
         Param { name: "year", default: Some("NULL"), variadic: false, by_ref: false },
+    ]),
+    ("mt_getrandmax", &[
+    ]),
+    ("mt_rand", &[
+        Param { name: "min", default: Some("UNKNOWN"), variadic: false, by_ref: false },
+        Param { name: "max", default: Some("UNKNOWN"), variadic: false, by_ref: false },
+    ]),
+    ("mt_srand", &[
+        Param { name: "seed", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "mode", default: Some("MT_RAND_MT19937"), variadic: false, by_ref: false },
     ]),
     ("nl2br", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
@@ -1174,6 +1247,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("ord", &[
         Param { name: "character", default: None, variadic: false, by_ref: false },
+    ]),
+    ("parse_url", &[
+        Param { name: "url", default: None, variadic: false, by_ref: false },
+        Param { name: "component", default: Some("-1"), variadic: false, by_ref: false },
     ]),
     ("pathinfo", &[
         Param { name: "path", default: None, variadic: false, by_ref: false },
@@ -1273,10 +1350,27 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("rad2deg", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
     ]),
+    ("rand", &[
+        Param { name: "min", default: Some("UNKNOWN"), variadic: false, by_ref: false },
+        Param { name: "max", default: Some("UNKNOWN"), variadic: false, by_ref: false },
+    ]),
+    ("random_bytes", &[
+        Param { name: "length", default: None, variadic: false, by_ref: false },
+    ]),
+    ("random_int", &[
+        Param { name: "min", default: None, variadic: false, by_ref: false },
+        Param { name: "max", default: None, variadic: false, by_ref: false },
+    ]),
     ("range", &[
         Param { name: "start", default: None, variadic: false, by_ref: false },
         Param { name: "end", default: None, variadic: false, by_ref: false },
         Param { name: "step", default: Some("1"), variadic: false, by_ref: false },
+    ]),
+    ("rawurldecode", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
+    ]),
+    ("rawurlencode", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
     ("readdir", &[
         Param { name: "dir_handle", default: Some("null"), variadic: false, by_ref: false },
@@ -1322,6 +1416,17 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "sorting_order", default: Some("SCANDIR_SORT_ASCENDING"), variadic: false, by_ref: false },
         Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
     ]),
+    ("sha1", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
+        Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("sha1_file", &[
+        Param { name: "filename", default: None, variadic: false, by_ref: false },
+        Param { name: "binary", default: Some("false"), variadic: false, by_ref: false },
+    ]),
+    ("shuffle", &[
+        Param { name: "array", default: None, variadic: false, by_ref: true },
+    ]),
     ("similar_text", &[
         Param { name: "string1", default: None, variadic: false, by_ref: false },
         Param { name: "string2", default: None, variadic: false, by_ref: false },
@@ -1353,6 +1458,10 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ]),
     ("sqrt", &[
         Param { name: "num", default: None, variadic: false, by_ref: false },
+    ]),
+    ("srand", &[
+        Param { name: "seed", default: Some("null"), variadic: false, by_ref: false },
+        Param { name: "mode", default: Some("MT_RAND_MT19937"), variadic: false, by_ref: false },
     ]),
     ("stat", &[
         Param { name: "filename", default: None, variadic: false, by_ref: false },
@@ -1392,6 +1501,9 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
         Param { name: "replace", default: None, variadic: false, by_ref: false },
         Param { name: "subject", default: None, variadic: false, by_ref: false },
         Param { name: "count", default: Some("null"), variadic: false, by_ref: true },
+    ]),
+    ("str_shuffle", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
     ("str_split", &[
         Param { name: "string", default: None, variadic: false, by_ref: false },
@@ -1600,9 +1712,19 @@ pub const SIGNATURES: &[(&str, &[Param])] = &[
     ("umask", &[
         Param { name: "mask", default: Some("null"), variadic: false, by_ref: false },
     ]),
+    ("uniqid", &[
+        Param { name: "prefix", default: Some("\"\""), variadic: false, by_ref: false },
+        Param { name: "more_entropy", default: Some("false"), variadic: false, by_ref: false },
+    ]),
     ("unlink", &[
         Param { name: "filename", default: None, variadic: false, by_ref: false },
         Param { name: "context", default: Some("null"), variadic: false, by_ref: false },
+    ]),
+    ("urldecode", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
+    ]),
+    ("urlencode", &[
+        Param { name: "string", default: None, variadic: false, by_ref: false },
     ]),
     ("usort", &[
         Param { name: "array", default: None, variadic: false, by_ref: true },
